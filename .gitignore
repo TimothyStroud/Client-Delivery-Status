@@ -13,7 +13,17 @@ _check_report.xlsx
 # Transient scratch
 _email_params.json
 _outlook_result.txt
+_send_result.txt
 _register_task.ps1
 _run_interactive.ps1
 _test_outlook.ps1
 .bash_history
+
+# Runtime state — written by scripts, not source
+kaiser_snap_state.json
+known_ado_tickets.json
+known_unconfigured.json
+trr_query.txt
+
+# Claude auto-memory store (managed by the harness, not source)
+memory/
