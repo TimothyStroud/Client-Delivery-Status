@@ -353,6 +353,18 @@ MANUAL_OVERRIDES = {
     ("CignaFacets", date(2026, 5, 12)): date(2026, 5, 19),
 }
 
+# ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
+# (client, day) — same convention as MANUAL_OVERRIDES. When a cell renders
+# "Load Failure" AND has an entry here, the marker text becomes a clickable
+# link to the TFS work item. Per user 2026-05-20: "For Load failures that
+# have an ADO, like 954657 for Centene Medical, added as a link to the
+# 'Load Failure' comment."
+LOAD_FAILURE_ADO_LINKS = {
+    ("Centene",    date(2026, 5, 19)): 954657,  # 'Centene Medical 0110 Claims Load'
+    ("CignaRx",    date(2026, 5, 19)): 954668,  # 'Healthspring - Rx - Cigna RX 0100 Stage'
+    ("ExcellusRx", date(2026, 5, 20)): 955578,  # 'Excellus - Rx - ExcellusRx 0110 Load'
+}
+
 # Extra rows injected into the calendar after standard placement runs. Use for
 # one-off catch-up entries that don't fit the regular weekly/monthly cadence.
 # Tuple: (section, day, label, marker, alert, highlight)
@@ -2048,7 +2060,14 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             highlight = "yellow"
         else:
             highlight = None
-        bucket[day].append((label, marker, alert, highlight))
+        # If this is a Load Failure with a registered ADO ticket, attach
+        # the work-item URL so the marker cell becomes a clickable link.
+        link = None
+        if marker == "Load Failure":
+            ticket = LOAD_FAILURE_ADO_LINKS.get((client, day))
+            if ticket:
+                link = ADO_LINK.format(ticket)
+        bucket[day].append((label, marker, alert, highlight, link))
 
     # daily clients on every weekday (alphabetical)
     for d in all_days:
@@ -2253,6 +2272,7 @@ def _write_section_rows(ws, cur_row, wk, plan_section):
                 row = clients[ci]
                 name, marker, alert = row[0], row[1], row[2]
                 highlight = row[3] if len(row) > 3 else None
+                link      = row[4] if len(row) > 4 else None
                 cell.value = name
                 v = fmt_marker(marker)
                 date_cell.value = v
@@ -2269,6 +2289,13 @@ def _write_section_rows(ws, cur_row, wk, plan_section):
                     if not date_cell.value:
                         date_cell.value = "!"
                     date_cell.font = ALERT_FONT
+                if link:
+                    # Underline the alert font so the cell visibly reads
+                    # as a clickable link (cursor changes on hover too).
+                    date_cell.hyperlink = link
+                    date_cell.font = Font(name="Segoe UI", size=9,
+                                          bold=True, color="9C0006",
+                                          underline="single")
         cur_row += 1
     return cur_row
 
@@ -2337,8 +2364,11 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
         kc.alignment = Alignment(horizontal="left")
         cur_row += 2
 
+    # Client-name columns set to ≈190 px (width 27.07) per user 2026-05-20.
+    # Excel pixels ≈ 7 * width + 0.5.
+    client_w = (190 - 0.5) / 7
     for i in range(10):
-        w = 22 if i % 2 == 0 else 11
+        w = client_w if i % 2 == 0 else 11
         ws.column_dimensions[get_column_letter(i + 1)].width = w
     ws.sheet_view.showGridLines = False
 
