@@ -309,7 +309,10 @@ LOAD_NAME_REQUIRED = {
     # the substring).
     "CignaRx":           ("rx 0110 load",),
     "WellCareRx":        ("masterload", "claim"),
-    "OscarRx":           ("masterload", "claim"),
+    # OscarRx: main load is 'Oscar RX 0110 Load' (no "claim"/"masterload"
+    # in the name). Added "rx 0110 load" 2026-05-20 per user:
+    # "Oscar Rx 0110 Load is running and was not picked up."
+    "OscarRx":           ("masterload", "claim", "rx 0110 load"),
     "CenteneRx":         ("masterload", "claim"),
     "CenteneFidelisRx":  ("masterload", "claim"),
     "AetnaQNXTRx":       ("masterload", "claim"),
