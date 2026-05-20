@@ -1,0 +1,19 @@
+# Claude session storage — not source
+*.jsonl
+/[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*-[0-9a-f]*/
+
+# Python artifacts
+__pycache__/
+*.pyc
+
+# Generated reports
+ClientDeliveryStatus_*.xlsx
+_check_report.xlsx
+
+# Transient scratch
+_email_params.json
+_outlook_result.txt
+_register_task.ps1
+_run_interactive.ps1
+_test_outlook.ps1
+.bash_history
