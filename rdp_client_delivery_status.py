@@ -343,14 +343,14 @@ MANUAL_OVERRIDES = {
     # 2026-05-19: Kaiser_NW Thu cell — user reports load failure not yet
     # surfaced automatically. Pin it explicitly.
     ("Kaiser_NW", date(2026, 5, 21)): "Load Failure",
-    # 2026-05-19: 'Cigna RX 0100 Stage' failed. has_recent_failure excludes
-    # stage failures by default, so pin Load Failure explicitly. Per user:
-    # "'Cigna RX 0100 Stage' failed, so it should be in a 'Load Failure' status."
-    ("CignaRx",   date(2026, 5, 19)): "Load Failure",
     # 2026-05-20: CignaFacets 5/12 Tue cycle certified 5/19 (Mon, outside the
     # default Mon-Fri 5/11-5/15 backward window). Per user: "missing past
     # dates … CignaFacets on 5/12/26." Pin the late cert explicitly.
     ("CignaFacets", date(2026, 5, 12)): date(2026, 5, 19),
+    # 2026-05-20: MMOHRx Weekly has a failure ticket but no queued/enabled
+    # "Weekly Claim 0110 Load" run in the queue — has_recent_failure can't
+    # detect it. Pin explicitly. ADO #955575 linked via LOAD_FAILURE_ADO_LINKS.
+    ("MMOHRx",    date(2026, 5, 19)): "Load Failure",
 }
 
 # ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
@@ -361,8 +361,10 @@ MANUAL_OVERRIDES = {
 # 'Load Failure' comment."
 LOAD_FAILURE_ADO_LINKS = {
     ("Centene",    date(2026, 5, 19)): 954657,  # 'Centene Medical 0110 Claims Load'
-    ("CignaRx",    date(2026, 5, 19)): 954668,  # 'Healthspring - Rx - Cigna RX 0100 Stage'
     ("ExcellusRx", date(2026, 5, 20)): 955578,  # 'Excellus - Rx - ExcellusRx 0110 Load'
+    ("MMOHRx",     date(2026, 5, 19)): 955575,  # 'MMOH - Rx - MMOHRx Weekly Claim 0110 Load'
+    # CignaRx removed 2026-05-20 — 'Cigna RX 0110 Load' is now Ready in the
+    # queue (no longer a stage failure to surface). Re-add if/when needed.
 }
 
 # Extra rows injected into the calendar after standard placement runs. Use for
