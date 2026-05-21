@@ -333,27 +333,19 @@ MANUAL_OVERRIDES = {
     ("CenteneRx", date(2026, 5, 1)): date(2026, 5, 5),
     ("CenteneRx", date(2026, 5, 8)): date(2026, 5, 5),
     ("Medica",    date(2026, 5, 6)): "Deployment",
-    # 2026-05-19: 'Medica 0110 Load' has started (Q=1357993 Ready). Pin Wed
-    # 5/20 to L so the regular weekly cycle surfaces. Without this, the
-    # 5/18 catch-up cert (the "Medica (5/1/26)" row) is in the same Mon-Fri
-    # week and cert_in_week picks it up for the regular cell. Remove this
-    # entry once the regular Wed cert lands.
-    ("Medica",    date(2026, 5, 20)): "L",
     # 2026-05-19: 'Centene Medical 0110 Claims Load' failed (ADO 954657).
     # has_recent_failure may miss this if a stage/snap step succeeded after
     # the load failure — pin it explicitly.
     ("Centene",   date(2026, 5, 19)): "Load Failure",
-    # 2026-05-19: Kaiser_NW Thu cell — user reports load failure not yet
-    # surfaced automatically. Pin it explicitly.
-    ("Kaiser_NW", date(2026, 5, 21)): "Load Failure",
     # 2026-05-20: CignaFacets 5/12 Tue cycle certified 5/19 (Mon, outside the
     # default Mon-Fri 5/11-5/15 backward window). Per user: "missing past
     # dates … CignaFacets on 5/12/26." Pin the late cert explicitly.
     ("CignaFacets", date(2026, 5, 12)): date(2026, 5, 19),
-    # 2026-05-20: MMOHRx Weekly has a failure ticket but no queued/enabled
-    # "Weekly Claim 0110 Load" run in the queue — has_recent_failure can't
-    # detect it. Pin explicitly. ADO #955575 linked via LOAD_FAILURE_ADO_LINKS.
-    ("MMOHRx",    date(2026, 5, 19)): "Load Failure",
+    # 2026-05-21: AetnaRCE and NCStateAetna have not snapped yet today —
+    # load completed but snap step still pending. Pin today's cells to L
+    # so they don't auto-✓ on load completion (these are LOAD_AS_DELIVERY).
+    ("AetnaRCE",     date(2026, 5, 21)): "L",
+    ("NCStateAetna", date(2026, 5, 21)): "L",
 }
 
 # ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
@@ -365,9 +357,32 @@ MANUAL_OVERRIDES = {
 LOAD_FAILURE_ADO_LINKS = {
     ("Centene",    date(2026, 5, 19)): 954657,  # 'Centene Medical 0110 Claims Load'
     ("ExcellusRx", date(2026, 5, 20)): 955578,  # 'Excellus - Rx - ExcellusRx 0110 Load'
-    ("MMOHRx",     date(2026, 5, 19)): 955575,  # 'MMOH - Rx - MMOHRx Weekly Claim 0110 Load'
-    # CignaRx removed 2026-05-20 — 'Cigna RX 0110 Load' is now Ready in the
-    # queue (no longer a stage failure to surface). Re-add if/when needed.
+    # MMOHRx removed 2026-05-21 — Weekly Claim 0110 Load finished (Resolved
+    # 5/20 10:30); cell is now L, not Load Failure.
+}
+
+# Monthly clients whose placement (day AND/OR marker) should be forced,
+# overriding determine_monthly's auto-detection. Keyed by client. Used for
+# one-off corrections: e.g. EDW feeds certified late but anchored to their
+# expected day, or AetnaQNXT mid-cycle visible on a specific day.
+# Value: (placement_date, marker). marker may be a date object (cert-style)
+# or a string ("L", "Load Failure", "No Data", etc.).
+MONTHLY_PLACEMENT_OVERRIDES = {
+    # 2026-05-21: EDW feeds certified this morning at 07:54-07:56 but user
+    # wants them anchored to 5/20 (their expected delivery day). Marker
+    # shows the actual 5/21 cert date.
+    "EDW_ASE":    (date(2026, 5, 20), date(2026, 5, 21)),
+    "EDW_C_FAC":  (date(2026, 5, 20), date(2026, 5, 21)),
+    "EDW_C_NAS":  (date(2026, 5, 20), date(2026, 5, 21)),
+    "EDW_Empire": (date(2026, 5, 20), date(2026, 5, 21)),
+    # EDW_WGS not yet certified — 'Wellpoint 0100 EDW Pull EDW_WGS' is
+    # currently loading. The "Pull" verb doesn't match is_loading_today's
+    # load/snap detection, so pin to 5/20 + L explicitly. Replace marker
+    # with the cert date once it lands.
+    "EDW_WGS":    (date(2026, 5, 20), "L"),
+    # 2026-05-21: AetnaQNXT — Masterload started 5/18, no cert yet. User
+    # wants the cell anchored to 5/19 with L.
+    "AetnaQNXT":  (date(2026, 5, 19), "L"),
 }
 
 # Extra rows injected into the calendar after standard placement runs. Use for
@@ -1869,6 +1884,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # 0) Forced-inactive clients always show "Inactive" on expected day
         if client in FORCED_INACTIVE:
             return placeholder, "Inactive"
+        # 0a) Explicit one-off placement override (per-client day + marker).
+        # Highest precedence so EDW feeds can stay on 5/20 even though they
+        # certified 5/21, or AetnaQNXT can show on 5/19 with L. The override
+        # only applies when its date falls in the current calendar month.
+        override = MONTHLY_PLACEMENT_OVERRIDES.get(client)
+        if override:
+            ov_day, ov_marker = override
+            if ov_day.year == year and ov_day.month == month:
+                return ov_day, ov_marker
         # 0b) Snap-disabled clients (load runs but snap step is disabled in RAMP)
         # show marker "Snap" with pink shading on their expected day.
         if client in SNAP_DISABLED_CLIENTS:
