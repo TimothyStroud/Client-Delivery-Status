@@ -333,19 +333,14 @@ MANUAL_OVERRIDES = {
     ("CenteneRx", date(2026, 5, 1)): date(2026, 5, 5),
     ("CenteneRx", date(2026, 5, 8)): date(2026, 5, 5),
     ("Medica",    date(2026, 5, 6)): "Deployment",
-    # 2026-05-19: 'Centene Medical 0110 Claims Load' failed (ADO 954657).
-    # has_recent_failure may miss this if a stage/snap step succeeded after
-    # the load failure — pin it explicitly.
-    ("Centene",   date(2026, 5, 19)): "Load Failure",
     # 2026-05-20: CignaFacets 5/12 Tue cycle certified 5/19 (Mon, outside the
     # default Mon-Fri 5/11-5/15 backward window). Per user: "missing past
     # dates … CignaFacets on 5/12/26." Pin the late cert explicitly.
     ("CignaFacets", date(2026, 5, 12)): date(2026, 5, 19),
-    # 2026-05-21: AetnaRCE and NCStateAetna have not snapped yet today —
-    # load completed but snap step still pending. Pin today's cells to L
-    # so they don't auto-✓ on load completion (these are LOAD_AS_DELIVERY).
-    ("AetnaRCE",     date(2026, 5, 21)): "L",
-    ("NCStateAetna", date(2026, 5, 21)): "L",
+    # 2026-05-21: Premera certified 5/20 14:32 (Wed, one day before its Thu
+    # scheduled cycle). Forward cert window 5/21-5/27 misses it; pin the
+    # cert date explicitly. Per user: "Premera Load was certified on 5/20."
+    ("Premera",      date(2026, 5, 21)): date(2026, 5, 20),
 }
 
 # ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
@@ -355,10 +350,10 @@ MANUAL_OVERRIDES = {
 # have an ADO, like 954657 for Centene Medical, added as a link to the
 # 'Load Failure' comment."
 LOAD_FAILURE_ADO_LINKS = {
-    ("Centene",    date(2026, 5, 19)): 954657,  # 'Centene Medical 0110 Claims Load'
     ("ExcellusRx", date(2026, 5, 20)): 955578,  # 'Excellus - Rx - ExcellusRx 0110 Load'
-    # MMOHRx removed 2026-05-21 — Weekly Claim 0110 Load finished (Resolved
-    # 5/20 10:30); cell is now L, not Load Failure.
+    # Centene removed 2026-05-21 — 0110 Claims Load restarted (Ready 14:46),
+    # is_loading_today now auto-returns "L".
+    # MMOHRx removed 2026-05-21 — Weekly Claim 0110 Load finished.
 }
 
 # Monthly clients whose placement (day AND/OR marker) should be forced,
@@ -383,6 +378,9 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     # 2026-05-21: AetnaQNXT — Masterload started 5/18, no cert yet. User
     # wants the cell anchored to 5/19 with L.
     "AetnaQNXT":  (date(2026, 5, 19), "L"),
+    # 2026-05-22: Kaiser_AmbM Snap is on hold — move to next Thursday 5/28
+    # instead of the default 5/21 placement.
+    "Kaiser_AmbM": (date(2026, 5, 28), "Snap"),
 }
 
 # Extra rows injected into the calendar after standard placement runs. Use for
@@ -1658,6 +1656,49 @@ def next_monday_if_weekend(d):
     return d
 
 
+def us_federal_holidays(year):
+    """Return {date: name} for the 11 US federal holidays in `year`.
+    Fixed-date holidays that fall on a Saturday are observed the prior
+    Friday; on Sunday, the following Monday."""
+    out = {}
+
+    def nth_weekday(month, weekday, n):
+        cal = calendar.monthcalendar(year, month)
+        days = [w[weekday] for w in cal if w[weekday] != 0]
+        return date(year, month, days[n - 1])
+
+    def last_weekday(month, weekday):
+        cal = calendar.monthcalendar(year, month)
+        days = [w[weekday] for w in cal if w[weekday] != 0]
+        return date(year, month, days[-1])
+
+    def observed(d):
+        if d.weekday() == 5:
+            return d - timedelta(days=1)
+        if d.weekday() == 6:
+            return d + timedelta(days=1)
+        return d
+
+    fixed = [
+        (date(year,  1,  1), "New Year's Day"),
+        (date(year,  6, 19), "Juneteenth"),
+        (date(year,  7,  4), "Independence Day"),
+        (date(year, 11, 11), "Veterans Day"),
+        (date(year, 12, 25), "Christmas Day"),
+    ]
+    for d, name in fixed:
+        d_obs = observed(d)
+        out[d_obs] = name + (" (observed)" if d_obs != d else "")
+
+    out[nth_weekday(1,  0, 3)]  = "MLK Day"               # 3rd Mon Jan
+    out[nth_weekday(2,  0, 3)]  = "Presidents' Day"       # 3rd Mon Feb
+    out[last_weekday(5, 0)]     = "Memorial Day"          # last Mon May
+    out[nth_weekday(9,  0, 1)]  = "Labor Day"             # 1st Mon Sep
+    out[nth_weekday(10, 0, 2)]  = "Columbus Day"          # 2nd Mon Oct
+    out[nth_weekday(11, 3, 4)]  = "Thanksgiving"          # 4th Thu Nov
+    return out
+
+
 def nmsp_mmsea_date(year, month):
     return next_monday_if_weekend(date(year, month, 15))
 
@@ -2339,6 +2380,7 @@ def _blank_separator_row(ws, cur_row):
 
 
 def write_weekly_stacked(ws, year, month, sections, weeks, today):
+    holidays = us_federal_holidays(year)
     cur_row = 1
     week_no = 0
     for wk in weeks:
@@ -2362,8 +2404,15 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
                 cell.border = BORDER
         cur_row += 1
 
-        # date strip row (real Excel dates, formatted mm/dd/yy)
+        # date strip row (real Excel dates, formatted mm/dd/yy).
+        # Federal-holiday labels are written into the day-name sub-column
+        # of this same row so the label sits directly under "Monday" and
+        # right next to the date — not as a separate banner row.
+        holiday_fill = PatternFill("solid", fgColor="FFE4B5")
+        holiday_font = Font(name="Segoe UI", italic=True, size=9,
+                            bold=True, color="7C4A00")
         for i, d in enumerate(wk):
+            col_day = i * 2 + 1
             col_dat = i * 2 + 2
             if d:
                 cell = ws.cell(row=cur_row, column=col_dat, value=d)
@@ -2372,6 +2421,13 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
                 cell.font = DAY_FONT
                 cell.alignment = Alignment(horizontal="center")
                 cell.border = BORDER
+                hname = holidays.get(d)
+                if hname:
+                    hc = ws.cell(row=cur_row, column=col_day, value=hname)
+                    hc.fill = holiday_fill
+                    hc.font = holiday_font
+                    hc.alignment = Alignment(horizontal="center", vertical="center")
+                    hc.border = BORDER
         cur_row += 1
 
         # Daily → blank → Weekly → blank → Monthly → blank → KaiserPrePayCOB
