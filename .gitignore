@@ -8,7 +8,16 @@ __pycache__/
 
 # Generated reports
 ClientDeliveryStatus_*.xlsx
+ClientDeliveryStatus.html
+MissingPayDates*.html
+MissingPayDates*.xlsx
 _check_report.xlsx
+
+# Cron / sync working files
+cron_today*.json
+cron_backfill*.json
+seed_batch*.json
+seed_batches/
 
 # Transient scratch
 _email_params.json

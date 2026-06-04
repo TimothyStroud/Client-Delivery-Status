@@ -42,6 +42,29 @@ RAMP_BASE  = "http://ramp"
 SQL_SERVER = "TRGUTIL10"
 SQL_DB     = "DHTStats"
 OUTPUT_DIR = r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule\Daily Status Reports"
+# 2026 monthly schedule files maintained by the team. Their 'All Clients' tab
+# is the source of truth for past months (Jan–Apr 2026); the live DHT/RAMP
+# data we fetch has only 3 months of cert history and rolling queue/snap, so
+# we overlay those files for closed months instead of re-deriving cells.
+EXPECTED_DATES_DIR = r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule\2026"
+EXPECTED_DATES_FILES = {
+    1: "202601_ExpectedClientDates_JAN.xlsx",
+    2: "202602_ExpectedClientDates_FEB.xlsx",
+    3: "202603_ExpectedClientDates_MAR.xlsx",
+    4: "202604_ExpectedClientDates_APR.xlsx",
+}
+# Marker strings the team uses in those files that should pink-shade the cell.
+ALL_CLIENTS_ALERT_MARKERS = {"no data", "load failure", "missing files",
+                             "deployment", "snap hold", "field changes",
+                             "outreach", "empty", "disabled", "inactive",
+                             "cleanup"}
+# Clients whose empty/True date cells in the snapshot files should render as
+# ✓ (per user 2026-06-03 — Feb–Apr files use boolean True as a verify-load
+# placeholder for non-cert days, but the team reads them as "loaded/snapped").
+ALL_CLIENTS_FILL_CHECKMARK = {
+    "AetnaHRP", "AetnaRCE", "AetnaRx", "NCStateAetna",
+    "CVSPBMRx", "ESIPBMRx", "PrimePBMRx", "MedImpactPBMRx",
+}
 # Project-folder copy (canonical filename — overwritten each run).
 LOCAL_COPY_DIR = r"C:\Users\tls2\.claude\projects\H--"
 # OneDrive copy with fixed filename so a single Notion link stays valid run-to-run.
@@ -69,6 +92,10 @@ CLIENT_ALIASES = {
     "NCStateAetna":         ["ncstateaetna", "aetnarce"],
     "WPRxDMGCOBMining":     ["wellpointedwardrxdmgcobmining", "wpwedmgcobmining"],
     "HumanaRx":             ["humanarx"],
+    # OptumPBMRx: RAMP load is "Optum 0110 PBM Load" → digit-collapsed
+    # "optumpbmload"; alias "optumpbm" gives the substring match for both
+    # is_loading_today and snap_idx lookups.
+    "OptumPBMRx":           ["optumpbm"],
     # GEHA: the actual RAMP load is "GEHA UMR 0110 Load" → prefix "gehaumr".
     # Plain "geha" alone wouldn't strict-match "gehaumr" in snap_idx.
     "GEHA":                 ["geha", "gehaumr"],
@@ -96,6 +123,7 @@ CLIENT_ALIASES = {
     # key "upmcmaster". Per user 2026-05-20: "'UPMC Masterload 0110 Load'
     # finished, so it should show an 'L' until certification."
     "UPMC":                 ["upmc", "upmcmaster", "upmcmasterload"],
+    "BCBSAR":               ["bcbsar", "bcbsarmedical"],
     "BCBSARRx":             ["bcbsarrx"],
     "MedStar":              ["medstar"],
     # HealthNewEngland shows up as "HNE Medical" on the RAMP Dashboard.
@@ -150,6 +178,10 @@ CLIENT_ALIASES = {
     # Per user 2026-05-19: "KaiserSCPareo & KaiserNCPareo should have an 'L'".
     "KaiserSCPareo":        ["kaiserscpareo", "kaiserpareosc"],
     "KaiserNCPareo":        ["kaiserncpareo", "kaiserpareonc"],
+    # Kaiser_MASTapestry — RAMP renamed feed to "Kaiser Pareo MAS" per user
+    # 2026-06-03. Keeps default `kaisermastapestry` match for historical
+    # 'Kaiser MAS Tapestry' JobNames; adds `kaiserpareomas` for the new form.
+    "Kaiser_MASTapestry":   ["kaisermastapestry", "kaiserpareomas"],
     # MMOH (no Rx): only 'MMOH Claims 0110 Load' counts as the load
     # indicator. JobName "MMOH Claims 0110 Load" → snap_idx key "mmohclaims".
     "MMOH":                 ["mmoh", "mmohclaims"],
@@ -212,8 +244,8 @@ WEEKLY_CLIENTS = {
     "Tufts_Audit_CIT":       ["Monday"],
     "TuftsMedPref":          ["Monday"],
     "TuftsRx":               ["Monday"],
-    "UPMC":                  ["Monday"],
     # === TUESDAY ===
+    "BCBSAR":                ["Tuesday"],
     "BCBSARRx":              ["Tuesday"],
     "BCBSFL":                ["Tuesday"],
     "Centene":               ["Tuesday"],
@@ -225,16 +257,17 @@ WEEKLY_CLIENTS = {
     "JohnsHopkins":          ["Tuesday"],
     "MedStar":               ["Tuesday"],
     "MMOHRx":                ["Tuesday"],
+    "UPMC":                  ["Tuesday"],
     "Wellmark":              ["Tuesday"],
     # === WEDNESDAY ===
     "CareSource":            ["Wednesday"],
-    "CareSourceRx":          ["Wednesday"],
     "CenteneFidelis":        ["Wednesday"],
     "CenteneFidelisRx":      ["Wednesday"],
     "EmblemRx":              ["Wednesday"],
     "ExcellusRx":            ["Wednesday"],
     "HarvardPilgrim":        ["Wednesday"],
     "Medica":                ["Wednesday"],
+    "Oscar":                 ["Wednesday"],
     "WellpointEdwardRx":     ["Wednesday"],
     # === THURSDAY ===
     "HealthNewEngland":      ["Thursday"],
@@ -242,15 +275,15 @@ WEEKLY_CLIENTS = {
     "Kaiser_GA":             ["Thursday"],
     "Kaiser_HI":             ["Thursday"],
     "Kaiser_MASTapestry":    ["Thursday"],
+    "CareSourceRx":          ["Thursday"],
     "Kaiser_NW":             ["Thursday"],
     "KaiserNCPareo":         ["Thursday"],
     "KaiserSCPareo":         ["Thursday"],
-    "Oscar":                 ["Thursday"],
-    "OscarRx":               ["Thursday"],
     "Premera":               ["Thursday"],
     "PrimePBMRx":            ["Thursday"],
     # === FRIDAY ===
     "CenteneRx":             ["Friday"],
+    "OscarRx":               ["Friday"],
     "WebTPA":                ["Friday"],
     "WellCare":              ["Friday"],
     "WellCareRx":            ["Friday"],
@@ -341,6 +374,30 @@ MANUAL_OVERRIDES = {
     # scheduled cycle). Forward cert window 5/21-5/27 misses it; pin the
     # cert date explicitly. Per user: "Premera Load was certified on 5/20."
     ("Premera",      date(2026, 5, 21)): date(2026, 5, 20),
+    # 2026-05-28: ExcellusRx 5/20 finished loading and certified today;
+    # pin 5/28 as the cert date for the 5/20 cycle cell.
+    ("ExcellusRx",   date(2026, 5, 20)): date(2026, 5, 28),
+    # 2026-05-29: ExcellusRx 5/27 cycle loaded and certified today.
+    ("ExcellusRx",   date(2026, 5, 27)): date(2026, 5, 29),
+    # 2026-05-28: CenteneRx 5/22 cycle certified today alongside the 5/29
+    # load job. Pin 5/28 cert date for the 5/22 cell. (5/29 cell will pick
+    # up the cert naturally via DHT detection.)
+    ("CenteneRx",    date(2026, 5, 22)): date(2026, 5, 28),
+    # 2026-05-28: KaiserSCPareo certified today (Thu). Pin the cert date
+    # explicitly so the cell shows the cert regardless of when DHT indexes.
+    ("KaiserSCPareo", date(2026, 5, 28)): date(2026, 5, 28),
+    # 2026-05-28: Premera Commercial 0110 Load finished + certified today.
+    ("Premera",       date(2026, 5, 28)): date(2026, 5, 28),
+    # 2026-06-01: AetnaRx 6/1 dupe of 5/31 files. Remove this override once
+    # 20260531 files stage up under 'AetnaRX Claim 0100 Split Stage'. Rest of
+    # the week stays on normal load detection.
+    ("AetnaRx",       date(2026, 6, 1)): "Dupe",
+    # 2026-06-03: AetnaRx Snap failed — staff will manually correct. Force ✓
+    # for today; remove this override once the next day's run picks up the
+    # corrected snap completion naturally.
+    ("AetnaRx",       date(2026, 6, 3)): "✓",
+    # Kaiser_MASTapestry / KaiserSCPareo blank-until-cert overrides cleared
+    # 2026-06-04 — both certified, auto-detection now surfaces the date.
 }
 
 # ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
@@ -351,6 +408,10 @@ MANUAL_OVERRIDES = {
 # 'Load Failure' comment."
 LOAD_FAILURE_ADO_LINKS = {
     ("ExcellusRx", date(2026, 5, 20)): 955578,  # 'Excellus - Rx - ExcellusRx 0110 Load'
+    ("AetnaHRP",   date(2026, 5, 22)): 956353,  # 'Aetna 0110 HRP Load' failure
+    # 2026-05-26: current-week Load-Failure links per user.
+    ("CignaFacets", date(2026, 5, 26)): 956575,  # 'ProdSupp - Cigna - Audit/Subro - Cigna Facets 0110 Load Failure'
+    ("ExcellusRx",  date(2026, 5, 27)): 955578,  # same active ExcellusRx 0110 Load story
     # Centene removed 2026-05-21 — 0110 Claims Load restarted (Ready 14:46),
     # is_loading_today now auto-returns "L".
     # MMOHRx removed 2026-05-21 — Weekly Claim 0110 Load finished.
@@ -370,14 +431,16 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     "EDW_C_FAC":  (date(2026, 5, 20), date(2026, 5, 21)),
     "EDW_C_NAS":  (date(2026, 5, 20), date(2026, 5, 21)),
     "EDW_Empire": (date(2026, 5, 20), date(2026, 5, 21)),
-    # EDW_WGS not yet certified — 'Wellpoint 0100 EDW Pull EDW_WGS' is
-    # currently loading. The "Pull" verb doesn't match is_loading_today's
-    # load/snap detection, so pin to 5/20 + L explicitly. Replace marker
-    # with the cert date once it lands.
-    "EDW_WGS":    (date(2026, 5, 20), "L"),
-    # 2026-05-21: AetnaQNXT — Masterload started 5/18, no cert yet. User
-    # wants the cell anchored to 5/19 with L.
-    "AetnaQNXT":  (date(2026, 5, 19), "L"),
+    # EDW_WGS certified 2026-05-22 per user. Anchored to 5/20 (expected
+    # delivery day); marker shows the actual 5/22 cert date.
+    "EDW_WGS":    (date(2026, 5, 20), date(2026, 5, 22)),
+    # 2026-05-21: AetnaQNXT — Masterload started 5/18; anchored to 5/19.
+    # "AUTO" marker: cell shows L while pending, then auto-updates to the
+    # actual cert date once it lands — but placement stays on 5/19 even
+    # though the cert may arrive on a different day (per user 2026-05-22:
+    # "At the next update, AetnaQNXT will have been certified. Please
+    # leave it on the 5/19 date.").
+    "AetnaQNXT":  (date(2026, 5, 19), "AUTO"),
     # 2026-05-22: Kaiser_AmbM Snap is on hold — move to next Thursday 5/28
     # instead of the default 5/21 placement.
     "Kaiser_AmbM": (date(2026, 5, 28), "Snap"),
@@ -391,7 +454,21 @@ ADDITIONAL_ENTRIES = [
     # Medica catch-up for 5/1/26 claims — certified 2026-05-18 09:13:42
     # (DHT). Display cert date in the Mon cell.
     ("weekly", date(2026, 5, 18), "Medica (5/1/26)", date(2026, 5, 18), False, None),
+    # EverNorthRx backsweep files 21, 22, 23 certified 2026-05-22 per user.
+    ("weekly", date(2026, 5, 22), "EverNorthRx (21,22,23 BS)", date(2026, 5, 22), False, None),
 ]
+
+# CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
+# closes out the prior month's tail; user 2026-06-03: "typically marked as an
+# exception after certification." A `CignaRx (EOM/SOM)` row is injected on
+# the first Tuesday of every month (matching regular CignaRx Tuesday). Marker
+# is auto-detected from cert/load activity in a window straddling the month
+# boundary; override here when the cert is recorded as an exception.
+# Key: (year, month) of the SOM side. Value: a date (cert date) OR a marker
+# string ("✓", "L", "No Data", "Load Failure", "").
+CIGNARX_EOM_SOM_OVERRIDES = {
+    # ("2026,6": date(2026, 6, ?)),  # populate when the exception cert lands
+}
 
 # Per-client cert window direction (default = backward / same Mon-Fri week).
 # "forward" = look forward 7 days from scheduled day (used when a cert that
@@ -416,6 +493,18 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     # completes. Previously in LOAD_AS_DELIVERY, which auto-✓'d on a Successful
     # load even when the actual data was empty/incomplete.
     "Kaiser_WA",
+    # Christus: per user 2026-06-01, stays L until DHT cert lands — snap
+    # completion alone should not flip the cell to ✓.
+    "Christus",
+    # BCBSNorthCarolinaFEP: per user 2026-06-02, no ✓ from snap activity —
+    # stays L on the expected Friday until DHT cert lands.
+    "BCBSNorthCarolinaFEP",
+    # BSCA_Facets: per user 2026-06-03, snap activity alone must not surface
+    # ✓ — stays L (or No Data) until cert lands.
+    "BSCA_Facets",
+    # HealthSpring_FWA: per user 2026-06-03, same rule — loaded today but
+    # cert will arrive separately; no snap-only ✓.
+    "HealthSpring_FWA",
 }
 
 # Monthly clients that should show an empty Date cell (rather than "No Data")
@@ -425,7 +514,7 @@ MONTHLY_BLANK_UNTIL_CERT = {"BCBSKSMedAdv"}
 
 # Monthly clients whose "No Data" should always be shaded regardless of the
 # 7-day grace window (e.g. ElixirRx hasn't received data in a long time).
-FORCE_SHADE_NO_DATA = {"ElixirRx"}
+FORCE_SHADE_NO_DATA = {"ElixirRx", "MedicalMutualMHS"}
 
 # Clients that should be rendered with bold label (no fill).
 BOLD_LABEL = {"Aetna NMSP - MMSEA", "AetnaMMSEA"}
@@ -533,6 +622,55 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     # HumanaRx: no fixed expected day — placed on snap date or today when loading.
 }
 
+# Spread monthly clients across the Mon-Fri week of their anchor day.
+# Weekday is 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri. The override snaps
+# expected_date to the same Mon-Fri work-week as the original anchor day.
+# Clients NOT in this dict stay on their MONTHLY_EXPECTED_DAY_RANGE end day.
+# Per user 2026-05-26: avoid stacking everyone on the 10th and 15th. Pinned
+# clients (BCBSKS, BCBSKSMedAdv, Kaiser_WA, BCBSSCRx, CareFirst*) are left
+# off this list — they keep their explicit anchor.
+MONTHLY_PLACEMENT_WEEKDAY = {
+    # Day-10 cluster — spread Mon-Fri of the work-week of the 10th.
+    "AetnaQNXTRx":            0,  # Mon
+    "BCBSVT":                 1,  # Tue
+    "BSCA_Facets":            2,  # Wed
+    "BSCA_Medicare":          3,  # Thu
+    "HAP_Medical":            4,  # Fri
+    "HAPRx":                  0,  # Mon
+    "HealthSpring_FWA":       1,  # Tue
+    "MMOH":                   2,  # Wed
+    "MedImpactPBMRx":         3,  # Thu
+    "NCState":                4,  # Fri
+    "PremeraMedAdvRx":        0,  # Mon
+    "PremeraMedAdvVIS":       1,  # Tue
+    "TuftsRx":                2,  # Wed
+    # Day-15 cluster — spread Mon-Fri of the work-week of the 15th.
+    # (AetnaMMSEA omitted — handled separately by nmsp_mmsea_date.)
+    "AetnaQNXT":              1,  # Tue
+    "BCBSNC":                 2,  # Wed
+    "BCBSNC_Rx":              3,  # Thu
+    "BCBSNorthCarolinaFEP":   4,  # Fri
+    "BCBSPuertoRico":         0,  # Mon
+    "ElixirRx":               1,  # Tue
+    "Kaiser_WARx":            2,  # Wed
+    "SamaritanHealth":        3,  # Thu
+    "Tufts_PublicPlan":       4,  # Fri
+}
+
+# Monthly clients whose anchor day should snap to the CLOSEST weekday
+# (Sat → previous Fri, Sun → next Mon) instead of the default
+# next_monday_if_weekend (Sat → next Mon). Per user 2026-05-26: BCBSFL Elig
+# anchor 25th should land on the closest weekday in months where 25 is Sat/Sun.
+CLOSEST_WEEKDAY_CLIENTS = {"BCBSFLEligibilityLoad"}
+
+# Clients in implementation phase — render "Implementation" in the date cell
+# on every scheduled day from start_date until the first DHT cert lands. Cells
+# before start_date are suppressed entirely.
+# Per user 2026-05-26: BCBSAR is a new Tuesday weekly implementation from June.
+IMPLEMENTATION_CLIENTS = {
+    "BCBSAR": date(2026, 6, 1),
+}
+
 # Clients whose "is delivered" signal is exclusively from TRGETL3 tape loads.
 # Lookups for these clients ignore RAMP snap entries entirely.
 TAPE_ONLY_CLIENTS = {"OptumPBMRx", "ESIPBMRx", "MedImpactPBMRx"}
@@ -589,6 +727,17 @@ SNAP_KIND_ONLY_CLIENTS = {
 LOAD_AS_DELIVERY_CLIENTS = {
     "OptumPBMRx", "HumanaRx", "BCBSKSMedAdv",
     "AetnaRCE", "AetnaRx", "NCStateAetna",
+}
+
+# Clients we are NOT actively working (no certification expected), but whose
+# load pipeline is running for implementation/testing. Cell behavior:
+#   - currently loading → "L"
+#   - load+snap finished → blank (NOT a ✓, NOT a cert date)
+# Per user 2026-06-03 for ElevanceMMMRx. New auto-discovered MasterLoad
+# implementations that are NOT PBMRx default into this set; promote out of
+# it once the client is being actively delivered.
+IMPLEMENTATION_LOAD_ONLY_CLIENTS = {
+    "ElevanceMMMRx",
 }
 
 # Override the auto-derived primary key for clients whose name is a substring
@@ -1037,7 +1186,14 @@ def fetch_ramp_queue():
 
 def fetch_ramp_snaps():
     data = curl_json(f"{RAMP_BASE}/api/Ramp/Snap/SnapQueueStatus").get("Data", [[]])
-    return data[0] if data and isinstance(data[0], list) else data
+    rows = data[0] if data and isinstance(data[0], list) else data
+    cutoff = datetime.now() - timedelta(days=60)
+    out = []
+    for s in rows:
+        end = parse_dt(s.get("End"))
+        if end is None or end >= cutoff:
+            out.append(s)
+    return out
 
 
 def fetch_aetna_nmsp_loads(since):
@@ -1112,9 +1268,7 @@ ESIPBMRX_STATE_RE = re.compile(r"Rawlings_([A-Z]{2})_", re.I)
 # from filename). The capture groups should be (start_yyyymmdd, end_yyyymmdd)
 # or a single token uniquely identifying a week's worth of data. When recent
 # loads contain >1 distinct week-key, the client label gets "(N weeks)".
-MULTI_WEEK_CLIENTS = {
-    "CenteneRx": ("CenteneRx", re.compile(r"_(\d{8})_(\d{8})\.txt$", re.I)),
-}
+MULTI_WEEK_CLIENTS = {}
 
 
 def find_matching_jobs(client_id, jobs):
@@ -1495,6 +1649,167 @@ def is_loading_today(client, queue, jobs):
     return False
 
 
+def scan_adhoc_loads(queue, jobs, today, since):
+    """Scan RAMP queue for ad-hoc Load jobs that have no fixed schedule on
+    the report. Each completed run shows up as a one-off row in the weekly
+    section on the day it landed; in-flight runs surface today with 'L'.
+
+    Per user 2026-06-04: MSPI Load jobs and HumanaRx Load are ad-hoc — they
+    only appear when they actually run. Drop the row when nothing happened.
+
+    Returns a list of dicts: {"label", "day", "marker", "alert"}.
+    """
+    mspi_re   = re.compile(r"\bMSPI\b.*\bLoad\b", re.IGNORECASE)
+    # HumanaRx returned to Monthly classification 2026-06-04 — kept the
+    # function plumbing in case the user wants to add more ad-hoc patterns
+    # later; for now only MSPI surfaces here.
+    # Queue rows only carry JobId, not JobName — cross-reference via jobs.
+    job_by_id = {j.get("JobId"): (j.get("JobName") or "") for j in jobs}
+    # Walk newest → oldest (queue is QueueId DESC). For each (label, day, marker)
+    # we keep the first occurrence; we also drop any Load Failure entry for a
+    # label once a strictly newer non-failure entry (Ready/Running/Success/
+    # Resolved) has been seen for the same label. Per user 2026-06-04: "if a
+    # new MSPI load starts for the same client that has a failure, the failure
+    # can be dropped."
+    seen = set()
+    rows = []
+    nonfailure_seen = set()  # labels whose newest run is NOT a failure
+    for q in queue:
+        name = (job_by_id.get(q.get("JobId")) or "").strip()
+        if not name:
+            continue
+        if not mspi_re.search(name):
+            continue
+        # Skip the snap-step variant; we only key off Load completion.
+        if re.search(r"\b(snap|mine|logfile|sftp|stage)\b", name, re.I):
+            continue
+        status = (q.get("Status") or "").strip()
+        start = parse_dt(q.get("StartDate"))
+        end   = parse_dt(q.get("EndDate"))
+        if not start or start.date() < since:
+            continue
+        base = re.sub(r"\s*\d+.*$", "", name).strip()
+        base = re.sub(r"\s*MSPI\s*$", "", base, flags=re.IGNORECASE).strip()
+        label = f"{base} MSPI"
+        s_lower = status.lower()
+        if s_lower.startswith("success") or s_lower == "resolved":
+            day = (end or start).date()
+            marker, alert = "✓", False
+            nonfailure_seen.add(label)
+        elif s_lower in ("ready", "running"):
+            day, marker, alert = today, "L", False
+            nonfailure_seen.add(label)
+        elif s_lower == "failed":
+            # Drop the failure if a strictly newer (already-seen) non-failure
+            # run exists for the same label.
+            if label in nonfailure_seen:
+                continue
+            day = (end or start).date()
+            marker, alert = "Load Failure", True
+        else:
+            continue
+        if day.weekday() == 5:
+            day -= timedelta(days=1)
+        elif day.weekday() == 6:
+            day += timedelta(days=1)
+        key = (label, day, marker)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({"label": label, "day": day, "marker": marker, "alert": alert})
+    return rows
+
+
+def find_unconfigured_masterload_clients(jobs):
+    """Scan RAMP jobs for `<Client> MasterLoad 0110 Load` entries whose
+    derived client name isn't recognised by any existing config dict.
+
+    Returns list of dicts:
+      {"raw": str, "normalized": str, "pbmrx": bool, "enabled": bool}
+
+    Per user 2026-06-03: keep an eye on RAMP for these and add new
+    implementations to the report. PBMRx hits get SNAP_KIND_ONLY behavior.
+    """
+    out = []
+    seen = set()
+    known = (set(DAILY_CLIENTS) | set(WEEKLY_CLIENTS.keys())
+             | set(MONTHLY_CLIENTS) | {KAISER_PREPAY_CLIENT})
+    known_keys = set()
+    for c in known:
+        for k in _keys_for_client(c):
+            if k:
+                known_keys.add(k)
+    pat = re.compile(r"^(.+?)\s*MasterLoad\s+0110\s+Load\s*$", re.IGNORECASE)
+    for j in jobs:
+        name = (j.get("JobName") or "").strip()
+        if not name:
+            continue
+        m = pat.match(name)
+        if not m:
+            continue
+        client_raw = m.group(1).strip()
+        norm = normalize(client_raw)
+        if not norm or norm in seen:
+            continue
+        # Match against known client keys with substring (matches aliases too).
+        matched = any(norm == k or norm in k or k in norm for k in known_keys)
+        if matched:
+            continue
+        seen.add(norm)
+        out.append({
+            "raw": client_raw,
+            "normalized": norm,
+            "pbmrx": "PBMRx" in name,
+            "enabled": j.get("Enabled") == 1,
+        })
+    return out
+
+
+# Ancillary sub-pipeline modifiers that should NOT count toward primary-load
+# inactivity (per user 2026-06-03: the inactive-label rule targets the main
+# 0100/0110 cycle only, not COBC/RTA/etc. sub-jobs).
+_ANCILLARY_JOB_TOKEN_RE = re.compile(
+    r"\b(cobc|rta|abii|ihp|cms\s*referral|mmsea|covid|monthly\s+claim|adjustment)\b",
+    re.IGNORECASE,
+)
+
+
+def auto_inactive_from_ramp(jobs):
+    """Set of clients (canonical names from our config) whose primary
+    0100 Stage / 0110 Load jobs in RAMP are ALL Inactive (Enabled=0).
+    Excludes any client whose name starts with "Kaiser" (per user
+    2026-06-03 — Kaiser feeds have their own snap/inactive semantics).
+    Excludes ancillary job modifiers via _ANCILLARY_JOB_TOKEN_RE.
+    """
+    primary_state = defaultdict(lambda: {"active": 0, "inactive": 0})
+    for j in jobs:
+        name = (j.get("JobName") or "").strip()
+        if not name:
+            continue
+        if "0100 Stage" not in name and "0110 Load" not in name:
+            continue
+        if _ANCILLARY_JOB_TOKEN_RE.search(name):
+            continue
+        jn = normalize(name)
+        is_active = (j.get("Enabled") == 1)
+        for client in (set(DAILY_CLIENTS) | set(WEEKLY_CLIENTS.keys())
+                       | set(MONTHLY_CLIENTS) | {KAISER_PREPAY_CLIENT}):
+            if client.startswith("Kaiser"):
+                continue
+            for k in _keys_for_client(client):
+                if k and (k in jn or jn.startswith(k)):
+                    if is_active:
+                        primary_state[client]["active"] += 1
+                    else:
+                        primary_state[client]["inactive"] += 1
+                    break
+    out = set()
+    for client, state in primary_state.items():
+        if state["inactive"] > 0 and state["active"] == 0:
+            out.add(client)
+    return out
+
+
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
     """True if RAMP has no enabled jobs for the client AND there has been
     no DHT certification or snap completion in the last 30 days.
@@ -1638,12 +1953,25 @@ def count_multi_week_loads(client, week_start, week_end, multi_week_loads):
 
 
 def month_weeks(year, month):
+    """Return Mon-Fri weeks rendered on this month's tab.
+
+    A week intersecting two months is claimed by whichever month has 3+
+    weekdays in it (per user 2026-06-01: "whichever month has 3 or more
+    weekdays, that week should be joined with the remaining days of the
+    other month"). The claiming month keeps the full 5-day week, including
+    carryover dates from the adjacent month. The losing month drops that
+    partial week — it will appear on the claiming month's tab instead.
+
+    Example: 6/29 Mon and 6/30 Tue (only 2 June weekdays) drop off June and
+    join July's Week 1, which has 7/1, 7/2, 7/3 (3 July weekdays).
+    """
     cal = calendar.Calendar(firstweekday=0)
     out = []
     for wk in cal.monthdatescalendar(year, month):
-        row = [d if d.month == month else None for d in wk[:5]]
-        if any(d is not None for d in row):
-            out.append(row)
+        weekdays = wk[:5]  # Mon-Fri only
+        in_month = sum(1 for d in weekdays if d.month == month)
+        if in_month >= 3:
+            out.append(list(weekdays))
     return out
 
 
@@ -1651,6 +1979,15 @@ def next_monday_if_weekend(d):
     """If d is Sat/Sun, return the following Monday; otherwise d."""
     if d.weekday() == 5:
         return d + timedelta(days=2)
+    if d.weekday() == 6:
+        return d + timedelta(days=1)
+    return d
+
+
+def closest_weekday(d):
+    """Snap d to the nearest Mon-Fri. Sat → previous Fri, Sun → next Mon."""
+    if d.weekday() == 5:
+        return d - timedelta(days=1)
     if d.weekday() == 6:
         return d + timedelta(days=1)
     return d
@@ -1756,6 +2093,10 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # "Snap" added for snap-disabled clients (e.g. Kaiser_AmbM).
         if marker in ("Load Failure", "Inactive", "Failed", "Deployment", "Snap"):
             return True
+        # Implementation phase — never pink (new client; lack of jobs/data
+        # would otherwise trip has_inactive_jobs).
+        if marker == "Implementation":
+            return False
         if is_kaiser_feed(client):
             # Snap-only / load-as-delivery / forced-inactive Kaiser feeds
             # have their own per-client semantics — fall through to the
@@ -1774,13 +2115,25 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             if rng:
                 try:
                     # Shade when today is >7 days past the START of the expected
-                    # window (e.g. MedImpactPBMRx range 5-10 → shade after 5/12).
-                    start_day = date(today.year, today.month,
-                                     min(rng[0], calendar.monthrange(today.year, today.month)[1]))
+                    # window for the CELL's month (not today's). Future-month
+                    # templates must not pink-shade No Data.
+                    start_day = date(day.year, day.month,
+                                     min(rng[0], calendar.monthrange(day.year, day.month)[1]))
                     return (today - start_day).days > 7
                 except ValueError:
                     return False
             return False
+        # Weekly clients — pink-shade an empty past-scheduled cell when the
+        # scheduled day is more than 3 days in the past with no cert /
+        # activity. Monthly clients keep the 7-day threshold above. Daily
+        # Aetnas are exempt (per user 2026-06-03 — they're in DAILY_CLIENTS
+        # so this guard is belt-and-suspenders).
+        if (not marker
+                and client in WEEKLY_CLIENTS
+                and client not in {"AetnaHRP", "AetnaRCE", "AetnaRx",
+                                   "NCStateAetna"}
+                and (today - day).days > 3):
+            return True
         # Past-day cells reflect historical activity — don't shade them with
         # the current Inactive/Failure state of the client. Only the marker
         # text itself (handled above) determines shading for past days.
@@ -1876,6 +2229,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 return "Inactive"
             return ""
 
+        # Implementation-load-only clients (e.g. ElevanceMMMRx): not being
+        # actively worked yet — show L only while a job is currently running
+        # in RAMP; clear to blank as soon as load+snap completes. Never ✓,
+        # never a cert date. Per user 2026-06-03.
+        if client in IMPLEMENTATION_LOAD_ONLY_CLIENTS:
+            if in_current_week and is_loading_today(client, ramp_queue, ramp_jobs):
+                return "L"
+            return ""
+
         # Weekly clients: currently-loading L outranks past failure (active
         # retry is more useful than a stale Failed entry). Cert already
         # took priority above, so cert dates aren't displaced.
@@ -1911,17 +2273,44 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         avg = average_cert_day(client, cert_idx)
         return avg if avg is not None else 15
 
+    def _kaiser_amb_anchor():
+        """Closest Thursday (weekday 3) to the 15th of (year, month)."""
+        anchor = date(year, month, 15)
+        diff = 3 - anchor.weekday()  # diff is in [-3, 3]
+        return anchor + timedelta(days=diff)
+
+    def _apply_weekday_spread(d, client):
+        """If the client has a MONTHLY_PLACEMENT_WEEKDAY override, snap d to
+        the matching weekday of d's Mon-Fri work-week. Clamps within month."""
+        target_wd = MONTHLY_PLACEMENT_WEEKDAY.get(client)
+        if target_wd is None:
+            return d
+        week_start = d - timedelta(days=d.weekday())
+        candidate = week_start + timedelta(days=target_wd)
+        if candidate.year == year and candidate.month == month:
+            return candidate
+        return d
+
     def determine_monthly(client):
         """Return (placement_date, marker) for a monthly client.
         Cert/snap dates remain on their actual date; all other markers are
         anchored to the client's expected delivery day (end of its range)."""
-        # expected placement day (end of range; or avg if no range; fallback 15th)
-        expected_d = expected_end_day(client)
-        try:
-            placeholder = date(year, month, min(expected_d, calendar.monthrange(year, month)[1]))
-        except ValueError:
-            placeholder = date(year, month, 15)
-        placeholder = next_monday_if_weekend(placeholder)
+        # Kaiser_Amb feeds all anchor to the closest Thursday to the 15th
+        # (per user 2026-05-26).
+        if client.startswith("Kaiser_Amb"):
+            placeholder = _kaiser_amb_anchor()
+        else:
+            # expected placement day (end of range; or avg if no range; fallback 15th)
+            expected_d = expected_end_day(client)
+            try:
+                placeholder = date(year, month, min(expected_d, calendar.monthrange(year, month)[1]))
+            except ValueError:
+                placeholder = date(year, month, 15)
+            if client in CLOSEST_WEEKDAY_CLIENTS:
+                placeholder = closest_weekday(placeholder)
+            else:
+                placeholder = next_monday_if_weekend(placeholder)
+            placeholder = _apply_weekday_spread(placeholder, client)
         # 0) Forced-inactive clients always show "Inactive" on expected day
         if client in FORCED_INACTIVE:
             return placeholder, "Inactive"
@@ -1929,37 +2318,45 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # Highest precedence so EDW feeds can stay on 5/20 even though they
         # certified 5/21, or AetnaQNXT can show on 5/19 with L. The override
         # only applies when its date falls in the current calendar month.
+        # Marker "AUTO" anchors placement to ov_day but resolves the marker
+        # dynamically: cert this month → cert date; currently loading or
+        # loaded this month → "L"; else "No Data".
         override = MONTHLY_PLACEMENT_OVERRIDES.get(client)
         if override:
             ov_day, ov_marker = override
             if ov_day.year == year and ov_day.month == month:
+                if ov_marker == "AUTO":
+                    c_latest = latest_cert(client, cert_idx, on_or_before=today)
+                    if c_latest and c_latest.year == year and c_latest.month == month:
+                        return ov_day, c_latest.date()
+                    if is_loading_today(client, ramp_queue, ramp_jobs):
+                        return ov_day, "L"
+                    if has_recent_failure(client, ramp_queue, ramp_jobs, today):
+                        return ov_day, "Load Failure"
+                    if load_this_month(client, snap_idx, year, month, today):
+                        return ov_day, "L"
+                    return ov_day, "No Data"
                 return ov_day, ov_marker
         # 0b) Snap-disabled clients (load runs but snap step is disabled in RAMP)
         # show marker "Snap" with pink shading on their expected day.
         if client in SNAP_DISABLED_CLIENTS:
             return placeholder, "Snap"
-        try:
-            expected_date = date(year, month, min(expected_d, calendar.monthrange(year, month)[1]))
-        except ValueError:
-            expected_date = date(year, month, 15)
-        expected_date = next_monday_if_weekend(expected_date)
-        if expected_date.month != month:
-            expected_date = date(year, month, calendar.monthrange(year, month)[1])
-
-        # Kaiser_Amb* feeds cert on the Thursday following their load date.
-        # Override expected_date dynamically when a load has happened this
-        # month so the cell tracks the actual cycle (per user 2026-05-15).
-        if client.startswith("Kaiser_Amb") and client != "Kaiser_AmbM":
-            ln = load_this_month(client, snap_idx, year, month, today)
-            if ln:
-                load_d = ln.date()
-                # First Thursday STRICTLY after load_d (weekday 3 = Thursday)
-                days_until = (3 - load_d.weekday()) % 7
-                if days_until == 0:
-                    days_until = 7
-                candidate = load_d + timedelta(days=days_until)
-                if candidate.year == year and candidate.month == month:
-                    expected_date = candidate
+        # expected_date mirrors placeholder for Kaiser_Amb feeds and any
+        # spread-adjusted client; otherwise recompute from the range end.
+        if client.startswith("Kaiser_Amb"):
+            expected_date = placeholder
+        else:
+            try:
+                expected_date = date(year, month, min(expected_d, calendar.monthrange(year, month)[1]))
+            except ValueError:
+                expected_date = date(year, month, 15)
+            if client in CLOSEST_WEEKDAY_CLIENTS:
+                expected_date = closest_weekday(expected_date)
+            else:
+                expected_date = next_monday_if_weekend(expected_date)
+            if expected_date.month != month:
+                expected_date = date(year, month, calendar.monthrange(year, month)[1])
+            expected_date = _apply_weekday_spread(expected_date, client)
 
         # 1) Already certified this month → place on actual cert date
         c_latest = latest_cert(client, cert_idx, on_or_before=today)
@@ -1968,6 +2365,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             d = next_monday_if_weekend(d) if d.weekday() >= 5 else d
             return d, c_latest.date()
 
+        # "Today" rules only fire when today actually falls within the target
+        # month — future-month templates must not pull placements back into the
+        # current week (per user 2026-05-26: BCBSFL Elig was missing from June
+        # because is_loading_today returned today=5/26 and the row got dropped).
+        today_in_month = (today.year == year and today.month == month)
         # Cert-only clients (BCBSKS/BCBSKSMedAdv/BCBSSCRx) stay on expected
         # day until DHT cert lands.
         if client in MONTHLY_CERT_ONLY_CLIENTS:
@@ -1975,7 +2377,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             # activity entirely — they stay empty until a real cert arrives.
             if client in MONTHLY_BLANK_UNTIL_CERT:
                 return expected_date, ""
-            if is_loading_today(client, ramp_queue, ramp_jobs):
+            if today_in_month and is_loading_today(client, ramp_queue, ramp_jobs):
                 return expected_date, "L"
             if has_recent_failure(client, ramp_queue, ramp_jobs, today):
                 return expected_date, "Load Failure"
@@ -1989,11 +2391,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             return expected_date, "No Data"
 
         # 2) Currently loading right now → today + L (outranks past completion).
-        if is_loading_today(client, ramp_queue, ramp_jobs):
+        if today_in_month and is_loading_today(client, ramp_queue, ramp_jobs):
             return today, "L"
 
         # 3) Recent failure today → today + Load Failure
-        if has_recent_failure(client, ramp_queue, ramp_jobs, today):
+        if today_in_month and has_recent_failure(client, ramp_queue, ramp_jobs, today):
             return today, "Load Failure"
 
         # 4) Successfully snapped this month → ✓ on the snap date.
@@ -2013,7 +2415,8 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             return expected_date, "L"
 
         # 5) ADO delivery ticket changed this week → move up to that day with L.
-        ticket = latest_tickets.get(client)
+        # Only valid in the current month's rendering.
+        ticket = latest_tickets.get(client) if today_in_month else None
         if ticket:
             ch = parse_dt(ticket.get("changed", "")) or parse_dt(ticket.get("created", ""))
             if ch and today_week_start <= ch.date() <= today_week_end \
@@ -2151,9 +2554,21 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     # weekly clients on assigned weekday (alphabetical within column)
     for c in sorted(WEEKLY_CLIENTS):
         days = WEEKLY_CLIENTS[c]
+        impl_start = IMPLEMENTATION_CLIENTS.get(c)
         for d in all_days:
-            if d.strftime("%A") in days:
-                place(weekly, "weekly", c, d)
+            if d.strftime("%A") not in days:
+                continue
+            # Implementation clients are suppressed before their start date.
+            if impl_start and d < impl_start:
+                continue
+            # During implementation phase (before first cert), render
+            # "Implementation" in the date cell as the manual marker.
+            if impl_start:
+                latest = latest_cert(c, cert_idx, on_or_before=d)
+                if latest is None or latest.date() < impl_start:
+                    place(weekly, "weekly", c, d, marker_override="Implementation")
+                    continue
+            place(weekly, "weekly", c, d)
 
     # NYShip_Rx rotates 4x/month
     for daynum in NYSHIP_DAYS:
@@ -2182,7 +2597,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
 
     # OptumPBMRx: two delivery sets per month (RAW1/2/3 early + RAW5/6 late).
     # For each half of the month place separately based on tape-load activity.
-    def place_optum_half(label_suffix, day_lo, day_hi):
+    def first_friday(y, m):
+        d = date(y, m, 1)
+        return d + timedelta(days=(4 - d.weekday()) % 7)
+
+    def place_optum_half(label_suffix, day_lo, day_hi, default_day=None):
         last_day = calendar.monthrange(year, month)[1]
         hi = min(day_hi, last_day)
         window_start = date(year, month, day_lo)
@@ -2203,10 +2622,20 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             if placement.month != month:
                 placement = date(year, month, calendar.monthrange(year, month)[1])
             marker = "✓"
+        elif (today.year == year and today.month == month
+              and window_start <= today <= window_end
+              and is_loading_today("OptumPBMRx", ramp_queue, ramp_jobs)):
+            # Load is running but no tape yet — show L on today.
+            placement = today
+            marker = "L"
         else:
-            # No tape this half yet — place on mid-window, marker depends on grace
-            mid = day_lo + (hi - day_lo) // 2
-            placement = next_monday_if_weekend(date(year, month, mid))
+            # No tape this half yet — placement = caller's default (first Friday
+            # for the early half per user 2026-05-26), else mid-window.
+            if default_day is not None:
+                placement = default_day
+            else:
+                mid = day_lo + (hi - day_lo) // 2
+                placement = next_monday_if_weekend(date(year, month, mid))
             marker = "No Data"
         label = f"M - OptumPBMRx {label_suffix}"
         # alert if "No Data" and past 7 days past END
@@ -2216,7 +2645,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             alert = (today - ref_end).days > 7
         monthly[placement].append((label, marker, alert, None))
 
-    place_optum_half("(RAW 1/2/3)", 1, 7)
+    place_optum_half("(RAW 1/2/3)", 1, 7, default_day=first_friday(year, month))
     place_optum_half("(RAW 5/6)",   24, 31)
 
     # Aetna NMSP - MMSEA: ✓ once SourceLog shows a NonMSP file imported this
@@ -2282,6 +2711,64 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             label = f"{display_name(KAISER_PREPAY_CLIENT)}{suffix}"
             kaiser[target].append((label, "✓", False, None))
             break
+
+    # Ad-hoc loads (MSPI variants, HumanaRx) — surface only when there's
+    # actual RAMP activity. Per user 2026-06-04: no fixed schedule cell;
+    # just appear with ✓ on completion day, L while in-flight, or
+    # Load Failure on the completion day if status==Failed.
+    since_adhoc = date(year, month, 1) - timedelta(days=14)
+    for ah in scan_adhoc_loads(ramp_queue, ramp_jobs, today, since_adhoc):
+        d = ah["day"]
+        if d.year != year or d.month != month:
+            continue
+        weekly[d].append((ah["label"], ah["marker"], ah["alert"], None, None))
+
+    # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month
+    # surfaces on the first Tuesday of each month. Per user 2026-06-03.
+    cigna_target = None
+    for d in all_days:
+        if d.month == month and d.weekday() == 1:  # Tuesday
+            cigna_target = d
+            break
+    if cigna_target is not None:
+        cig_label = "CignaRx (EOM/SOM)(p)"
+        override = CIGNARX_EOM_SOM_OVERRIDES.get((year, month))
+        if override is not None:
+            marker = override
+        else:
+            # Window: 7 days before SOM through 14 days into month — catches
+            # the EOM load tail and the (often exception-cert) early-month
+            # cert landing.
+            win_start = date(year, month, 1) - timedelta(days=7)
+            win_end   = date(year, month, 1) + timedelta(days=14)
+            # Cert preference: earliest cert in the window.
+            cig_cert = None
+            for key in _keys_for_client("CignaRx"):
+                for dt, status in cert_idx.get(key, ()):
+                    if status != "Certified":
+                        continue
+                    if win_start <= dt.date() <= win_end:
+                        if cig_cert is None or dt < cig_cert:
+                            cig_cert = dt
+            if cig_cert and cig_cert.date() <= today:
+                marker = cig_cert.date()
+            else:
+                cig_keys = list(_keys_for_client("CignaRx"))
+                loaded = False
+                for d_scan, entries in snap_idx.items():
+                    if not (win_start <= d_scan <= win_end):
+                        continue
+                    for entry in entries:
+                        if _src_matches_client(entry[0], cig_keys):
+                            jn = entry[4] if len(entry) > 4 else ""
+                            if _load_name_allowed("CignaRx", jn, entry[3] if len(entry) > 3 else "load"):
+                                loaded = True
+                                break
+                    if loaded:
+                        break
+                marker = "L" if loaded else "No Data"
+        alert = alert_state("CignaRx", cigna_target, marker)
+        weekly[cigna_target].append((cig_label, marker, alert, None))
 
     # Sort each cell alphabetically within each section
     for bucket in (daily, weekly, monthly, kaiser):
@@ -2451,9 +2938,15 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
 
     # Client-name columns set to ≈190 px (width 27.07) per user 2026-05-20.
     # Excel pixels ≈ 7 * width + 0.5.
+    # Column D (Tuesday date) widened to ≈95 px per user 2026-06-01 until
+    # BCBSAR is certified for Implementation — revert to 11 after cert lands.
     client_w = (190 - 0.5) / 7
+    col_d_w  = (95 - 0.5) / 7
     for i in range(10):
-        w = client_w if i % 2 == 0 else 11
+        if i == 3:
+            w = col_d_w
+        else:
+            w = client_w if i % 2 == 0 else 11
         ws.column_dimensions[get_column_letter(i + 1)].width = w
     ws.sheet_view.showGridLines = False
 
@@ -2710,6 +3203,572 @@ def write_client_owner_sheet(ws):
 # ============================================================
 #                            main
 # ============================================================
+def parse_all_clients_xlsx(file_path, year):
+    """Read an ExpectedClientDates_<MMM>.xlsx 'All Clients' tab into the
+    same `(sections, weeks)` shape that `plan_calendar` returns.
+
+    Two header styles are accepted:
+      Jan: `All Clients - Week N - M/D-M/D` (Monday date encoded in header)
+      Feb-Apr (and later): `<MonthName> - Week N - All Clients` (no date in
+        header — the Monday date is inferred by scanning the first real
+        date cell in the block).
+
+    Daily rows: same client name across all populated weekday cells. In the
+    Feb+ format, non-cert weekday cells contain the boolean `True` (a load-
+    verification checkbox); these become blank markers, not strings.
+    """
+    from openpyxl import load_workbook
+    wb = load_workbook(file_path, data_only=True)
+    if "All Clients" not in wb.sheetnames:
+        return None, None
+    ws = wb["All Clients"]
+
+    sections = {"daily": defaultdict(list), "weekly": defaultdict(list),
+                "monthly": defaultdict(list), "kaiser": defaultdict(list)}
+    weeks = []
+
+    header_re_jan = re.compile(
+        r"All Clients\s*-\s*Week\s*(\d+)\s*-\s*(\d+)/(\d+)-(\d+)/(\d+)",
+        re.IGNORECASE,
+    )
+    header_re_feb = re.compile(
+        r"([A-Za-z]+)\s*-\s*Week\s*(\d+)\s*-\s*All\s*Clients",
+        re.IGNORECASE,
+    )
+
+    # Pending block state when the Monday date hasn't been resolved yet.
+    pending_week = None  # dict: {'block_rows': [(row_idx, cells)], ...}
+    current_week_dates = None
+    in_data_block = False
+
+    def to_marker(raw):
+        # Feb+ files put boolean True/False in non-cert date cells as a
+        # load-verification flag; treat these as blank, not "True"/"False".
+        if isinstance(raw, bool):
+            return ""
+        if isinstance(raw, datetime):
+            return raw.date()
+        if isinstance(raw, date):
+            return raw
+        if raw is None:
+            return ""
+        return str(raw).strip()
+
+    def _name_matches_fill(display):
+        """True when `display` is one of the ALL_CLIENTS_FILL_CHECKMARK
+        clients (allowing common suffix conventions like (s), (p), (n),
+        " - ", and the leading `M - ` monthly tag)."""
+        base = display.strip()
+        base = re.sub(r"^M\s*-\s*", "", base).strip()
+        base = base.lstrip("* ").strip()
+        for target in ALL_CLIENTS_FILL_CHECKMARK:
+            if (base == target
+                    or base.startswith(target + "(")
+                    or base.startswith(target + " ")
+                    or base.startswith(target + "-")):
+                return True
+        return False
+
+    def flush_block(block_rows, week_days):
+        """Commit a block of pending rows once week_days has been resolved."""
+        for cells in block_rows:
+            populated = []
+            for i in range(5):
+                n = cells[i * 2]
+                if n is None:
+                    continue
+                ns = str(n).strip()
+                if not ns:
+                    continue
+                populated.append((i, ns))
+            is_daily_row = False
+            daily_name = None
+            if populated and len(populated) >= 2:
+                base = populated[0][1].lstrip("* ").strip()
+                if all(p[1].lstrip("* ").strip() == base for p in populated):
+                    is_daily_row = True
+                    daily_name = base
+
+            for i in range(5):
+                name = cells[i * 2]
+                mark = cells[i * 2 + 1]
+                if name is None and (mark is None or isinstance(mark, bool)):
+                    continue
+                name_s = "" if name is None else str(name).strip()
+                if not name_s:
+                    continue
+                display = name_s
+                if display.startswith("*"):
+                    display = display.lstrip("* ").strip()
+
+                kind = "weekly"
+                if is_daily_row:
+                    kind = "daily"
+                    display = daily_name
+                elif display.startswith("M -") or display.startswith("M-"):
+                    kind = "monthly"
+                elif "KaiserPrePayCOB" in display:
+                    kind = "kaiser"
+
+                marker = to_marker(mark)
+                # Empty / True placeholder cells for the daily-Aetna and
+                # PBMRx group: render as ✓ (loaded/snapped) instead of blank.
+                if (isinstance(marker, str) and marker == ""
+                        and _name_matches_fill(display)):
+                    marker = "✓"
+                alert = (isinstance(marker, str) and marker
+                         and marker.strip().lower() in ALL_CLIENTS_ALERT_MARKERS)
+
+                cell_day = week_days[i]
+                sections[kind][cell_day].append((display, marker, alert))
+
+    def commit_pending():
+        nonlocal pending_week
+        if pending_week is None:
+            return
+        # Anchor the Mon-Fri cycle Monday from a date cell whose weekday
+        # matches its column position (typical case — most cert dates equal
+        # the scheduled cycle day). Falls back to any date's own-week Monday.
+        anchor_mon = None
+        for i in range(5):
+            for cells in pending_week["block_rows"]:
+                v = cells[i * 2 + 1]
+                d_val = None
+                if isinstance(v, datetime):
+                    d_val = v.date()
+                elif isinstance(v, date) and not isinstance(v, bool):
+                    d_val = v
+                if d_val is None or d_val.weekday() != i:
+                    continue
+                anchor_mon = d_val - timedelta(days=i)
+                break
+            if anchor_mon:
+                break
+        if anchor_mon is None:
+            # Fallback: take the first real date and snap to its own Monday.
+            for cells in pending_week["block_rows"]:
+                if anchor_mon:
+                    break
+                for i in range(5):
+                    v = cells[i * 2 + 1]
+                    d_val = None
+                    if isinstance(v, datetime):
+                        d_val = v.date()
+                    elif isinstance(v, date) and not isinstance(v, bool):
+                        d_val = v
+                    if d_val is None:
+                        continue
+                    anchor_mon = d_val - timedelta(days=d_val.weekday())
+                    break
+        if anchor_mon is None and pending_week.get("month_hint"):
+            # Fallback: compute Mon by week number within the month.
+            yr = pending_week.get("year_hint", year)
+            mn = pending_week["month_hint"]
+            wn = pending_week["week_no"]
+            cal_obj = calendar.Calendar(firstweekday=0)
+            month_mons = [d for d in cal_obj.itermonthdates(yr, mn)
+                          if d.weekday() == 0 and (d.month == mn
+                                                   or (d - timedelta(days=4)).month == mn)]
+            if 1 <= wn <= len(month_mons):
+                anchor_mon = month_mons[wn - 1]
+        if anchor_mon is None:
+            pending_week = None
+            return
+        week_days = [anchor_mon + timedelta(days=i) for i in range(5)]
+        weeks.append(week_days)
+        flush_block(pending_week["block_rows"], week_days)
+        pending_week = None
+
+    month_name_to_num = {
+        m.lower(): i for i, m in enumerate(
+            ["", "January", "February", "March", "April", "May", "June",
+             "July", "August", "September", "October", "November", "December"]
+        ) if m
+    }
+
+    for row_idx in range(1, ws.max_row + 1):
+        cells = [ws.cell(row=row_idx, column=c).value for c in range(1, 11)]
+        first = cells[0]
+        first_s = "" if first is None else str(first).strip()
+
+        m1 = header_re_jan.match(first_s)
+        m2 = header_re_feb.match(first_s) if not m1 else None
+        if m1:
+            commit_pending()
+            mon_m, mon_d = int(m1.group(2)), int(m1.group(3))
+            try:
+                mon_date = date(year, mon_m, mon_d)
+            except ValueError:
+                continue
+            week_days = [mon_date + timedelta(days=i) for i in range(5)]
+            current_week_dates = week_days
+            weeks.append(week_days)
+            in_data_block = False
+            pending_week = None
+            continue
+        if m2:
+            commit_pending()
+            mname = m2.group(1).lower()
+            wnum = int(m2.group(2))
+            month_hint = month_name_to_num.get(mname)
+            pending_week = {
+                "block_rows": [],
+                "month_hint": month_hint,
+                "year_hint": year,
+                "week_no": wnum,
+            }
+            current_week_dates = None
+            in_data_block = False
+            continue
+
+        if first_s == "Monday" and cells[2] in ("Tuesday", " Tuesday"):
+            in_data_block = True
+            continue
+
+        if (first_s.startswith("Verify SNAP") or first_s.startswith("Verify Load")
+                or first_s.startswith("SNAP pattern") or first_s.startswith("The three way")
+                or (in_data_block and not any(c is not None and not isinstance(c, bool)
+                                              and str(c).strip() for c in cells))):
+            in_data_block = False
+            continue
+
+        if not in_data_block:
+            continue
+
+        if pending_week is not None:
+            pending_week["block_rows"].append(cells)
+            continue
+        if current_week_dates is None:
+            continue
+        flush_block([cells], current_week_dates)
+
+    # End-of-file: flush any open pending block.
+    commit_pending()
+    return sections, weeks
+
+
+def _html_escape(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _fmt_marker_html(m):
+    """Marker rendering for HTML cells."""
+    if isinstance(m, date):
+        return m.strftime("%m/%d/%y")
+    return _html_escape(m or "")
+
+
+def _render_section_rows_html(wk, plan_section, today):
+    """Return one HTML <tbody> for a section. Each row has 10 cells.
+    Per user 2026-06-03: today highlighting is restricted to the date-strip
+    row only — data-row cells do NOT get a today-column accent, so the table
+    body reads cleanly without a vertical line down every row."""
+    max_clients = max((len(plan_section.get(d, [])) for d in wk if d), default=0)
+    if max_clients == 0:
+        return ""
+    rows_html = []
+    for ci in range(max_clients):
+        cells = []
+        for i, d in enumerate(wk):
+            if d is None:
+                cells.append(f'<td class="name dim-month"></td>')
+                cells.append(f'<td class="marker dim-month"></td>')
+                continue
+            entries = plan_section.get(d, [])
+            if ci >= len(entries):
+                cells.append(f'<td class="name"></td>')
+                cells.append(f'<td class="marker"></td>')
+                continue
+            row = entries[ci]
+            name, marker, alert = row[0], row[1], row[2]
+            highlight = row[3] if len(row) > 3 else None
+            link      = row[4] if len(row) > 4 else None
+            name_classes = ["name", "client-cell"]
+            marker_classes = ["marker"]
+            if highlight == "yellow":
+                name_classes.append("hl-yellow")
+                marker_classes.append("hl-yellow")
+            elif highlight == "bold":
+                name_classes.append("hl-bold")
+            if alert:
+                marker_classes.append("alert")
+            v = _fmt_marker_html(marker)
+            if alert and not v:
+                v = "!"
+            data_client = _html_escape(name or "")
+            name_html = data_client
+            marker_html = v
+            if link:
+                marker_classes.append("link")
+                marker_html = (f'<a href="{_html_escape(link)}" target="_blank" '
+                               f'rel="noopener">{v}</a>')
+            cells.append(f'<td class="{" ".join(name_classes)}" '
+                         f'data-client="{data_client}">{name_html}</td>')
+            cells.append(f'<td class="{" ".join(marker_classes)}">{marker_html}</td>')
+        rows_html.append(f'<tr class="data-row">{"".join(cells)}</tr>')
+    return "\n".join(rows_html)
+
+
+def _render_week_card_html(wk, week_no, sections, today, holidays):
+    first_d = next((d for d in wk if d), None)
+    last_d  = next((d for d in reversed(wk) if d), None)
+    if first_d and last_d:
+        label = (f"Week {week_no}: {first_d.strftime('%m/%d')} – "
+                 f"{last_d.strftime('%m/%d')}")
+    else:
+        label = f"Week {week_no}"
+
+    # Header + date-strip rows.
+    # Per user 2026-06-03: only the actual date cell is highlighted as
+    # "today" — no vertical column accent. Header row stays uniform.
+    header_cells = []
+    date_cells = []
+    for i, d in enumerate(wk):
+        day_name = WEEKDAYS[i]
+        header_cells.append(
+            f'<th class="hdr-day">{day_name}</th>'
+            f'<th class="hdr-date">Date</th>')
+        if d is None:
+            date_cells.append(
+                '<td class="strip-name dim-month"></td>'
+                '<td class="strip-date dim-month"></td>')
+            continue
+        hname = holidays.get(d, "")
+        hname_cls = " holiday" if hname else ""
+        is_today = " is-today" if d == today else ""
+        date_str = d.strftime("%m/%d/%y")
+        date_cells.append(
+            f'<td class="strip-name{hname_cls}">{_html_escape(hname)}</td>'
+            f'<td class="strip-date{is_today}">{date_str}</td>')
+
+    sec_html_parts = []
+    for sec_key in ("daily", "weekly", "monthly", "kaiser"):
+        body = _render_section_rows_html(wk, sections[sec_key], today)
+        if body:
+            sec_html_parts.append(
+                f'<tbody class="sec sec-{sec_key}">{body}</tbody>'
+                '<tbody class="sec-gap"><tr><td colspan="10"></td></tr></tbody>'
+            )
+
+    key_line = ("Key:  Date = Certified  |  ✓ = Loaded/Snapped  |  L = Loading"
+                "  |  pink = Failure/Inactive  |  (s) SLA  |  (p) Rx Post Snap"
+                "  |  (n) Not Delivered  |  M - Monthly")
+
+    # Explicit column widths so the table sizes to content, not the page.
+    # Client-name columns ~165 px, date columns ~70 px, Tuesday date 95 px.
+    colgroup = (
+        '<colgroup>'
+        '<col class="cn"><col class="dt">'
+        '<col class="cn"><col class="dt-wide">'
+        '<col class="cn"><col class="dt">'
+        '<col class="cn"><col class="dt">'
+        '<col class="cn"><col class="dt">'
+        '</colgroup>'
+    )
+
+    return (
+        f'<section class="week-card">'
+        f'  <div class="week-label">{_html_escape(label)}</div>'
+        f'  <table class="grid">'
+        f'    {colgroup}'
+        f'    <thead class="grid-head"><tr>{"".join(header_cells)}</tr></thead>'
+        f'    <tbody class="strip"><tr>{"".join(date_cells)}</tr></tbody>'
+        f'    {"".join(sec_html_parts)}'
+        f'  </table>'
+        f'  <div class="key">{_html_escape(key_line)}</div>'
+        f'</section>'
+    )
+
+
+def build_dashboard_html(month_packs, today, current_month_name):
+    """Render the dashboard HTML.
+    month_packs: list of dicts {name, year, month, sections, weeks, holidays}
+    """
+    import calendar as _cal_mod
+
+    tabs_html = []
+    panels_html = []
+    for mp in month_packs:
+        is_current = (mp["name"] == current_month_name)
+        active = " active" if is_current else ""
+        tab_id = f'tab-{mp["name"].replace(" ", "-")}'
+        tabs_html.append(
+            f'<button class="tab{active}" data-target="{tab_id}">'
+            f'{_html_escape(mp["name"])}</button>')
+
+        week_blocks = []
+        for week_no, wk in enumerate(mp["weeks"], start=1):
+            week_blocks.append(_render_week_card_html(
+                wk, week_no, mp["sections"], today, mp["holidays"]))
+        panels_html.append(
+            f'<section class="month-panel{active}" id="{tab_id}">'
+            f'  {"".join(week_blocks)}'
+            f'</section>')
+
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    title = "Client Delivery Status"
+
+    css = """
+:root {
+  --bg: #f4f6f9; --card: #ffffff; --border: #c8c8c8; --text: #1f2a37;
+  --muted: #5b6776; --accent: #2C5F8A; --accent-dark: #1F3D5C;
+  --day-fill: #E3EBF4; --today-fill: #FFD180; --today-strong: #f08c00;
+  --alert: #FFC7CE; --alert-dark: #9C0006;
+  --yellow: #FFF2A8; --yellow-dark: #7F6000;
+  --holiday: #FFE4B5; --holiday-dark: #7C4A00;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg); color: var(--text); font-size: 13px;
+}
+header.bar {
+  background: var(--accent-dark); color: #fff;
+  padding: 10px 18px; position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+header.bar h1 { margin: 0; font-size: 16px; font-weight: 600; }
+header.bar .meta { font-size: 11px; opacity: 0.85; }
+header.bar .grow { flex: 1; }
+header.bar input[type=search] {
+  border: 0; border-radius: 4px; padding: 6px 10px; font-size: 13px; min-width: 220px;
+}
+header.bar button {
+  background: var(--accent); color: #fff; border: 0; border-radius: 4px;
+  padding: 6px 12px; cursor: pointer; font-size: 12px;
+}
+nav.tabs {
+  background: #fff; border-bottom: 1px solid var(--border);
+  padding: 4px 12px; position: sticky; top: 44px; z-index: 4;
+  display: flex; gap: 4px; flex-wrap: wrap;
+}
+nav.tabs button.tab {
+  background: transparent; color: var(--accent-dark);
+  border: 1px solid transparent; border-bottom: 0;
+  border-radius: 4px 4px 0 0;
+  padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: 600;
+}
+nav.tabs button.tab.active {
+  background: var(--accent); color: #fff;
+}
+main { padding: 12px 18px 40px; }
+.month-panel { display: none; }
+.month-panel.active { display: block; }
+.week-card {
+  margin: 0 0 14px;
+}
+.week-label {
+  font-weight: 700; font-size: 14px; color: var(--accent-dark);
+  margin: 12px 0 4px;
+}
+/* Tightened 2026-06-03: table sizes to content (width: auto), not the page.
+   Explicit column widths via <colgroup>: name ≈ 165 px, date ≈ 70 px,
+   Tuesday date 95 px while BCBSAR is in Implementation. */
+table.grid {
+  border-collapse: separate; border-spacing: 0; table-layout: fixed;
+  background: var(--card); width: auto;
+}
+table.grid col.cn       { width: 165px; }
+table.grid col.dt       { width:  70px; }
+table.grid col.dt-wide  { width:  95px; }
+table.grid th, table.grid td {
+  border: 1px solid var(--border); padding: 3px 6px;
+  font-size: 12px; vertical-align: top;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+table.grid th {
+  background: var(--accent); color: #fff;
+  font-weight: 600; font-size: 11px; text-align: center; letter-spacing: 0.3px;
+}
+.strip td { background: var(--day-fill); text-align: center; font-weight: 600; color: var(--accent-dark); }
+.strip td.is-today {
+  background: var(--today-fill); color: var(--accent-dark);
+  box-shadow: inset 0 0 0 2px var(--today-strong);
+}
+.strip td.holiday { background: var(--holiday); color: var(--holiday-dark); font-style: italic; font-weight: 700; }
+.strip td.dim-month, td.dim-month { background: #F5F5F5 !important; color: #aaa; }
+td.name { white-space: nowrap; }
+td.marker { text-align: center; font-variant-numeric: tabular-nums; }
+td.alert { background: var(--alert); color: var(--alert-dark); font-weight: 700; }
+td.hl-yellow { background: var(--yellow); color: var(--yellow-dark); font-weight: 700; }
+.hl-bold { font-weight: 700; }
+td.marker.link a { color: var(--alert-dark); font-weight: 700; text-decoration: underline; }
+.sec-gap td { background: #fff; border: 0; height: 4px; padding: 0; }
+.key {
+  font-style: italic; font-size: 11px; color: #555;
+  margin: 4px 0 12px;
+}
+/* Search: dim all client-name cells, then re-emphasize the matched ones
+   only. Per user 2026-06-03: highlight just the client name, not the
+   whole row. */
+body.search-active td.client-cell { opacity: 0.25; }
+body.search-active td.client-cell.match-cell { opacity: 1; background: #fffbe8; font-weight: 600; }
+"""
+
+    js = """
+(function() {
+  function show(tabBtn) {
+    document.querySelectorAll('nav.tabs button.tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.month-panel').forEach(p => p.classList.remove('active'));
+    tabBtn.classList.add('active');
+    const target = document.getElementById(tabBtn.dataset.target);
+    if (target) target.classList.add('active');
+    window.scrollTo({ top: 0 });
+  }
+  document.querySelectorAll('nav.tabs button.tab').forEach(btn => {
+    btn.addEventListener('click', () => show(btn));
+  });
+  // Search
+  const search = document.getElementById('search');
+  function applySearch() {
+    const q = search.value.trim().toLowerCase();
+    document.body.classList.toggle('search-active', q.length > 0);
+    // Per-cell highlight: only the matching client-name cell pops; the rest
+    // of the row stays at normal/dimmed weight.
+    document.querySelectorAll('td.client-cell').forEach(td => {
+      const c = (td.dataset.client || '').toLowerCase();
+      const isMatch = q && c && c.indexOf(q) !== -1;
+      td.classList.toggle('match-cell', isMatch);
+    });
+  }
+  search.addEventListener('input', applySearch);
+  // Today jump
+  const todayBtn = document.getElementById('today-jump');
+  if (todayBtn) {
+    todayBtn.addEventListener('click', () => {
+      const el = document.querySelector('.strip td.is-today');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
+})();
+"""
+
+    head = (
+        "<!doctype html><html lang='en'><head>"
+        "<meta charset='utf-8'>"
+        f"<title>{_html_escape(title)}</title>"
+        f"<style>{css}</style>"
+        "</head>"
+    )
+    body = (
+        "<body>"
+        "<header class='bar'>"
+        f"  <h1>{_html_escape(title)}</h1>"
+        f"  <div class='meta'>Generated {generated}</div>"
+        "  <div class='grow'></div>"
+        "  <input type='search' id='search' placeholder='Filter by client name…' autocomplete='off'>"
+        "  <button id='today-jump'>Jump to today</button>"
+        "</header>"
+        f"<nav class='tabs'>{''.join(tabs_html)}</nav>"
+        f"<main>{''.join(panels_html)}</main>"
+        f"<script>{js}</script>"
+        "</body></html>"
+    )
+    return head + body
+
+
 def main():
     today = date.today()
     year, month = today.year, today.month
@@ -2718,8 +3777,8 @@ def main():
     print(f"[info] Today: {today}  Month: {year}-{month:02d}")
 
     print("[info] Querying DHT cert table…")
-    # pull 6 months back so monthly clients have enough history for avg-day calc
-    certs = fetch_dht_certs(since=date(year, month, 1) - timedelta(days=185))
+    # pull 3 months back for monthly clients' avg-day calc
+    certs = fetch_dht_certs(since=date(year, month, 1) - timedelta(days=90))
     cert_idx = build_cert_index(certs)
     print(f"[info]   {len(certs)} cert rows / {len(cert_idx)} distinct DatabaseNames")
 
@@ -2731,6 +3790,36 @@ def main():
     jobs = fetch_ramp_jobs()
     enabled_n = sum(1 for j in jobs if j.get("Enabled") == 1)
     print(f"[info]   {len(jobs)} total ({enabled_n} enabled)")
+
+    # ----- Auto-discover new MasterLoad 0110 Load implementations (per user
+    # 2026-06-03). New clients default to Weekly/Monday placement.
+    #   - PBMRx hits → SNAP_KIND_ONLY_CLIENTS (L during load, ✓ after snap).
+    #   - Non-PBMRx hits → IMPLEMENTATION_LOAD_ONLY_CLIENTS (L during load,
+    #     blank after snap — "we're not actively working this client yet").
+    new_impls = find_unconfigured_masterload_clients(jobs)
+    if new_impls:
+        for entry in new_impls:
+            client = entry["raw"]
+            print(f"[info]   NEW MasterLoad implementation: {client} "
+                  f"(pbmrx={entry['pbmrx']}, enabled={entry['enabled']})")
+            if client not in WEEKLY_CLIENTS:
+                WEEKLY_CLIENTS[client] = ["Monday"]
+            if entry["pbmrx"]:
+                SNAP_KIND_ONLY_CLIENTS.add(client)
+            else:
+                IMPLEMENTATION_LOAD_ONLY_CLIENTS.add(client)
+            # Add alias so RAMP job lookups find the new client.
+            aliases = CLIENT_ALIASES.setdefault(client, [])
+            if entry["normalized"] not in aliases:
+                aliases.append(entry["normalized"])
+
+    # ----- Auto-Inactive clients whose primary 0100/0110 jobs are all
+    # Inactive in RAMP (Enabled=0). Kaiser feeds excluded per user.
+    auto_inactive = auto_inactive_from_ramp(jobs)
+    if auto_inactive:
+        print(f"[info]   Auto-Inactive (0100/0110 disabled, non-Kaiser): "
+              f"{sorted(auto_inactive)}")
+        FORCED_INACTIVE.update(auto_inactive)
 
     print("[info] Fetching RAMP queue + snap history…")
     queue = fetch_ramp_queue()
@@ -2762,19 +3851,61 @@ def main():
     latest_tickets, monthly_placements = build_ticket_index(tickets, jobs)
     print(f"[info] latest tickets indexed for {len(latest_tickets)} clients")
 
-    sections, weeks = plan_calendar(year, month, cert_idx, snap_idx,
-                                    latest_tickets, monthly_placements, jobs, queue,
-                                    esipbmrx_tape=tape_loads.get("esipbmrx"),
-                                    multi_week_loads=multi_week_loads,
-                                    aetna_nmsp_loads=aetna_nmsp_loads)
-
     wb = Workbook()
-    ws_weekly = wb.active
-    ws_weekly.title = "Weekly Stacked"
-    write_weekly_stacked(ws_weekly, year, month, sections, weeks, today)
+    # Drop the auto-created default sheet so we control ordering.
+    del wb[wb.sheetnames[0]]
 
+    # Client Owner sits first.
     ws_owner = wb.create_sheet("Client Owner")
     write_client_owner_sheet(ws_owner)
+
+    import calendar as _cal_mod
+    current_tab_name = f"{_cal_mod.month_name[month]} {year}"
+
+    # Generate every month of the year so prior months don't drop off as they
+    # conclude (per user 2026-06-03). Compute current month last in the loop
+    # iteration but build tabs in Jan→Dec order for natural tab ordering.
+    month_packs = []
+    for m in range(1, 13):
+        sec_m = wk_m = None
+        # For closed months Jan–Apr 2026 the manually-maintained
+        # ExpectedClientDates_*.xlsx files are the source of truth. Live DHT
+        # / RAMP history rolls off too quickly to reconstruct.
+        snapshot_file = EXPECTED_DATES_FILES.get(m) if year == 2026 else None
+        if snapshot_file:
+            try:
+                snap_path = os.path.join(EXPECTED_DATES_DIR, snapshot_file)
+                if os.path.exists(snap_path):
+                    sec_m, wk_m = parse_all_clients_xlsx(snap_path, year)
+                    if sec_m is not None and wk_m:
+                        print(f"[info]   {_cal_mod.month_name[m]}: loaded from {snapshot_file}")
+                    else:
+                        sec_m = wk_m = None
+            except Exception as e:
+                print(f"[warn] failed to parse {snapshot_file}: {e}")
+                sec_m = wk_m = None
+
+        if sec_m is None or wk_m is None:
+            sec_m, wk_m = plan_calendar(year, m, cert_idx, snap_idx,
+                                        latest_tickets, monthly_placements,
+                                        jobs, queue,
+                                        esipbmrx_tape=tape_loads.get("esipbmrx"),
+                                        multi_week_loads=multi_week_loads,
+                                        aetna_nmsp_loads=aetna_nmsp_loads)
+
+        tab_name = f"{_cal_mod.month_name[m]} {year}"
+        ws_m = wb.create_sheet(tab_name)
+        write_weekly_stacked(ws_m, year, m, sec_m, wk_m, today)
+        month_packs.append({
+            "name": tab_name, "year": year, "month": m,
+            "sections": sec_m, "weeks": wk_m,
+            "holidays": us_federal_holidays(year),
+        })
+        if m == month:
+            sections, weeks = sec_m, wk_m
+
+    # Open the workbook to the current-month tab by default.
+    wb.active = wb.sheetnames.index(current_tab_name)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     out_path = os.path.join(OUTPUT_DIR, f"ClientDeliveryStatus_{today:%Y-%m-%d}.xlsx")
@@ -2809,6 +3940,32 @@ def main():
         print(f"[done] OneDrive copy: {ONEDRIVE_COPY_PATH}")
     except Exception as e:
         print(f"[warn] OneDrive-copy failed: {e}")
+
+    # Dashboard HTML — self-contained file with search + today emphasis +
+    # sticky toolbar/tabs. Same color codes and weekly-stacked layout as the
+    # .xlsx, just rendered in the browser. Sits alongside the .xlsx.
+    try:
+        html_str = build_dashboard_html(month_packs, today, current_tab_name)
+        html_paths = [
+            os.path.join(OUTPUT_DIR, "ClientDeliveryStatus.html"),
+            os.path.join(LOCAL_COPY_DIR, "ClientDeliveryStatus.html"),
+            os.path.join(os.path.dirname(ONEDRIVE_COPY_PATH),
+                         "ClientDeliveryStatus.html"),
+        ]
+        wrote_one = False
+        for p in html_paths:
+            try:
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(html_str)
+                print(f"[done] HTML dashboard: {p}")
+                wrote_one = True
+            except Exception as e:
+                print(f"[warn] HTML write failed for {p}: {e}")
+        if not wrote_one:
+            print("[warn] HTML dashboard not written to any path")
+    except Exception as e:
+        print(f"[warn] HTML dashboard build failed: {e}")
 
     return out_path
 
