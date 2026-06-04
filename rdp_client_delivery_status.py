@@ -357,6 +357,12 @@ LOAD_NAME_REQUIRED = {
     # TPLCov variants (`HAPRx COBC 0110 Load`, `HAPRx TPLCov 0110 Load`)
     # because the modifier breaks the substring — same trick as CignaRx.
     "HAPRx":             ("haprx 0110 load", "haprx masterload 0110"),
+    # ElixirRx and PremeraMedAdvRx (per user 2026-06-04): only Claim Load
+    # jobs trigger L; snap / mine / SFTP jobs must not. Patterns match
+    # `Premera MedAdv Rx Claims 0110 Load` and any future Elixir Claims
+    # 0110 Load variant.
+    "ElixirRx":          ("claim 0110 load", "claims 0110 load", "masterload"),
+    "PremeraMedAdvRx":   ("claim 0110 load", "claims 0110 load", "masterload"),
 }
 
 # Manual cell overrides — (client, scheduled_date) → marker. Marker can be:
@@ -511,6 +517,10 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     # HealthSpring_FWA: per user 2026-06-03, same rule — loaded today but
     # cert will arrive separately; no snap-only ✓.
     "HealthSpring_FWA",
+    # ElixirRx and PremeraMedAdvRx per user 2026-06-04: only Claim Load
+    # job and DHT certification should move them off No Data / L. A snap
+    # alone must not surface a ✓ for either client.
+    "ElixirRx", "PremeraMedAdvRx",
 }
 
 # Monthly clients that should show an empty Date cell (rather than "No Data")
