@@ -410,6 +410,9 @@ MANUAL_OVERRIDES = {
     ("AetnaRx",       date(2026, 6, 3)): "✓",
     # Kaiser_MASTapestry / KaiserSCPareo blank-until-cert overrides cleared
     # 2026-06-04 — both certified, auto-detection now surfaces the date.
+    # 2026-06-04: TuftsRx Mon 6/1 — force back to Inactive. The past-day ✓
+    # came from a stale snap entry that beat the FORCED_INACTIVE fallback.
+    ("TuftsRx",       date(2026, 6, 1)): "Inactive",
 }
 
 # ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
