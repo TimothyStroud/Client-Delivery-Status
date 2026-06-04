@@ -351,6 +351,12 @@ LOAD_NAME_REQUIRED = {
     "AetnaQNXTRx":       ("masterload", "claim"),
     "AetnaQNXT":         ("masterload", "claim"),
     "WellpointEdwardRx": ("masterload", "claim"),
+    # HAPRx (per user 2026-06-04): only the main Claims load counts —
+    # `HAPRx 0110 Load` and any future `HAPRx Masterload 0110 ...`. The
+    # substring `haprx 0110 load` matches the main load but NOT the COBC /
+    # TPLCov variants (`HAPRx COBC 0110 Load`, `HAPRx TPLCov 0110 Load`)
+    # because the modifier breaks the substring — same trick as CignaRx.
+    "HAPRx":             ("haprx 0110 load", "haprx masterload 0110"),
 }
 
 # Manual cell overrides — (client, scheduled_date) → marker. Marker can be:
