@@ -363,6 +363,10 @@ LOAD_NAME_REQUIRED = {
     # 0110 Load variant.
     "ElixirRx":          ("claim 0110 load", "claims 0110 load", "masterload"),
     "PremeraMedAdvRx":   ("claim 0110 load", "claims 0110 load", "masterload"),
+    # BCBSNC (per user 2026-06-05): only the main `BCBSNC Claims 0110 Load`
+    # counts. Excludes CAQH, COBC, Claris Health, MSPI, Rx, Daily Passfile —
+    # all of which have their own 0110 Load lines.
+    "BCBSNC":            ("bcbsnc claims 0110 load",),
 }
 
 # Manual cell overrides — (client, scheduled_date) → marker. Marker can be:
@@ -2080,7 +2084,7 @@ def is_friday_or_later_in_week(today, scheduled_day):
 
 def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_placements,
                   ramp_jobs, ramp_queue, esipbmrx_tape=None, multi_week_loads=None,
-                  aetna_nmsp_loads=None):
+                  aetna_nmsp_loads=None, optumpbmrx_tape=None):
     """Return ((sections, weeks)) layout.
 
     sections: dict {kind: dict {date: [(label, marker, alert)] }}
@@ -2146,11 +2150,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # scheduled day is more than 3 days in the past with no cert /
         # activity. Monthly clients keep the 7-day threshold above. Daily
         # Aetnas are exempt (per user 2026-06-03 — they're in DAILY_CLIENTS
-        # so this guard is belt-and-suspenders).
+        # so this guard is belt-and-suspenders). IMPLEMENTATION_LOAD_ONLY
+        # clients are also exempt (per user 2026-06-05 — ElevanceMMMRx
+        # showed a pink "!" because we're not actively working that client
+        # yet; an empty cell is the correct, non-alarming state).
         if (not marker
                 and client in WEEKLY_CLIENTS
                 and client not in {"AetnaHRP", "AetnaRCE", "AetnaRx",
                                    "NCStateAetna"}
+                and client not in IMPLEMENTATION_LOAD_ONLY_CLIENTS
                 and (today - day).days > 3):
             return True
         # Past-day cells reflect historical activity — don't shade them with
@@ -2620,52 +2628,113 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         d = date(y, m, 1)
         return d + timedelta(days=(4 - d.weekday()) % 7)
 
-    def place_optum_half(label_suffix, day_lo, day_hi, default_day=None):
+    # Per user 2026-06-05: ✓ requires ALL of the half's RAW files to be
+    # tape-loaded AND a matching number of 'Optum 0200 PBM Start Snap'
+    # successful completions in the same window. Partial load → L.
+    _OPTUM_RAW_RE = re.compile(r"RAW\s*0*(\d+)_", re.IGNORECASE)
+    _OPTUM_SNAP_RE = re.compile(r"optum.*0200.*pbm.*start.*snap", re.IGNORECASE)
+    _optum_job_by_id = {j.get("JobId"): (j.get("JobName") or "") for j in ramp_jobs}
+
+    def place_optum_half(label_suffix, day_lo, day_hi, required_raws,
+                         default_day=None):
         last_day = calendar.monthrange(year, month)[1]
         hi = min(day_hi, last_day)
         window_start = date(year, month, day_lo)
         window_end   = date(year, month, hi)
-        # find any OptumPBMRx tape load in this window
-        wanted = TAPE_LOAD_SOURCES["OptumPBMRx"][1]
-        latest = None
-        for d in sorted(snap_idx.keys()):
-            if not (window_start <= d <= window_end):
+
+        # Scan TRGETL3 OptumPBMRx tape rows for filenames matching the
+        # required RAW numbers within the window.
+        loaded_raws = {}   # raw_n → latest FileLoadDate
+        for tape in (optumpbmrx_tape or ()):
+            fname = tape.get("FileName") or ""
+            dt = tape.get("FileLoadDate")
+            if not (dt and window_start <= dt.date() <= window_end):
                 continue
-            for entry in snap_idx[d]:
-                if entry[0] == wanted and (latest is None or entry[1] > latest):
-                    latest = entry[1]
-        if latest:
-            placement = latest.date()
-            # If the latest tape load lands on a weekend, push to next Monday
-            placement = next_monday_if_weekend(placement)
+            m = _OPTUM_RAW_RE.search(fname)
+            if not m:
+                continue
+            raw_n = int(m.group(1))
+            if raw_n not in required_raws:
+                continue
+            if raw_n not in loaded_raws or dt > loaded_raws[raw_n]:
+                loaded_raws[raw_n] = dt
+
+        # Count successful 'Optum 0200 PBM Start Snap' completions in window.
+        snap_count = 0
+        latest_snap_dt = None
+        for q in ramp_queue:
+            jn = _optum_job_by_id.get(q.get("JobId"), "")
+            if not _OPTUM_SNAP_RE.search(jn):
+                continue
+            status = (q.get("Status") or "").lower()
+            if not (status.startswith("success") or status == "resolved"):
+                continue
+            end_dt = parse_dt(q.get("EndDate"))
+            if not end_dt or not (window_start <= end_dt.date() <= window_end):
+                continue
+            snap_count += 1
+            if latest_snap_dt is None or end_dt > latest_snap_dt:
+                latest_snap_dt = end_dt
+
+        need = len(required_raws)
+        all_loaded  = len(loaded_raws) >= need
+        all_snapped = snap_count >= need
+
+        if all_loaded and all_snapped:
+            candidates = list(loaded_raws.values())
+            if latest_snap_dt:
+                candidates.append(latest_snap_dt)
+            latest = max(candidates)
+            placement = next_monday_if_weekend(latest.date())
             if placement.month != month:
-                placement = date(year, month, calendar.monthrange(year, month)[1])
+                placement = date(year, month, last_day)
             marker = "✓"
-        elif (today.year == year and today.month == month
-              and window_start <= today <= window_end
-              and is_loading_today("OptumPBMRx", ramp_queue, ramp_jobs)):
-            # Load is running but no tape yet — show L on today.
-            placement = today
+        elif loaded_raws or (today.year == year and today.month == month
+                             and window_start <= today <= window_end
+                             and is_loading_today("OptumPBMRx", ramp_queue, ramp_jobs)):
+            # Partial load (any RAW present but not all) OR actively loading
+            # right now — stay L.
+            if loaded_raws:
+                latest = max(loaded_raws.values())
+                placement = next_monday_if_weekend(latest.date())
+                if placement.month != month:
+                    placement = date(year, month, last_day)
+            elif today.year == year and today.month == month and window_start <= today <= window_end:
+                placement = today
+            elif default_day is not None:
+                placement = default_day
+            else:
+                mid = day_lo + (hi - day_lo) // 2
+                placement = next_monday_if_weekend(date(year, month, mid))
             marker = "L"
         else:
-            # No tape this half yet — placement = caller's default (first Friday
-            # for the early half per user 2026-05-26), else mid-window.
+            # Nothing yet — placeholder.
             if default_day is not None:
                 placement = default_day
             else:
                 mid = day_lo + (hi - day_lo) // 2
                 placement = next_monday_if_weekend(date(year, month, mid))
             marker = "No Data"
-        label = f"M - OptumPBMRx {label_suffix}"
-        # alert if "No Data" and past 7 days past END
+
+        # Show what's pending so the team can see which RAW files are still
+        # outstanding mid-cycle (only when partial-load L state).
+        extra = ""
+        if marker == "L":
+            missing = sorted(set(required_raws) - set(loaded_raws.keys()))
+            if missing:
+                extra = " — RAW " + ",".join(str(n) for n in missing) + " pending"
+            elif not all_snapped:
+                extra = " — Snap pending"
+        label = f"M - OptumPBMRx {label_suffix}{extra}"
         alert = False
         if marker == "No Data":
             ref_end = date(year, month, min(hi, last_day))
             alert = (today - ref_end).days > 7
         monthly[placement].append((label, marker, alert, None))
 
-    place_optum_half("(RAW 1/2/3)", 1, 7, default_day=first_friday(year, month))
-    place_optum_half("(RAW 5/6)",   24, 31)
+    place_optum_half("(RAW 1/2/3)", 1, 7, {1, 2, 3},
+                     default_day=first_friday(year, month))
+    place_optum_half("(RAW 5/6)",   24, 31, {5, 6})
 
     # Aetna NMSP - MMSEA: ✓ once SourceLog shows a NonMSP file imported this
     # month; otherwise the 15th rule (or next Monday) with No Data.
@@ -3910,7 +3979,8 @@ def main():
                                         jobs, queue,
                                         esipbmrx_tape=tape_loads.get("esipbmrx"),
                                         multi_week_loads=multi_week_loads,
-                                        aetna_nmsp_loads=aetna_nmsp_loads)
+                                        aetna_nmsp_loads=aetna_nmsp_loads,
+                                        optumpbmrx_tape=tape_loads.get("optumpbmrx"))
 
         tab_name = f"{_cal_mod.month_name[m]} {year}"
         ws_m = wb.create_sheet(tab_name)
