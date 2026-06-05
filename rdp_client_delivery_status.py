@@ -404,10 +404,9 @@ MANUAL_OVERRIDES = {
     ("KaiserSCPareo", date(2026, 5, 28)): date(2026, 5, 28),
     # 2026-05-28: Premera Commercial 0110 Load finished + certified today.
     ("Premera",       date(2026, 5, 28)): date(2026, 5, 28),
-    # 2026-06-01: AetnaRx 6/1 dupe of 5/31 files. Remove this override once
-    # 20260531 files stage up under 'AetnaRX Claim 0100 Split Stage'. Rest of
-    # the week stays on normal load detection.
-    ("AetnaRx",       date(2026, 6, 1)): "Dupe",
+    # 2026-06-01: AetnaRx 6/1 was a dupe of 5/31 files; flipped to ✓ on
+    # 2026-06-05 once the associated data landed.
+    ("AetnaRx",       date(2026, 6, 1)): "✓",
     # 2026-06-03: AetnaRx Snap failed — staff will manually correct. Force ✓
     # for today; remove this override once the next day's run picks up the
     # corrected snap completion naturally.
@@ -2147,19 +2146,23 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                     return False
             return False
         # Weekly clients — pink-shade an empty past-scheduled cell when the
-        # scheduled day is more than 3 days in the past with no cert /
-        # activity. Monthly clients keep the 7-day threshold above. Daily
-        # Aetnas are exempt (per user 2026-06-03 — they're in DAILY_CLIENTS
-        # so this guard is belt-and-suspenders). IMPLEMENTATION_LOAD_ONLY
-        # clients are also exempt (per user 2026-06-05 — ElevanceMMMRx
-        # showed a pink "!" because we're not actively working that client
-        # yet; an empty cell is the correct, non-alarming state).
+        # scheduled day is 3+ days in the past with no cert / activity.
+        # Monthly clients keep the 7-day threshold above. Daily Aetnas are
+        # exempt (per user 2026-06-03 — they're in DAILY_CLIENTS so this
+        # guard is belt-and-suspenders). IMPLEMENTATION_LOAD_ONLY clients
+        # are also exempt (per user 2026-06-05 — ElevanceMMMRx showed a
+        # pink "!" because we're not actively working that client yet).
+        # NYShip_Rx is included even though it's not in WEEKLY_CLIENTS — it
+        # uses NYSHIP_DAYS placement but is weekly-equivalent (per user
+        # 2026-06-05). Threshold changed from `> 3` to `>= 3` same day so
+        # a Tuesday cell pinks on Friday.
+        weekly_eligible = (client in WEEKLY_CLIENTS) or client == "NYShip_Rx"
         if (not marker
-                and client in WEEKLY_CLIENTS
+                and weekly_eligible
                 and client not in {"AetnaHRP", "AetnaRCE", "AetnaRx",
                                    "NCStateAetna"}
                 and client not in IMPLEMENTATION_LOAD_ONLY_CLIENTS
-                and (today - day).days > 3):
+                and (today - day).days >= 3):
             return True
         # Past-day cells reflect historical activity — don't shade them with
         # the current Inactive/Failure state of the client. Only the marker
