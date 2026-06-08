@@ -718,6 +718,14 @@ CLOSEST_WEEKDAY_CLIENTS = {"BCBSFLEligibilityLoad"}
 # Mechanism kept wired for the next implementation client.
 IMPLEMENTATION_CLIENTS = {}
 
+# Weekly clients whose cells BEFORE a given date render empty (no row, no pink
+# "!") — for clients with no real history before they went live. Keyed by
+# client → cutoff date; any scheduled day strictly before the cutoff is skipped.
+# Per user 2026-06-08: BCBSAR — blank all dates before this week (Mon 6/8/26).
+BLANK_BEFORE = {
+    "BCBSAR": date(2026, 6, 8),
+}
+
 # Clients whose "is delivered" signal is exclusively from TRGETL3 tape loads.
 # Lookups for these clients ignore RAMP snap entries entirely.
 TAPE_ONLY_CLIENTS = {"OptumPBMRx", "ESIPBMRx", "MedImpactPBMRx"}
@@ -2631,8 +2639,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     for c in sorted(WEEKLY_CLIENTS):
         days = WEEKLY_CLIENTS[c]
         impl_start = IMPLEMENTATION_CLIENTS.get(c)
+        blank_before = BLANK_BEFORE.get(c)
         for d in all_days:
             if d.strftime("%A") not in days:
+                continue
+            # Blank-before clients: render empty (skip the cell) for any day
+            # before the cutoff — no marker, no pink "!".
+            if blank_before and d < blank_before:
                 continue
             # Implementation clients are suppressed before their start date.
             if impl_start and d < impl_start:
