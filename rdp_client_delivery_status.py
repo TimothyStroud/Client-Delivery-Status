@@ -182,9 +182,17 @@ CLIENT_ALIASES = {
     # 2026-06-03. Keeps default `kaisermastapestry` match for historical
     # 'Kaiser MAS Tapestry' JobNames; adds `kaiserpareomas` for the new form.
     "Kaiser_MASTapestry":   ["kaisermastapestry", "kaiserpareomas"],
-    # MMOH (no Rx): only 'MMOH Claims 0110 Load' counts as the load
-    # indicator. JobName "MMOH Claims 0110 Load" → snap_idx key "mmohclaims".
-    "MMOH":                 ["mmoh", "mmohclaims"],
+    # MMOH (Rx) monthly: the report's "MMOH (Rx)" row tracks the MMOHRx
+    # *monthly* claim load — 'MMOHRx Monthly Claim 0110 Load' → snap_idx key
+    # "mmohrxmonthlyclaim". Per user 2026-06-08: 'MMOH Claims 0110 Load' is
+    # MedicalMutualOH's load, NOT this row. Distinct from the weekly MMOHRx
+    # Tue row below (which tracks 'MMOHRx Weekly Claim 0110 Load'). The base
+    # key "mmoh" (auto-included) preserves the Pharmacy snap-endpoint ✓ match.
+    "MMOH":                 ["mmohrxmonthlyclaim"],
+    # MedicalMutualOH (monthly, cert-only): its load is 'MMOH Claims 0110 Load'
+    # → snap_idx key "mmohclaims" (per user 2026-06-08). The auto-derived
+    # primary key "medicalmutualoh" never matches the RAMP "MMOH ..." JobNames.
+    "MedicalMutualOH":      ["mmohclaims"],
     # MMOHRx weekly Tue: only 'MMOHRx Weekly Claim 0110 Load' counts. COBC
     # alias dropped 2026-05-18 so MMOHRx COBC Successful loads don't trip L.
     "MMOHRx":               ["mmohrx", "mmohrxweeklyclaim"],
@@ -324,12 +332,15 @@ LOAD_NAME_REQUIRED = {
     # BCBSFL (weekly Tue): only 'BCBSFL 0110 Claims Load' counts — not CMS
     # Referral Load, Claims Stage, or Claims Start Snap.
     "BCBSFL":            ("claims load",),
-    # MMOH (monthly): only 'MMOH Claims 0110 Load' is the load indicator.
-    # Tightened 2026-05-19 per user: prior pattern "claim" caught ancillary
-    # jobs (Start Snap step, Claim 0150 RTA Load) and falsely L'd the cell
-    # on days like 5/19. The narrower "claims 0110 load" pattern only matches
-    # the actual monthly load step.
-    "MMOH":              ("claims 0110 load",),
+    # MMOH (Rx) monthly: only 'MMOHRx Monthly Claim 0110 Load' is the load
+    # indicator (per user 2026-06-08 — this row is the Rx *monthly* claim, not
+    # the medical 'MMOH Claims 0110 Load'). The "monthly claim 0110 load"
+    # keyword excludes the weekly claim load, the Monthly Claim Stage step, and
+    # COBC. (Singular "claim" vs MedicalMutualOH's plural "claims" disambiguates.)
+    "MMOH":              ("monthly claim 0110 load",),
+    # MedicalMutualOH (monthly, cert-only): only 'MMOH Claims 0110 Load' counts
+    # (plural "Claims" — distinct from the MMOHRx monthly/weekly singular).
+    "MedicalMutualOH":   ("claims 0110 load",),
     # MMOHRx weekly Tue: only 'MMOHRx Weekly Claim 0110 Load' counts —
     # filter excludes the Monthly Claim Stage and Weekly Claim Stage.
     "MMOHRx":            ("weekly claim 0110 load",),
@@ -527,6 +538,9 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     # job and DHT certification should move them off No Data / L. A snap
     # alone must not surface a ✓ for either client.
     "ElixirRx", "PremeraMedAdvRx",
+    # BCBSVT and BSCA_Medicare per user 2026-06-08: leave as "L" until
+    # certification — snap activity alone must not flip the cell to ✓.
+    "BCBSVT", "BSCA_Medicare",
 }
 
 # Monthly clients that should show an empty Date cell (rather than "No Data")
@@ -570,6 +584,7 @@ MONTHLY_CLIENTS = {
 # Override display name for a client (the label only; client_key stays the same).
 CLIENT_DISPLAY_NAME = {
     "BCBSFLEligibilityLoad": "BCBSFL Elig",
+    "MMOH":                  "MMOH (Rx)",
     "Kaiser_AmbCO":          "KaiserAmbCO",
     "Kaiser_AmbGA":          "KaiserAmbGA",
     "Kaiser_AmbHI":          "KaiserAmbHI",
