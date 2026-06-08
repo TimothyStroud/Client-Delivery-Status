@@ -791,6 +791,17 @@ CLIENT_PRIMARY_KEY_OVERRIDE = {
 NYSHIP_DAYS = [1, 8, 16, 24]
 NYSHIP_LABEL = {1: "1st", 8: "8th", 16: "16th", 24: "24th"}
 
+# One-off per-cell overrides for the NYShip_Rx rotation, keyed by
+# (year, month, daynum). Value is a marker string ("L") or a date(...) cert
+# date (renders MM/DD/YY). Bypasses resolve_marker for that specific cell.
+# Per user 2026-06-08: the 1st & 8th loaded together this cycle — both marked
+# "L", and both get the SAME certification date once it lands. One-off; clear
+# these entries after this June 2026 cycle certifies.
+NYSHIP_OVERRIDES = {
+    (2026, 6, 1): "L",
+    (2026, 6, 8): "L",
+}
+
 # Suffix conventions per the All Clients tab key:
 #   (s) SLA Client | (p) Rx Post Snap | (n) Not Delivered
 CLIENT_SUFFIXES = {
@@ -2625,9 +2636,17 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         if tgt.month != month:
             continue
         label = f"NYShip_Rx ({NYSHIP_LABEL[daynum]})"
-        # Cert-style client — stay L when loaded this week until cert lands.
-        marker = resolve_marker("NYShip_Rx", tgt, allow_checkmark=False, allow_week_window=True)
-        alert  = alert_state("NYShip_Rx", tgt, marker)
+        ov = NYSHIP_OVERRIDES.get((year, month, daynum))
+        if ov is not None:
+            # One-off override (e.g. 1st & 8th combined cycle): force the
+            # marker. date(...) renders as the cert date; strings ("L") render
+            # as-is. A date is never alerted; a string defers to alert_state.
+            marker = ov
+            alert  = False if isinstance(ov, date) else alert_state("NYShip_Rx", tgt, ov)
+        else:
+            # Cert-style client — stay L when loaded this week until cert lands.
+            marker = resolve_marker("NYShip_Rx", tgt, allow_checkmark=False, allow_week_window=True)
+            alert  = alert_state("NYShip_Rx", tgt, marker)
         weekly[tgt].append((label, marker, alert, None))
 
     # Monthly clients: state-driven placement (cert→cert date, loading→today,
