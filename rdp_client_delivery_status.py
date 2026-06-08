@@ -304,15 +304,15 @@ WEEKLY_CLIENTS = {
 # Clients that should always show as Inactive (pink shade) regardless of
 # RAMP/DHT detection. User-confirmed list.
 # HealthNetCA added 2026-05-18: 'HealthNet 0100 Claims Stage' disabled in RAMP.
-# Kaiser_AmbM removed 2026-05-19: no longer inactive, but snap is disabled —
-# handled separately via SNAP_DISABLED_CLIENTS below.
+# Kaiser_AmbM removed 2026-05-19 (no longer inactive). Snap re-enabled
+# 2026-06-08 — now treated as a normal monthly Kaiser_Amb cert feed (see
+# MONTHLY_CERT_ONLY_CLIENTS / SNAP_KIND_ONLY_CLIENTS).
 FORCED_INACTIVE = {"Tufts_PublicPlan", "TuftsRx", "HealthNetCA"}
 
 # Clients whose load is running but snap step is disabled in RAMP — show
-# marker "Snap" with pink shading on the expected delivery day.
-# Per user 2026-05-19: "Kaiser_AmbM is no longer inactive, but the Snap is
-# disabled. Keep shaded in pink, but put 'Snap' in cell."
-SNAP_DISABLED_CLIENTS = {"Kaiser_AmbM"}
+# marker "Snap" with pink shading on the expected delivery day. Mechanism kept
+# wired for future use; Kaiser_AmbM removed 2026-06-08 (snap re-enabled).
+SNAP_DISABLED_CLIENTS = set()
 
 # For certain clients, the "L" (currently loading) indicator should only fire
 # when a Ready/Running job's JobName contains one of the listed substrings.
@@ -470,9 +470,8 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     # "At the next update, AetnaQNXT will have been certified. Please
     # leave it on the 5/19 date.").
     "AetnaQNXT":  (date(2026, 5, 19), "AUTO"),
-    # 2026-05-22: Kaiser_AmbM Snap is on hold — move to next Thursday 5/28
-    # instead of the default 5/21 placement.
-    "Kaiser_AmbM": (date(2026, 5, 28), "Snap"),
+    # Kaiser_AmbM override removed 2026-06-08 — snap re-enabled; it now follows
+    # the standard Kaiser_Amb cert-only placement (Thursday anchor).
 }
 
 # Extra rows injected into the calendar after standard placement runs. Use for
@@ -511,11 +510,12 @@ CERT_DIRECTION = {
 # a snap/load completes — only a DHT cert moves them. Per-user spec:
 # "BCBSKS & BCBSKSMedAdv Monthly clients should always be on the 15th".
 # 2026-05-15: Kaiser_Amb* feeds (CO/GA/HI/N/NW/S) added — user wants them
-# anchored to 5/21 (cert day) even while loading. Kaiser_AmbM is handled
-# via SNAP_DISABLED_CLIENTS (load runs, snap disabled — marker "Snap").
+# anchored to the Thursday cert day even while loading. Kaiser_AmbM added
+# 2026-06-08 (snap re-enabled) — now certifies with the rest of the feeds.
 MONTHLY_CERT_ONLY_CLIENTS = {
     "BCBSKS", "BCBSKSMedAdv", "BCBSSCRx", "CareFirstRx",
     "Kaiser_AmbCO", "Kaiser_AmbGA", "Kaiser_AmbHI",
+    "Kaiser_AmbM",
     "Kaiser_AmbN", "Kaiser_AmbNW", "Kaiser_AmbS",
     # Kaiser_WA: per user 2026-05-18, load completion alone is not delivery —
     # the cell should stay L on the expected day until the cycle truly
@@ -742,9 +742,10 @@ SNAP_KIND_ONLY_CLIENTS = {
     # Kaiser_GE needs snap-step completion (0120 Snap).
     "Kaiser_GE",
     # Kaiser ambulance feeds: per user 2026-05-15, must wait for an actual
-    # snap step (Kaiser Ambulance NC/CO/GA/HI/NW/S 0120 Snap) — a load-step
+    # snap step (Kaiser Ambulance NC/CO/GA/HI/MAS/NW/S 0120 Snap) — a load-step
     # completion alone leaves the cell in "L" (load done, snap pending).
-    "Kaiser_AmbCO", "Kaiser_AmbGA", "Kaiser_AmbHI",
+    # Kaiser_AmbM added 2026-06-08 (snap re-enabled).
+    "Kaiser_AmbCO", "Kaiser_AmbGA", "Kaiser_AmbHI", "Kaiser_AmbM",
     "Kaiser_AmbN", "Kaiser_AmbNW", "Kaiser_AmbS",
     # AetnaHRP added 2026-05-19 per user — snap step must complete; the load
     # alone is not delivery (cell stays "L" between load done and snap done).
