@@ -548,6 +548,8 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     # BCBSVT and BSCA_Medicare per user 2026-06-08: leave as "L" until
     # certification — snap activity alone must not flip the cell to ✓.
     "BCBSVT", "BSCA_Medicare",
+    # HAP_Medical and HAPRx per user 2026-06-08: same — stay "L" until cert.
+    "HAP_Medical", "HAPRx",
 }
 
 # Monthly clients that should show an empty Date cell (rather than "No Data")
