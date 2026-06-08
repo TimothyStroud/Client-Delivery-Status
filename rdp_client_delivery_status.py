@@ -841,6 +841,13 @@ IMPLEMENTATION_LOAD_ONLY_CLIENTS = {
 # WellCareRx Ready entries because 'wellcare' ⊂ 'wellcarerx'.
 CLIENT_PRIMARY_KEY_OVERRIDE = {
     "WellCare": "wellcaremedical",
+    # AetnaQNXT's normalized key "aetnaqnxt" is a prefix-substring of
+    # "aetnaqnxtrx", so find_matching_jobs would wrongly match AetnaQNXTRx's
+    # jobs. Override to "aetnaqnxtmasterload" 2026-06-08 — matches AetnaQNXT's
+    # Masterload jobs (its delivery; CAQH/MSPI are ancillary) but NOT any
+    # AetnaQNXTRx job ("aetnaqnxt" + "rx" + "masterload" is not contiguous).
+    # _keys_for_client still yields base "aetnaqnxt" for the DHT cert lookup.
+    "AetnaQNXT": "aetnaqnxtmasterload",
 }
 
 # NYShip_Rx fires four times per month — on the 1st, 8th, 16th, 24th
