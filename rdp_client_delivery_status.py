@@ -85,6 +85,10 @@ CLIENT_ALIASES = {
     # 'JHHC Medical 0110 Load' wouldn't match find_matching_jobs / snap_idx.
     # Added 2026-05-19 per user: "JohnsHopkins 'JHHC Medical 0110 Load' should be an 'L'".
     "JohnsHopkins":         ["johnshopkins", "jhhc", "jhhcmedical"],
+    # JHHCPassfile (monthly): the 'JHHC Passfile Email' job → snap_idx key
+    # "jhhcpassfileemail" (no digit code in the name). Distinct from
+    # JohnsHopkins ('JHHC Medical 0110 Load'). Per user 2026-06-08.
+    "JHHCPassfile":         ["jhhcpassfileemail"],
     "BCBSNorthCarolinaFEP": ["bcbsncfep"],
     # NCStateAetna's daily load runs through 'Aetna RCE 310 ETL Load' (Feed
     # "RCE Medical" → key "aetnarce" after stripping). Include aetnarce alias
@@ -572,6 +576,7 @@ MONTHLY_CLIENTS = {
     "ElixirRx",
     "EmblemFacets",
     "HAP_Medical", "HAPRx", "HealthSpring_FWA", "HumanaRx",
+    "JHHCPassfile",
     "Kaiser_AmbCO", "Kaiser_AmbGA", "Kaiser_AmbHI", "Kaiser_AmbM", "Kaiser_AmbN",
     "Kaiser_AmbNW", "Kaiser_AmbS",
     "Kaiser_GE",
@@ -588,6 +593,7 @@ MONTHLY_CLIENTS = {
 CLIENT_DISPLAY_NAME = {
     "BCBSFLEligibilityLoad": "BCBSFL Elig",
     "MMOH":                  "MMOH (Rx)",
+    "JHHCPassfile":          "JHHC Passfile",
     "Kaiser_AmbCO":          "KaiserAmbCO",
     "Kaiser_AmbGA":          "KaiserAmbGA",
     "Kaiser_AmbHI":          "KaiserAmbHI",
@@ -706,14 +712,21 @@ CLOSEST_WEEKDAY_CLIENTS = {"BCBSFLEligibilityLoad"}
 # Clients in implementation phase — render "Implementation" in the date cell
 # on every scheduled day from start_date until the first DHT cert lands. Cells
 # before start_date are suppressed entirely.
-# Per user 2026-05-26: BCBSAR is a new Tuesday weekly implementation from June.
-IMPLEMENTATION_CLIENTS = {
-    "BCBSAR": date(2026, 6, 1),
-}
+# Per user 2026-05-26: BCBSAR was a new Tuesday weekly implementation from June.
+# BCBSAR removed 2026-06-08 — Implementation marker dropped; certifying this
+# week, so it now behaves as a normal weekly Tuesday cert-style client.
+# Mechanism kept wired for the next implementation client.
+IMPLEMENTATION_CLIENTS = {}
 
 # Clients whose "is delivered" signal is exclusively from TRGETL3 tape loads.
 # Lookups for these clients ignore RAMP snap entries entirely.
 TAPE_ONLY_CLIENTS = {"OptumPBMRx", "ESIPBMRx", "MedImpactPBMRx"}
+
+# Jobs that signal a delivery but whose name lacks the usual load/stage/snap/
+# mine keyword, so build_snap_index would otherwise skip them. Matched on the
+# lowercased, stripped JobName. Per user 2026-06-08: 'JHHC Passfile Email'
+# completion is the JHHCPassfile monthly ✓.
+EXTRA_INDEXED_JOBS = {"jhhc passfile email"}
 
 # Snap destination filter — when a client uses a specific snap destination,
 # only count snap entries matching that destination string.
@@ -1392,7 +1405,10 @@ def build_snap_index(jobs, queue, snaps, tape_loads=None):
         jn_lower = jn.lower()
         # Index Load, Stage AND Snap jobs (the snap step is what triggers ✓
         # for SNAP_KIND_ONLY clients like ESIPBMRx, PrimePBMRx, Kaiser_GE).
-        if not any(kw in jn_lower for kw in ("load", "stage", "snap", "mine")):
+        # EXTRA_INDEXED_JOBS lets through delivery-signal jobs that lack those
+        # keywords (e.g. 'JHHC Passfile Email').
+        if (not any(kw in jn_lower for kw in ("load", "stage", "snap", "mine"))
+                and jn_lower.strip() not in EXTRA_INDEXED_JOBS):
             continue
         # skip log/sftp noise
         if re.search(r"(logfile|sftp|upload)", jn, re.I):
