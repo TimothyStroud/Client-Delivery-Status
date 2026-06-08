@@ -3784,6 +3784,13 @@ header.bar button {
   background: var(--accent); color: #fff; border: 0; border-radius: 4px;
   padding: 6px 12px; cursor: pointer; font-size: 12px;
 }
+header.bar .legend {
+  font-size: 11px; opacity: 0.92; display: flex; align-items: center; gap: 6px;
+}
+header.bar .legend b {
+  display: inline-block; background: var(--alert); color: var(--alert-dark);
+  font-weight: 700; border-radius: 3px; padding: 0 6px; line-height: 16px;
+}
 nav.tabs {
   background: #fff; border-bottom: 1px solid var(--border);
   padding: 4px 12px; position: sticky; top: 44px; z-index: 4;
@@ -3902,6 +3909,8 @@ body.search-active td.client-cell.match-cell { opacity: 1; background: #fffbe8; 
         "<header class='bar'>"
         f"  <h1>{_html_escape(title)}</h1>"
         f"  <div class='meta'>Generated {generated}</div>"
+        "  <div class='legend'><b>!</b> = flagged / needs attention "
+        "(past due or problem, no delivery recorded yet)</div>"
         "  <div class='grow'></div>"
         "  <input type='search' id='search' placeholder='Filter by client name…' autocomplete='off'>"
         "  <button id='today-jump'>Jump to today</button>"
