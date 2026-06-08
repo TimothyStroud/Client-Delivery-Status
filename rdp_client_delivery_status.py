@@ -356,12 +356,17 @@ LOAD_NAME_REQUIRED = {
     # "Cigna RX COBC 0110 Load" (the "COBC" between "RX" and "0110" breaks
     # the substring).
     "CignaRx":           ("rx 0110 load",),
-    "WellCareRx":        ("masterload", "claim"),
+    # WellCareRx: narrowed to the Masterload Load step 2026-06-08 (was
+    # "masterload","claim") so 'WellCareRx Masterload 0100 Stage' no longer
+    # trips L via the snap-index activity path. Delivery = Masterload 0110 Load.
+    "WellCareRx":        ("masterload 0110 load",),
     # OscarRx: main load is 'Oscar RX 0110 Load' (no "claim"/"masterload"
     # in the name). Added "rx 0110 load" 2026-05-20 per user:
     # "Oscar Rx 0110 Load is running and was not picked up."
     "OscarRx":           ("masterload", "claim", "rx 0110 load"),
-    "CenteneRx":         ("masterload", "claim"),
+    # CenteneRx: narrowed to the Claims Load step 2026-06-08 — bare "claim"
+    # matched 'Centene RX 0130 Claims Stage'. Delivery = '0140 Claims Load'.
+    "CenteneRx":         ("claims load",),
     # CenteneFidelisRx: only 'Centene Fidelis Rx 0130 Claims Load' (and the
     # MasterLoad variant) should drive L. Narrowed from "claim" to "claims
     # load" 2026-06-08 — the bare "claim" matched 'Centene Fidelis Rx 0120
@@ -370,9 +375,13 @@ LOAD_NAME_REQUIRED = {
     # already excluded a Ready/Running stage, but the snap-index activity path
     # had no stage guard, so the narrower keyword is the fix.
     "CenteneFidelisRx":  ("masterload", "claims load"),
-    "AetnaQNXTRx":       ("masterload", "claim"),
-    "AetnaQNXT":         ("masterload", "claim"),
-    "WellpointEdwardRx": ("masterload", "claim"),
+    # AetnaQNXT / AetnaQNXTRx: narrowed to the Masterload Load step 2026-06-08
+    # so 'Masterload 0100 Stage' no longer trips L via the activity path.
+    "AetnaQNXTRx":       ("masterload 0110 load",),
+    "AetnaQNXT":         ("masterload 0110 load",),
+    # WellpointEdwardRx: narrowed to the two Claims Load steps 2026-06-08 so
+    # 'Claims 0100 Stage' / 'Claims HealthSun 0120 Stage' no longer trip L.
+    "WellpointEdwardRx": ("claims 0110 load", "claims healthsun 0130 load"),
     # HAPRx (per user 2026-06-04): only the main Claims load counts —
     # `HAPRx 0110 Load` and any future `HAPRx Masterload 0110 ...`. The
     # substring `haprx 0110 load` matches the main load but NOT the COBC /
