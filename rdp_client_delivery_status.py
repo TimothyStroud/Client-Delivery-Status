@@ -362,7 +362,14 @@ LOAD_NAME_REQUIRED = {
     # "Oscar Rx 0110 Load is running and was not picked up."
     "OscarRx":           ("masterload", "claim", "rx 0110 load"),
     "CenteneRx":         ("masterload", "claim"),
-    "CenteneFidelisRx":  ("masterload", "claim"),
+    # CenteneFidelisRx: only 'Centene Fidelis Rx 0130 Claims Load' (and the
+    # MasterLoad variant) should drive L. Narrowed from "claim" to "claims
+    # load" 2026-06-08 — the bare "claim" matched 'Centene Fidelis Rx 0120
+    # Claims Stage', which (as a completed entry in the snap index) tripped the
+    # cert-client "activity -> L" path. The is_loading_today stage filter
+    # already excluded a Ready/Running stage, but the snap-index activity path
+    # had no stage guard, so the narrower keyword is the fix.
+    "CenteneFidelisRx":  ("masterload", "claims load"),
     "AetnaQNXTRx":       ("masterload", "claim"),
     "AetnaQNXT":         ("masterload", "claim"),
     "WellpointEdwardRx": ("masterload", "claim"),
