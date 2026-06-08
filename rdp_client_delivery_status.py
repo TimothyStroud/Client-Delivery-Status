@@ -550,6 +550,21 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     "BCBSVT", "BSCA_Medicare",
     # HAP_Medical and HAPRx per user 2026-06-08: same — stay "L" until cert.
     "HAP_Medical", "HAPRx",
+    # Per user 2026-06-08: the following monthly clients should never show a
+    # checkmark — stay "L" until the cert date lands (snap activity alone must
+    # not flip to ✓). New 'MasterLoad 0110 Load' implementations also default
+    # to this cert-style behavior (see the auto-discovery block in main()).
+    "AetnaQNXT", "AetnaQNXTRx",
+    "BCBSNC", "BCBSNC_Rx", "BCBSPuertoRico", "BCBSSC",
+    "CareFirstDC", "CareFirstFacets", "CareFirstNasco",
+    "Chickering",
+    "EDW_ASE", "EDW_C_FAC", "EDW_C_NAS", "EDW_Empire", "EDW_WGS",
+    "EmblemFacets",
+    "Kaiser_WARx",
+    "MedicalMutualMHS", "MedicalMutualOH",
+    "NCStateRx",
+    "PremeraMedAdvVIS",
+    "SamaritanHealth",
 }
 
 # Monthly clients that should show an empty Date cell (rather than "No Data")
@@ -3961,10 +3976,13 @@ def main():
     print(f"[info]   {len(jobs)} total ({enabled_n} enabled)")
 
     # ----- Auto-discover new MasterLoad 0110 Load implementations (per user
-    # 2026-06-03). New clients default to Weekly/Monday placement.
-    #   - PBMRx hits → SNAP_KIND_ONLY_CLIENTS (L during load, ✓ after snap).
-    #   - Non-PBMRx hits → IMPLEMENTATION_LOAD_ONLY_CLIENTS (L during load,
-    #     blank after snap — "we're not actively working this client yet").
+    # 2026-06-03, updated 2026-06-08). New clients default to Weekly/Monday
+    # placement as CERT-STYLE clients: they stay "L" until the cert date lands
+    # and never show a ✓ (no SNAP_ONLY membership). Per user 2026-06-08: "All
+    # new 'MasterLoad 0110 Load' will also be in this format." The old
+    # PBMRx→SNAP_KIND_ONLY (✓ after snap) and non-PBMRx→IMPLEMENTATION_LOAD_ONLY
+    # (blank after snap) branches were removed. Existing exceptions like
+    # ElevanceMMMRx stay implementation-load-only via the static set.
     new_impls = find_unconfigured_masterload_clients(jobs)
     if new_impls:
         for entry in new_impls:
@@ -3973,10 +3991,6 @@ def main():
                   f"(pbmrx={entry['pbmrx']}, enabled={entry['enabled']})")
             if client not in WEEKLY_CLIENTS:
                 WEEKLY_CLIENTS[client] = ["Monday"]
-            if entry["pbmrx"]:
-                SNAP_KIND_ONLY_CLIENTS.add(client)
-            else:
-                IMPLEMENTATION_LOAD_ONLY_CLIENTS.add(client)
             # Add alias so RAMP job lookups find the new client.
             aliases = CLIENT_ALIASES.setdefault(client, [])
             if entry["normalized"] not in aliases:
