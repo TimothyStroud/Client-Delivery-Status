@@ -186,13 +186,13 @@ CLIENT_ALIASES = {
     # 2026-06-03. Keeps default `kaisermastapestry` match for historical
     # 'Kaiser MAS Tapestry' JobNames; adds `kaiserpareomas` for the new form.
     "Kaiser_MASTapestry":   ["kaisermastapestry", "kaiserpareomas"],
-    # MMOH (Rx) monthly: the report's "MMOH (Rx)" row tracks the MMOHRx
-    # *monthly* claim load — 'MMOHRx Monthly Claim 0110 Load' → snap_idx key
-    # "mmohrxmonthlyclaim". Per user 2026-06-08: 'MMOH Claims 0110 Load' is
-    # MedicalMutualOH's load, NOT this row. Distinct from the weekly MMOHRx
-    # Tue row below (which tracks 'MMOHRx Weekly Claim 0110 Load'). The base
-    # key "mmoh" (auto-included) preserves the Pharmacy snap-endpoint ✓ match.
-    "MMOH":                 ["mmohrxmonthlyclaim"],
+    # MMOH (WC) monthly: the report's "MMOH (WC)" row tracks the Workers' Comp
+    # load 'MMO 0110 WC Load' (Stage->Load, no snap/cert). build_snap_index
+    # emits the feed+sub-feed key "mmowc" for it (the bare-prefix key "mmo" is
+    # too short to index). Per user 2026-06-08 (correction): this row is the WC
+    # load, not the MMOHRx monthly claim. Distinct from MedicalMutualOH
+    # ('MMOH Claims 0110 Load') and the weekly MMOHRx ('MMOHRx Weekly Claim').
+    "MMOH":                 ["mmowc"],
     # MedicalMutualOH (monthly, cert-only): its load is 'MMOH Claims 0110 Load'
     # → snap_idx key "mmohclaims" (per user 2026-06-08). The auto-derived
     # primary key "medicalmutualoh" never matches the RAMP "MMOH ..." JobNames.
@@ -336,12 +336,11 @@ LOAD_NAME_REQUIRED = {
     # BCBSFL (weekly Tue): only 'BCBSFL 0110 Claims Load' counts — not CMS
     # Referral Load, Claims Stage, or Claims Start Snap.
     "BCBSFL":            ("claims load",),
-    # MMOH (Rx) monthly: only 'MMOHRx Monthly Claim 0110 Load' is the load
-    # indicator (per user 2026-06-08 — this row is the Rx *monthly* claim, not
-    # the medical 'MMOH Claims 0110 Load'). The "monthly claim 0110 load"
-    # keyword excludes the weekly claim load, the Monthly Claim Stage step, and
-    # COBC. (Singular "claim" vs MedicalMutualOH's plural "claims" disambiguates.)
-    "MMOH":              ("monthly claim 0110 load",),
+    # MMOH (WC) monthly: only 'MMO 0110 WC Load' is the load indicator (per
+    # user 2026-06-08 correction — this row is the Workers' Comp load). The
+    # "wc load" keyword matches it but not the WC Stage step or any other
+    # MMOH* job (MMOH Claims / GEN / ICD10 / MMOHRx...).
+    "MMOH":              ("wc load",),
     # MedicalMutualOH (monthly, cert-only): only 'MMOH Claims 0110 Load' counts
     # (plural "Claims" — distinct from the MMOHRx monthly/weekly singular).
     "MedicalMutualOH":   ("claims 0110 load",),
@@ -625,7 +624,7 @@ MONTHLY_CLIENTS = {
 # Override display name for a client (the label only; client_key stays the same).
 CLIENT_DISPLAY_NAME = {
     "BCBSFLEligibilityLoad": "BCBSFL Elig",
-    "MMOH":                  "MMOH (Rx)",
+    "MMOH":                  "MMOH (WC)",
     "JHHCPassfile":          "JHHC Passfile",
     "Kaiser_AmbCO":          "KaiserAmbCO",
     "Kaiser_AmbGA":          "KaiserAmbGA",
@@ -771,8 +770,9 @@ EXTRA_INDEXED_JOBS = {"jhhc passfile email"}
 
 # Snap destination filter — when a client uses a specific snap destination,
 # only count snap entries matching that destination string.
+# (MMOH's Pharmacy filter removed 2026-06-08 — MMOH is now the WC load, which
+# delivers via 'MMO 0110 WC Load' completion, not a Pharmacy snap.)
 SNAP_DESTINATION_FILTER = {
-    "MMOH": "Pharmacy",
 }
 
 # Clients that show ✓ when snapped (not just blank when no cert).
@@ -782,7 +782,6 @@ SNAP_ONLY_CLIENTS = {
     "OptumPBMRx",
     "ESIPBMRx", "CVSPBMRx",
     "MedImpactPBMRx", "PrimePBMRx",
-    "MMOH",
     "AetnaSubro", "HumanaRx",
     "WPRxDMGCOBMining",
     "BCBSKSMedAdv", "TuftsRx",   # snap weekly, cert monthly
@@ -795,7 +794,8 @@ SNAP_KIND_ONLY_CLIENTS = {
     # PBMRx snap clients
     "ESIPBMRx", "MedImpactPBMRx", "PrimePBMRx", "CVSPBMRx",
     # Other snap-required monthly/weekly clients
-    "AetnaSubro", "MMOH", "TuftsRx", "NCState", "WPRxDMGCOBMining",
+    # (MMOH removed 2026-06-08 — now the WC load, ✓ on load completion not snap)
+    "AetnaSubro", "TuftsRx", "NCState", "WPRxDMGCOBMining",
     # Kaiser_GE needs snap-step completion (0120 Snap).
     "Kaiser_GE",
     # Kaiser ambulance feeds: per user 2026-05-15, must wait for an actual
