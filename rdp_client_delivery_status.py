@@ -1862,6 +1862,56 @@ def scan_adhoc_loads(queue, jobs, today, since):
     return rows
 
 
+# The two jobs whose joint completion = a finished "Kaiser Submission" (per
+# user 2026-06-09). Exact lowercased names — must NOT match the separate
+# 'Kaiser Pareo Audit Submission Upload'. These are Logfile/Upload jobs, which
+# the normal index/L logic excludes, so they're tracked here explicitly.
+KAISER_SUBMISSION_JOBS = (
+    "kaiser pareo submission logfile",
+    "kaiser pareo submission upload",
+)
+
+
+def scan_kaiser_submission(queue, jobs, today, since):
+    """Per-day status for the daily 'Kaiser Submission' row.
+
+    ✓ on a day when BOTH 'Kaiser Pareo Submission Logfile' AND
+    'Kaiser Pareo Submission Upload' completed (Successful/Resolved) that day;
+    'L' on today while either is still Ready/Running. Weekend completions snap
+    to the closest weekday (Sat→Fri, Sun→Mon).
+
+    Returns (done_days: set[date], running_today: bool).
+    """
+    job_by_id = {j.get("JobId"): (j.get("JobName") or "").strip().lower() for j in jobs}
+
+    def snap_wd(d):
+        if d.weekday() == 5:
+            return d - timedelta(days=1)
+        if d.weekday() == 6:
+            return d + timedelta(days=1)
+        return d
+
+    done = {name: set() for name in KAISER_SUBMISSION_JOBS}
+    running_today = False
+    for q in queue:
+        name = job_by_id.get(q.get("JobId"))
+        if name not in KAISER_SUBMISSION_JOBS:
+            continue
+        status = (q.get("Status") or "").strip().lower()
+        start = parse_dt(q.get("StartDate"))
+        end   = parse_dt(q.get("EndDate"))
+        dt = end or start
+        if status.startswith("success") or status == "resolved":
+            if dt and dt.date() >= since:
+                done[name].add(dt.date())
+        elif status in ("ready", "running"):
+            running_today = True
+    log_days = done["kaiser pareo submission logfile"]
+    up_days  = done["kaiser pareo submission upload"]
+    done_days = {snap_wd(d) for d in (log_days & up_days)}
+    return done_days, running_today
+
+
 def find_unconfigured_masterload_clients(jobs):
     """Scan RAMP jobs for `<Client> MasterLoad 0110 Load` entries whose
     derived client name isn't recognised by any existing config dict.
@@ -2998,6 +3048,21 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     for bucket in (daily, weekly, monthly, kaiser):
         for d in bucket:
             bucket[d].sort(key=lambda r: r[0].lower())
+
+    # Kaiser Submission daily row — appended AFTER the sort so it renders LAST
+    # in the daily section (directly under NCStateAetna), per user 2026-06-09.
+    # ✓ when both 'Kaiser Pareo Submission Logfile' AND '...Upload' finished
+    # that day; 'L' on today while in progress; blank otherwise.
+    ks_done, ks_running = scan_kaiser_submission(
+        ramp_queue, ramp_jobs, today, date(year, month, 1) - timedelta(days=14))
+    for d in all_days:
+        if d in ks_done:
+            mk = "✓"
+        elif d == today and ks_running:
+            mk = "L"
+        else:
+            mk = ""
+        daily[d].append(("Kaiser Submission", mk, False, None, None))
 
     return {"daily": daily, "weekly": weekly, "monthly": monthly, "kaiser": kaiser}, weeks
 
