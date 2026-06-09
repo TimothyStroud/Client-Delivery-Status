@@ -869,8 +869,12 @@ NYSHIP_LABEL = {1: "1st", 8: "8th", 16: "16th", 24: "24th"}
 # "L", and both get the SAME certification date once it lands. One-off; clear
 # these entries after this June 2026 cycle certifies.
 NYSHIP_OVERRIDES = {
-    (2026, 6, 1): "L",
-    (2026, 6, 8): "L",
+    # 1st & 8th loaded together this cycle and both certified 6/9/26 (DHT
+    # NYSHIP_RX, status Certified). Both cells show the shared cert date. The
+    # 1st cell needs the override because a 6/9 cert is outside its 6/1-6/5
+    # auto-detection window. One-off; clear after the June 2026 cycle.
+    (2026, 6, 1): date(2026, 6, 9),
+    (2026, 6, 8): date(2026, 6, 9),
 }
 
 # Suffix conventions per the All Clients tab key:
