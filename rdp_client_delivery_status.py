@@ -200,6 +200,12 @@ CLIENT_ALIASES = {
     # MMOHRx weekly Tue: only 'MMOHRx Weekly Claim 0110 Load' counts. COBC
     # alias dropped 2026-05-18 so MMOHRx COBC Successful loads don't trip L.
     "MMOHRx":               ["mmohrx", "mmohrxweeklyclaim"],
+    # MMOHRxMonthly (monthly 'M - MMOHRx'): the MMOHRx Monthly Claim pipeline
+    # (Stage->Load 0110->Snap 0120). Both the Load and Snap snap_idx entries
+    # derive key "mmohrxmonthlyclaim" (distinguished by kind). Per user
+    # 2026-06-09: L off '0110 Load', ✓ off '0120 Snap'. Distinct from the
+    # weekly MMOHRx (Weekly Claim) and from MMOH (WC).
+    "MMOHRxMonthly":        ["mmohrxmonthlyclaim"],
     # Cigna variants
     "CignaFacets":          ["cignafacets"],
     # CignaRx: only 'Cigna RX 0110 Load' counts (key 'cignarx'). COBC and
@@ -347,6 +353,11 @@ LOAD_NAME_REQUIRED = {
     # MMOHRx weekly Tue: only 'MMOHRx Weekly Claim 0110 Load' counts —
     # filter excludes the Monthly Claim Stage and Weekly Claim Stage.
     "MMOHRx":            ("weekly claim 0110 load",),
+    # MMOHRxMonthly: the 'MMOHRx Monthly Claim' Load (0110) and Snap (0120)
+    # steps. "monthly claim" matches both (excludes Weekly Claim / COBC); the
+    # Stage step is dropped by is_loading_today's stage filter, and ✓ comes
+    # from the Snap step via SNAP_KIND_ONLY_CLIENTS.
+    "MMOHRxMonthly":     ("monthly claim",),
     # CignaRx (weekly Tue): only 'Cigna RX 0110 Load' counts. COBC Load,
     # Daily PassFile, and other ancillary jobs share the "cignarx" matching
     # prefix and would otherwise trip the L indicator. Per user 2026-05-19:
@@ -621,7 +632,7 @@ MONTHLY_CLIENTS = {
     "Kaiser_GE",
     "Kaiser_WA", "Kaiser_WARx",
     "MedicalMutualMHS", "MedicalMutualOH", "MedImpactPBMRx",
-    "MMOH", "NCState", "NCStateRx",
+    "MMOH", "MMOHRxMonthly", "NCState", "NCStateRx",
     "ESIPBMRx",                         # monthly snap-only (RAMP snap-driven)
     "OptumPBMRx",                       # monthly, tape-driven
     "PremeraMedAdvRx", "PremeraMedAdvVIS",
@@ -632,6 +643,7 @@ MONTHLY_CLIENTS = {
 CLIENT_DISPLAY_NAME = {
     "BCBSFLEligibilityLoad": "BCBSFL Elig",
     "MMOH":                  "MMOH (WC)",
+    "MMOHRxMonthly":         "MMOHRx",
     "JHHCPassfile":          "JHHC Passfile",
     "Kaiser_AmbCO":          "KaiserAmbCO",
     "Kaiser_AmbGA":          "KaiserAmbGA",
@@ -803,6 +815,9 @@ SNAP_KIND_ONLY_CLIENTS = {
     # Other snap-required monthly/weekly clients
     # (MMOH removed 2026-06-08 — now the WC load, ✓ on load completion not snap)
     "AetnaSubro", "TuftsRx", "NCState", "WPRxDMGCOBMining",
+    # MMOHRxMonthly: ✓ off the 'MMOHRx Monthly Claim 0120 Snap' step (per user
+    # 2026-06-09) — L during the 0110 Load, ✓ when the Snap completes.
+    "MMOHRxMonthly",
     # Kaiser_GE needs snap-step completion (0120 Snap).
     "Kaiser_GE",
     # Kaiser ambulance feeds: per user 2026-05-15, must wait for an actual
