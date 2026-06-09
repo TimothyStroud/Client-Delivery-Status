@@ -449,6 +449,13 @@ MANUAL_OVERRIDES = {
     # 2026-06-08: BCBSFL weekly delivery skipped this week (one-off). Show
     # "Skip" on the 6/9/26 Tuesday cell only. Remove after this week.
     ("BCBSFL",        date(2026, 6, 9)): "Skip",
+    # 2026-06-09: CignaFacets certified last week per user (TapeID 3593,
+    # [dbo].[vwMiningCache_Full], CertTimestamp 6/2). DHT.TableList row is still
+    # at "Email sent, Ready for Certification review" (not "Certified"), so the
+    # auto cert lookup misses it and the 6/2 cell flagged with "!". Pin the
+    # 6/2/26 cert date. Remove once DHT flips the 3593 row to Certified (then
+    # cert_in_week surfaces it automatically).
+    ("CignaFacets",   date(2026, 6, 2)): date(2026, 6, 2),
 }
 
 # ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
