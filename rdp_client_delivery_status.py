@@ -3044,6 +3044,32 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         alert = alert_state("CignaRx", cigna_target, marker)
         weekly[cigna_target].append((cig_label, marker, alert, None))
 
+    # One-off (per user 2026-06-11): Kaiser_AmbM runs a SECOND June cycle — it
+    # certified 6/11, and a new monthly load lands ~6/18. determine_monthly only
+    # places one row/month and the 6/11 cert takes precedence, so the new cycle
+    # wouldn't surface until it re-certifies. Inject a 6/18 row that tracks the
+    # new load (No Data → L) using only activity on/after the 6/12 cutoff (so the
+    # prior 6/11 cert/load is ignored). Once the new cert lands, determine_monthly
+    # shows it on the cert date and this injection is skipped (no duplicate).
+    # Remove after the June 2026 cycle.
+    if (year, month) == (2026, 6):
+        ka_place  = date(2026, 6, 18)
+        ka_cutoff = date(2026, 6, 12)        # ignore the prior 6/11 cert/load
+        ka_keys   = list(_keys_for_client("Kaiser_AmbM"))
+        ka_new_cert = any(
+            status == "Certified" and ka_cutoff <= dt.date() <= today
+            for k in ka_keys for dt, status in cert_idx.get(k, ())
+        )
+        if not ka_new_cert:
+            ka_loaded = any(
+                _src_matches_client(e[0], ka_keys)
+                for d_scan, entries in snap_idx.items() if ka_cutoff <= d_scan <= today
+                for e in entries
+            )
+            ka_marker = "L" if (is_loading_today("Kaiser_AmbM", ramp_queue, ramp_jobs)
+                                or ka_loaded) else "No Data"
+            monthly[ka_place].append(("M - Kaiser_AmbM", ka_marker, False, None))
+
     # Sort each cell alphabetically within each section
     for bucket in (daily, weekly, monthly, kaiser):
         for d in bucket:
