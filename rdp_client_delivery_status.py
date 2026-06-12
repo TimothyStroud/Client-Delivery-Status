@@ -116,6 +116,12 @@ CLIENT_ALIASES = {
     # so there should be an 'L' on WellpointEdwardRx."
     "WellpointEdwardRx":    ["wellpointedwardrx", "wellpointrxclaims",
                              "wellpointrxclaimshealthsun"],
+    # WellpointRxElig (monthly 'M - WellpointRx Elig'): the Wellpoint RX Elig
+    # pipeline (0100 Stage -> 0110 Load -> 0120 Snap -> 0130 Mine). Both the
+    # Load and Snap snap_idx entries derive the prefix key "wellpointrxelig"
+    # (distinguished by kind). Per user 2026-06-12: L off '0110 Load', ✓ off
+    # '0120 Snap'. Distinct from WellpointEdwardRx (Claims) jobs.
+    "WellpointRxElig":      ["wellpointrxelig"],
     # HarvardPilgrim — RAMP job is "HarvardPilgrim Claims 0110 Load" so
     # the snap_idx prefix key is "harvardpilgrimclaims" (the trailing-
     # word strip doesn't catch "Claims"). Per user 2026-05-20:
@@ -392,6 +398,10 @@ LOAD_NAME_REQUIRED = {
     # WellpointEdwardRx: narrowed to the two Claims Load steps 2026-06-08 so
     # 'Claims 0100 Stage' / 'Claims HealthSun 0120 Stage' no longer trip L.
     "WellpointEdwardRx": ("claims 0110 load", "claims healthsun 0130 load"),
+    # WellpointRxElig: only the Elig pipeline counts. "rx elig" matches BOTH
+    # 'Wellpoint RX Elig 0110 Load' (→ L) and 'Wellpoint RX Elig 0120 Snap'
+    # (→ ✓ via the snap-index path), but excludes the Claims/COBC jobs.
+    "WellpointRxElig":   ("rx elig",),
     # HAPRx (per user 2026-06-04): only the main Claims load counts —
     # `HAPRx 0110 Load` and any future `HAPRx Masterload 0110 ...`. The
     # substring `haprx 0110 load` matches the main load but NOT the COBC /
@@ -633,6 +643,7 @@ MONTHLY_CLIENTS = {
     "Kaiser_WA", "Kaiser_WARx",
     "MedicalMutualMHS", "MedicalMutualOH", "MedImpactPBMRx",
     "MMOH", "MMOHRxMonthly", "NCState", "NCStateRx",
+    "WellpointRxElig",                  # monthly load->snap (L on load, ✓ on snap)
     "ESIPBMRx",                         # monthly snap-only (RAMP snap-driven)
     "OptumPBMRx",                       # monthly, tape-driven
     "PremeraMedAdvRx", "PremeraMedAdvVIS",
@@ -644,6 +655,7 @@ CLIENT_DISPLAY_NAME = {
     "BCBSFLEligibilityLoad": "BCBSFL Elig",
     "MMOH":                  "MMOH (WC)",
     "MMOHRxMonthly":         "MMOHRx",
+    "WellpointRxElig":       "WellpointRx Elig",
     "JHHCPassfile":          "JHHC Passfile",
     "Kaiser_AmbCO":          "KaiserAmbCO",
     "Kaiser_AmbGA":          "KaiserAmbGA",
@@ -673,6 +685,8 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     "HealthSpring_FWA":       (5, 10),
     "MMOH":                   (5, 10),
     "NCState":                (5, 10),
+    # WellpointRxElig loads ~11th, snaps ~12th each month (per RAMP history).
+    "WellpointRxElig":        (10, 12),
     "PremeraMedAdvVIS":       (5, 10),
     "PremeraMedAdvRx":        (5, 10),
     "TuftsRx":                (10, 10),
@@ -818,6 +832,9 @@ SNAP_KIND_ONLY_CLIENTS = {
     # MMOHRxMonthly: ✓ off the 'MMOHRx Monthly Claim 0120 Snap' step (per user
     # 2026-06-09) — L during the 0110 Load, ✓ when the Snap completes.
     "MMOHRxMonthly",
+    # WellpointRxElig: ✓ off the 'Wellpoint RX Elig 0120 Snap' step (per user
+    # 2026-06-12) — L during the 0110 Load, ✓ at the Snap step.
+    "WellpointRxElig",
     # Kaiser_GE needs snap-step completion (0120 Snap).
     "Kaiser_GE",
     # Kaiser ambulance feeds: per user 2026-05-15, must wait for an actual
@@ -844,6 +861,16 @@ SNAP_KIND_ONLY_CLIENTS = {
 LOAD_AS_DELIVERY_CLIENTS = {
     "OptumPBMRx", "HumanaRx", "BCBSKSMedAdv",
     "AetnaRCE", "AetnaRx", "NCStateAetna",
+}
+
+# Clients whose "L" is driven ONLY by the LOAD step — a running snap/mine step
+# does NOT keep them at L. Unlike LOAD_AS_DELIVERY_CLIENTS, this set does NOT
+# affect ✓ resolution (so these clients can still be SNAP_KIND_ONLY and only
+# get ✓ from an actual snap completion). Used solely by is_loading_today.
+# Per user 2026-06-12 for WellpointRxElig: L during '0110 Load', then ✓ at the
+# '0120 Snap' — the post-snap '0130 Mine' running must NOT revert ✓ back to L.
+L_ON_LOAD_ONLY_CLIENTS = {
+    "WellpointRxElig",
 }
 
 # Clients we are NOT actively working (no certification expected), but whose
@@ -1764,7 +1791,7 @@ def is_loading_today(client, queue, jobs):
     Stage / logfile / sftp / upload jobs never count as L.
     """
     matched = find_matching_jobs(client, jobs)
-    load_only = client in LOAD_AS_DELIVERY_CLIENTS
+    load_only = client in LOAD_AS_DELIVERY_CLIENTS or client in L_ON_LOAD_ONLY_CLIENTS
     required_kwds = LOAD_NAME_REQUIRED.get(client)
     job_ids = set()
     for j in matched:
