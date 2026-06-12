@@ -133,7 +133,13 @@ CLIENT_ALIASES = {
     # key "upmcmaster". Per user 2026-05-20: "'UPMC Masterload 0110 Load'
     # finished, so it should show an 'L' until certification."
     "UPMC":                 ["upmc", "upmcmaster", "upmcmasterload"],
-    "BCBSAR":               ["bcbsar", "bcbsarmedical"],
+    # BCBSAR is a MEDICAL client — its only jobs are 'BCBSAR Medical 0100/0110'.
+    # The bare "bcbsar" alias was dropped 2026-06-12 because it substring-matched
+    # the sibling BCBSARRx jobs ('BCBSARRx COBC/MasterLoad …'), wrongly pulling
+    # the BCBSARRx COBC load failure onto BCBSAR. Matched via "bcbsarmedical"
+    # only; see CLIENT_PRIMARY_KEY_OVERRIDE. (DHT cert key "bcbsar" is still
+    # yielded by _keys_for_client's base normalize, so cert lookup is unaffected.)
+    "BCBSAR":               ["bcbsarmedical"],
     "BCBSARRx":             ["bcbsarrx"],
     "MedStar":              ["medstar"],
     # HealthNewEngland shows up as "HNE Medical" on the RAMP Dashboard.
@@ -376,6 +382,11 @@ LOAD_NAME_REQUIRED = {
     # "masterload","claim") so 'WellCareRx Masterload 0100 Stage' no longer
     # trips L via the snap-index activity path. Delivery = Masterload 0110 Load.
     "WellCareRx":        ("masterload 0110 load",),
+    # BCBSARRx: delivery = 'BCBSARRx MasterLoad 0110 Load'. Narrowed 2026-06-12
+    # so the ancillary 'BCBSARRx COBC 0110 Load' failure no longer trips a
+    # "Load Failure" (nor L) for the claims cycle. Per user: the failure is COBC,
+    # not claims.
+    "BCBSARRx":          ("masterload 0110 load",),
     # OscarRx: main load is 'Oscar RX 0110 Load' (no "claim"/"masterload"
     # in the name). Added "rx 0110 load" 2026-05-20 per user:
     # "Oscar Rx 0110 Load is running and was not picked up."
@@ -897,6 +908,11 @@ CLIENT_PRIMARY_KEY_OVERRIDE = {
     # AetnaQNXTRx job ("aetnaqnxt" + "rx" + "masterload" is not contiguous).
     # _keys_for_client still yields base "aetnaqnxt" for the DHT cert lookup.
     "AetnaQNXT": "aetnaqnxtmasterload",
+    # BCBSAR (Medical) ⊂ BCBSARRx — without this, "bcbsar" substring-matched the
+    # BCBSARRx jobs and pulled the BCBSARRx COBC load failure onto BCBSAR. Match
+    # only the Medical jobs. Per user 2026-06-12. _keys_for_client still yields
+    # base "bcbsar" for the DHT cert lookup.
+    "BCBSAR": "bcbsarmedical",
 }
 
 # NYShip_Rx fires four times per month — on the 1st, 8th, 16th, 24th
