@@ -3296,15 +3296,11 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
 
     # Client-name columns set to ≈190 px (width 27.07) per user 2026-05-20.
     # Excel pixels ≈ 7 * width + 0.5.
-    # Column D (Tuesday date) widened to ≈95 px per user 2026-06-01 until
-    # BCBSAR is certified for Implementation — revert to 11 after cert lands.
+    # Column D (Tuesday date) was widened to ≈95 px for BCBSAR's "Implementation"
+    # text; reverted to the standard 11 once BCBSAR certified (2026-06-12).
     client_w = (190 - 0.5) / 7
-    col_d_w  = (95 - 0.5) / 7
     for i in range(10):
-        if i == 3:
-            w = col_d_w
-        else:
-            w = client_w if i % 2 == 0 else 11
+        w = client_w if i % 2 == 0 else 11
         ws.column_dimensions[get_column_letter(i + 1)].width = w
     ws.sheet_view.showGridLines = False
 
