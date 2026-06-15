@@ -1380,17 +1380,20 @@ def fetch_ramp_snaps():
 
 def fetch_aetna_nmsp_loads(since):
     r"""Query SQLUtilAudit.cmse_new.SourceLog for Aetna NonMSP file loads
-    since `since`. ✓ for "M - Aetna NMSP - MMSEA" fires once an entry exists
-    for the file at \\trgdatacap2\MMSEA\Aetna\<year>\NonMSP.
-    Returns list of completion datetimes.
+    started since `since`. Drives "M - Aetna NMSP - MMSEA":
+      - "L"  once a file at \\trgdatacap2\MMSEA\Aetna\<year>\NonMSP has an
+             ImportStartDate but no ImportCompleteDate yet (loading in CMSE),
+      - "✓"  once ImportCompleteDate lands (placed on the completion date).
+    Returns list of dicts {"start": datetime, "done": datetime|None}.
     """
     q = (
         "SET NOCOUNT ON; "
-        "SELECT CONVERT(varchar(23), ImportCompleteDate, 121) AS Done "
-        "FROM [cmse_new].[dbo].[SourceLog] "
+        "SELECT CONVERT(varchar(23), ImportStartDate, 121) AS Started, "
+        "ISNULL(CONVERT(varchar(23), ImportCompleteDate, 121), '') AS Done "
+        "FROM [cmse_new].[dbo].[SourceLog] WITH (NOLOCK) "
         "WHERE EntryName LIKE '%MMSEA\\Aetna\\2026\\NonMSP%' "
-        f"AND ImportCompleteDate >= '{since.isoformat()}' "
-        "ORDER BY ImportCompleteDate"
+        f"AND ImportStartDate >= '{since.isoformat()}' "
+        "ORDER BY ImportStartDate"
     )
     r = subprocess.run(
         ["sqlcmd", "-S", "SQLUtilAudit", "-d", "cmse_new", "-E", "-Q", q,
@@ -1399,12 +1402,14 @@ def fetch_aetna_nmsp_loads(since):
     )
     out = []
     for line in r.stdout.splitlines():
-        line = line.strip()
+        line = line.rstrip()
         if not line or line.startswith("---") or "rows affected" in line:
             continue
-        dt = parse_dt(line)
-        if dt:
-            out.append(dt)
+        parts = line.split("\t")
+        start = parse_dt(parts[0].strip()) if parts else None
+        done = parse_dt(parts[1].strip()) if len(parts) > 1 and parts[1].strip() else None
+        if start:
+            out.append({"start": start, "done": done})
     return out
 
 
@@ -2965,22 +2970,38 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                      default_day=first_friday(year, month))
     place_optum_half("(RAW 5/6)",   24, 31, {5, 6})
 
-    # Aetna NMSP - MMSEA: ✓ once SourceLog shows a NonMSP file imported this
-    # month; otherwise the 15th rule (or next Monday) with No Data.
+    # Aetna NMSP - MMSEA: ✓ once SourceLog shows a NonMSP file fully imported
+    # (ImportCompleteDate) this month, placed on the completion date. While a
+    # file has only started loading in CMSE (ImportStartDate, no complete date)
+    # the cell shows "L" on the start date. Otherwise the 15th rule (or next
+    # Monday) with No Data.
     nmsp_day = nmsp_mmsea_date(year, month)
     if nmsp_day.month == month:
-        nmsp_dt = None
-        for dt in (aetna_nmsp_loads or ()):
-            if dt.year == year and dt.month == month and dt.date() <= today:
-                if nmsp_dt is None or dt > nmsp_dt:
-                    nmsp_dt = dt
-        if nmsp_dt:
-            placement = nmsp_dt.date()
+        done_dt = None   # latest completed load this month
+        start_dt = None  # latest in-progress (started, not yet complete) load
+        for rec in (aetna_nmsp_loads or ()):
+            d, s = rec.get("done"), rec.get("start")
+            if d and d.year == year and d.month == month and d.date() <= today:
+                if done_dt is None or d > done_dt:
+                    done_dt = d
+            if s and not d and s.year == year and s.month == month and s.date() <= today:
+                if start_dt is None or s > start_dt:
+                    start_dt = s
+        if done_dt:
+            placement = done_dt.date()
             if placement.weekday() >= 5:
                 placement = next_monday_if_weekend(placement)
             if placement.month != month:
                 placement = nmsp_day
             marker = "✓"
+            alert  = False
+        elif start_dt:
+            placement = start_dt.date()
+            if placement.weekday() >= 5:
+                placement = next_monday_if_weekend(placement)
+            if placement.month != month:
+                placement = nmsp_day
+            marker = "L"
             alert  = False
         else:
             placement = nmsp_day
