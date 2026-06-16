@@ -488,6 +488,13 @@ MANUAL_OVERRIDES = {
     # 6/2/26 cert date. Remove once DHT flips the 3593 row to Certified (then
     # cert_in_week surfaces it automatically).
     ("CignaFacets",   date(2026, 6, 2)): date(2026, 6, 2),
+    # 2026-06-16: CignaFacets 6/9 cycle (TapeID 3598) was Certified and shown as
+    # 6/9/26, but DHT reverted it to "Email sent, Ready for Certification review"
+    # (a known client issue), so the live cert lookup misses it and the cell went
+    # to a pink "!". Pin the cert date back. Also seeds the sticky-cert cache so
+    # the regression can't recur. Per user: "Once a client gets certified, do not
+    # change the cell to an '!'." Remove once DHT flips 3598 back to Certified.
+    ("CignaFacets",   date(2026, 6, 9)): date(2026, 6, 9),
     # 2026-06-16: WellCare is loading now and WellCareRx loads are upcoming, but
     # both are for the 6/12 delivery (running late) — not for this week. Pin "L"
     # on the 6/12 Friday cells (was "!") and blank the current-week 6/19 cells so
@@ -500,6 +507,64 @@ MANUAL_OVERRIDES = {
     ("WellCare",      date(2026, 6, 19)): "",
     ("WellCareRx",    date(2026, 6, 19)): "",
 }
+
+# --- Sticky certifications --------------------------------------------------
+# Once a (client, scheduled-day) cell has rendered a real cert date, remember it
+# so a later DHT status reversion (a row flipping from "Certified" back to e.g.
+# "Email sent, Ready for Certification review") can't regress the cell to a
+# blank / "No Data" pink "!". Per user 2026-06-16: "Once a client gets certified,
+# do not change the cell to an '!'." Live certs always win (a fresh cert date
+# overwrites the remembered one); the cache only fills in when the live lookup
+# would otherwise leave the cell empty. Persisted next to the script as JSON
+# {"client|YYYY-MM-DD": "YYYY-MM-DD"}. Keyed by exact cell day, so it's reliable
+# for fixed-weekday weekly/daily clients (monthly cells, which move to the cert
+# date, are best-effort).
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CERT_STICKY_PATH = os.path.join(_SCRIPT_DIR, "cert_sticky_cache.json")
+STICKY_CERTS = {}
+
+
+def load_sticky_certs():
+    global STICKY_CERTS
+    try:
+        with open(CERT_STICKY_PATH, "r", encoding="utf-8") as f:
+            STICKY_CERTS = json.load(f)
+    except (OSError, ValueError):
+        STICKY_CERTS = {}
+    return STICKY_CERTS
+
+
+def save_sticky_certs():
+    try:
+        with open(CERT_STICKY_PATH, "w", encoding="utf-8") as f:
+            json.dump(STICKY_CERTS, f, indent=0, sort_keys=True)
+    except OSError as e:
+        print(f"[warn] couldn't write sticky cert cache: {e}")
+
+
+def apply_sticky_cert(client, day, marker, alert, from_manual):
+    """Record live cert dates and restore a remembered cert if the freshly
+    computed cell would regress to a pink "!".
+
+    - `marker` is a date (a real cert) → remember it; live cert always wins.
+    - Otherwise, when the marker is NOT a manual-override value and is one of the
+      states that renders "!" (blank or "No Data"), restore a remembered cert
+      date for this (client, day) and clear the alert. Manual overrides (e.g. an
+      intentional blank) are left untouched.
+    """
+    key = f"{client}|{day.isoformat()}"
+    if isinstance(marker, date):
+        STICKY_CERTS[key] = marker.isoformat()
+        return marker, alert
+    if from_manual:
+        return marker, alert
+    if marker in ("", "No Data") and key in STICKY_CERTS:
+        try:
+            return date.fromisoformat(STICKY_CERTS[key]), False
+        except ValueError:
+            pass
+    return marker, alert
+
 
 # ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
 # (client, day) — same convention as MANUAL_OVERRIDES. When a cell renders
@@ -2719,10 +2784,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         return expected_date, "No Data"
 
     def place(bucket, kind, client, day, marker_override=None, label_prefix=""):
+        # `from_manual` is True only when the marker comes from the
+        # MANUAL_OVERRIDES dict — caller-passed marker_override values (e.g.
+        # determine_monthly results) are still eligible for sticky-cert restore.
+        from_manual = False
         if marker_override is None:
             mov = MANUAL_OVERRIDES.get((client, day))
             if mov is not None:
                 marker_override = mov
+                from_manual = True
         if marker_override is not None:
             marker = marker_override
         elif kind == "daily":
@@ -2735,6 +2805,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         else:  # monthly
             marker = resolve_marker(client, day, allow_checkmark=True, allow_week_window=False)
         alert  = alert_state(client, day, marker)
+        marker, alert = apply_sticky_cert(client, day, marker, alert, from_manual)
         wk_start = day - timedelta(days=day.weekday())
         wk_end   = wk_start + timedelta(days=4)
         # ESIPBMRx state-list: per-state placement by round (load → snap → ✓).
@@ -2876,10 +2947,12 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             # as-is. A date is never alerted; a string defers to alert_state.
             marker = ov
             alert  = False if isinstance(ov, date) else alert_state("NYShip_Rx", tgt, ov)
+            marker, alert = apply_sticky_cert("NYShip_Rx", tgt, marker, alert, True)
         else:
             # Cert-style client — stay L when loaded this week until cert lands.
             marker = resolve_marker("NYShip_Rx", tgt, allow_checkmark=False, allow_week_window=True)
             alert  = alert_state("NYShip_Rx", tgt, marker)
+            marker, alert = apply_sticky_cert("NYShip_Rx", tgt, marker, alert, False)
         weekly[tgt].append((label, marker, alert, None))
 
     # Monthly clients: state-driven placement (cert→cert date, loading→today,
@@ -4287,6 +4360,9 @@ def main():
     # Generate every month of the year so prior months don't drop off as they
     # conclude (per user 2026-06-03). Compute current month last in the loop
     # iteration but build tabs in Jan→Dec order for natural tab ordering.
+    load_sticky_certs()
+    print(f"[info] sticky cert cache: {len(STICKY_CERTS)} remembered cells")
+
     month_packs = []
     for m in range(1, 13):
         sec_m = wk_m = None
@@ -4326,6 +4402,10 @@ def main():
         })
         if m == month:
             sections, weeks = sec_m, wk_m
+
+    # Persist any newly-seen cert dates so future runs can't regress them to "!".
+    save_sticky_certs()
+    print(f"[info] sticky cert cache saved: {len(STICKY_CERTS)} cells")
 
     # Open the workbook to the current-month tab by default.
     wb.active = wb.sheetnames.index(current_tab_name)
