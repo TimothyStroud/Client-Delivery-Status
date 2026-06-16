@@ -2920,9 +2920,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 continue
             place(daily, "daily", c, d)
 
-    # KaiserPrePayCOB at the very bottom of each week (one row, all 5 columns)
+    # KaiserPrePayCOB — placed in the DAILY section (sorted alphabetically with
+    # the other daily clients) per user 2026-06-16. (Was previously its own
+    # bottom-of-week row in the `kaiser` bucket.)
     for d in all_days:
-        place(kaiser, "kaiser", KAISER_PREPAY_CLIENT, d)
+        place(daily, "daily", KAISER_PREPAY_CLIENT, d)
 
     # weekly clients on assigned weekday (alphabetical within column)
     for c in sorted(WEEKLY_CLIENTS):
@@ -3174,7 +3176,8 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 break
             kpp_seen.add(key)
             label = f"{display_name(KAISER_PREPAY_CLIENT)}{suffix}"
-            kaiser[target].append((label, "✓", False, None))
+            # Daily section now (KaiserPrePayCOB moved out of the kaiser bucket).
+            daily[target].append((label, "✓", False, None))
             break
 
     # Ad-hoc loads (MSPI variants, HumanaRx) — surface only when there's
@@ -3186,7 +3189,10 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         d = ah["day"]
         if d.year != year or d.month != month:
             continue
-        weekly[d].append((ah["label"], ah["marker"], ah["alert"], None, None))
+        # Aetna MSPI moves to the daily section (sorted in); other ad-hoc loads
+        # (HumanaRx) stay in the weekly section. Per user 2026-06-16.
+        target_bucket = daily if "MSPI" in ah["label"] else weekly
+        target_bucket[d].append((ah["label"], ah["marker"], ah["alert"], None, None))
 
     # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month
     # surfaces on the first Tuesday of each month. Per user 2026-06-03.
@@ -3372,6 +3378,25 @@ def _blank_separator_row(ws, cur_row):
     return cur_row + 1
 
 
+# Small section-indicator band (Daily / Weekly / Monthly), per user 2026-06-16.
+SECTION_LABEL_FILL = PatternFill("solid", fgColor="E8EDF3")
+SECTION_LABEL_FONT = Font(name="Segoe UI", bold=True, size=8, color="2C5F8A")
+
+
+def _section_label_row(ws, cur_row, text):
+    """Write a thin labeled band spanning all 10 columns as a section header."""
+    for i in range(10):
+        c = ws.cell(row=cur_row, column=i + 1, value=None)
+        c.fill = SECTION_LABEL_FILL
+        c.border = Border()
+    c0 = ws.cell(row=cur_row, column=1, value=text)
+    c0.font = SECTION_LABEL_FONT
+    c0.alignment = Alignment(horizontal="left", vertical="center")
+    ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=10)
+    ws.row_dimensions[cur_row].height = 13
+    return cur_row + 1
+
+
 def write_weekly_stacked(ws, year, month, sections, weeks, today):
     holidays = us_federal_holidays(year)
     cur_row = 1
@@ -3423,14 +3448,21 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
                     hc.border = BORDER
         cur_row += 1
 
-        # Daily → blank → Weekly → blank → Monthly → blank → KaiserPrePayCOB
+        # Daily → Weekly → Monthly, each under a small section-label band.
+        # (KaiserPrePayCOB now lives in the Daily section; the `kaiser` bucket is
+        # only populated for historical snapshot months and is rendered, label-
+        # free, after Monthly when present.)
+        cur_row = _section_label_row(ws, cur_row, "Daily")
         cur_row = _write_section_rows(ws, cur_row, wk, sections["daily"])
         cur_row = _blank_separator_row(ws, cur_row)
+        cur_row = _section_label_row(ws, cur_row, "Weekly")
         cur_row = _write_section_rows(ws, cur_row, wk, sections["weekly"])
         cur_row = _blank_separator_row(ws, cur_row)
+        cur_row = _section_label_row(ws, cur_row, "Monthly")
         cur_row = _write_section_rows(ws, cur_row, wk, sections["monthly"])
-        cur_row = _blank_separator_row(ws, cur_row)
-        cur_row = _write_section_rows(ws, cur_row, wk, sections["kaiser"])
+        if any(sections["kaiser"].get(d) for d in wk if d):
+            cur_row = _blank_separator_row(ws, cur_row)
+            cur_row = _write_section_rows(ws, cur_row, wk, sections["kaiser"])
 
         # per-week key block
         ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=10)
@@ -4044,12 +4076,16 @@ def _render_week_card_html(wk, week_no, sections, today, holidays):
             f'<td class="strip-name{hname_cls}">{_html_escape(hname)}</td>'
             f'<td class="strip-date{is_today}">{date_str}</td>')
 
+    sec_labels = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly"}
     sec_html_parts = []
     for sec_key in ("daily", "weekly", "monthly", "kaiser"):
         body = _render_section_rows_html(wk, sections[sec_key], today)
         if body:
+            lbl = sec_labels.get(sec_key)
+            label_row = (f'<tr class="sec-label"><td colspan="10">{lbl}</td></tr>'
+                         if lbl else "")
             sec_html_parts.append(
-                f'<tbody class="sec sec-{sec_key}">{body}</tbody>'
+                f'<tbody class="sec sec-{sec_key}">{label_row}{body}</tbody>'
                 '<tbody class="sec-gap"><tr><td colspan="10"></td></tr></tbody>'
             )
 
@@ -4205,6 +4241,7 @@ td.hl-yellow { background: var(--yellow); color: var(--yellow-dark); font-weight
 .hl-bold { font-weight: 700; }
 td.marker.link a { color: var(--alert-dark); font-weight: 700; text-decoration: underline; }
 .sec-gap td { background: #fff; border: 0; height: 4px; padding: 0; }
+.sec-label td { background: #E8EDF3; color: #2C5F8A; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 6px; border: 0; }
 .key {
   font-style: italic; font-size: 11px; color: #555;
   margin: 4px 0 12px;

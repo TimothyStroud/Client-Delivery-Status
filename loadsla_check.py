@@ -38,25 +38,17 @@ WEEKLY_JOBS = [
     {'key': 'wellmark',         'name': 'Wellmark 0210 Claims Load',         'jobid': 2097, 'sla_days': 5},
 ]
 
-# Optum sending is gated OFF until the RAW1/2/3 definition is confirmed:
-# historically only RAW1 ever appears on disk, so "require all 3" would report
-# FAILED SLA every cycle. Status-only logging still runs. Flip to True once
-# the RAW mapping is settled.
-OPTUM_ENABLED = False
+OPTUM_ENABLED = True
 
+# RAW1/2/3 are confirmed/loaded via the OptumPBMRx.etl.Tape table on TRGETL3
+# (the persistent load record; raw files age off disk). A row with
+# ProcessStatus=50 and non-null FileLoadDate = successfully loaded.
 OPTUM = {
     'key': 'optum_pbm',
     'load_name': 'Optum 0110 PBM Load',  'load_jobid': 1844,
     'snap_name': 'Optum 0200 PBM Start Snap', 'snap_jobid': 1950,
     'raw_labels': ['RAW1', 'RAW2', 'RAW3'],
-    'raw_dirs': [
-        r'\\etl3\Clients\OptumPBMRx\Eligibility\Raw',
-        r'\\etl3\Clients\OptumPBMRx\Eligibility\RawRecLen600',
-        r'\\etl3\Clients\OptumPBMRx\Eligibility\RawRecLen608',
-        r'\\etl3\Clients\OptumPBMRx\Eligibility\Raw\Loaded',
-        r'\\etl3\Clients\OptumPBMRx\Eligibility\Raw\SafetyCopy',
-        r'\\etl3\Clients\OptumPBMRx\Eligibility\Archive',
-    ],
+    'sql_server': 'TRGETL3', 'sql_db': 'OptumPBMRx',
 }
 
 GREEN = '#1a7f37'
@@ -143,23 +135,25 @@ Weekly client &middot; {job['sla_days']}-day SLA from load start &middot; Source
 
 
 def optum_raw_status(cycle_date):
-    """Return {label: present_bool} for RAW1/2/3 dated the cycle (MMDDYYYY)."""
+    """Return ({label: loaded_bool}, tag) for RAW1/2/3 of the cycle (MMDDYYYY),
+    read from OptumPBMRx.etl.Tape on TRGETL3 (successfully-loaded files only)."""
     tag = cycle_date.strftime('%m%d%Y')
     found = {lbl: False for lbl in OPTUM['raw_labels']}
-    for d in OPTUM['raw_dirs']:
-        try:
-            entries = os.listdir(d)
-        except OSError:
-            continue
-        for fn in entries:
-            up = fn.upper()
-            for lbl in OPTUM['raw_labels']:
-                if up.startswith(lbl + '_') and tag in fn:
-                    found[lbl] = True
-    return found
+    query = ("SET NOCOUNT ON; SELECT FileName FROM etl.Tape "
+             "WHERE FileName LIKE '%RAW[123][_]%' AND FileName NOT LIKE '%RAWLINGS%' "
+             "AND ProcessStatus=50 AND FileLoadDate IS NOT NULL;")
+    out = subprocess.run(
+        ['sqlcmd', '-S', OPTUM['sql_server'], '-d', OPTUM['sql_db'], '-E', '-W', '-h', '-1', '-Q', query],
+        capture_output=True, text=True)
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        for lbl in OPTUM['raw_labels']:
+            if (lbl + '_' + tag) in line:
+                found[lbl] = True
+    return found, tag
 
 
-def optum_email(load_run, snap_run, raw_found):
+def optum_email(load_run, snap_run, raw_found, tag=''):
     ls, le = parse_dt(load_run.get('StartDate')), parse_dt(load_run.get('EndDate'))
     ss, se = parse_dt(snap_run.get('StartDate')), parse_dt(snap_run.get('EndDate'))
     lstatus = load_run.get('Status', ''); sstatus = snap_run.get('Status', '')
@@ -189,7 +183,7 @@ Monthly client (first Friday) &middot; Success = RAW1/2/3 loaded + Snap complete
 
 <p style="color:{color};font-weight:bold;font-size:16px">{verdict}</p>
 
-<p style="font-weight:bold;margin-bottom:4px">RAW files</p>
+<p style="font-weight:bold;margin-bottom:4px">RAW files (cycle {tag}, via OptumPBMRx.etl.Tape)</p>
 <table style="border-collapse:collapse;font-size:13px">
 <tr style="background:#f0f0f0"><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Raw</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Status</th></tr>
 {raw_rows}
@@ -240,8 +234,11 @@ def main():
     if lrun and srun:
         lqid = lrun.get('QueueId'); lend = lrun.get('EndDate'); send_end = srun.get('EndDate')
         cycle = parse_dt(lrun.get('StartDate'))
-        raw_found = optum_raw_status(cycle) if cycle else {l: False for l in OPTUM['raw_labels']}
-        print(f"[optum_pbm] LoadQ={lqid} LoadEnd={lend} SnapEnd={send_end} RAW={raw_found}")
+        if cycle:
+            raw_found, tag = optum_raw_status(cycle)
+        else:
+            raw_found, tag = {l: False for l in OPTUM['raw_labels']}, '?'
+        print(f"[optum_pbm] LoadQ={lqid} LoadEnd={lend} SnapEnd={send_end} tag={tag} RAW={raw_found}")
         complete = bool(lend and send_end)
         already = state.get(OPTUM['key'], {}).get('last_qid') == lqid
         if not status_only and not OPTUM_ENABLED:
@@ -252,7 +249,7 @@ def main():
             elif already and not force:
                 print("   already reported -- skip")
             else:
-                subj, body, ok = optum_email(lrun, srun, raw_found)
+                subj, body, ok = optum_email(lrun, srun, raw_found, tag)
                 res = send(to=TO_ADDR, subject=subj, body=body, from_address=FROM_ADDR)
                 print(f"   send -> {res} | {subj}")
                 if res == 'Sent.':
