@@ -1,0 +1,10 @@
+Load start (anchor): 2026-06-16 08:21:41.077000
+SLA deadline:        2026-06-19 08:21:41.077000
+Response files found: 4/5
+  [-- ] RESP_RWGS_CEE_FF_*  
+  [OK ] RESP_EH_RAWLINGS_GPPO_MEMELIG_FA_FM01_PROD_*  2026-06-16 13:07
+  [OK ] RESP_CCI_RAWLINGS_MULTI_MEMELIG_FA_FM01_PROD_*  2026-06-16 12:02
+  [OK ] RESP_CCI_RAWLINGS_CCOMM_EMPGRP_FA_FM01_PROD_*  2026-06-16 08:36
+  [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-06-16 08:37
+Now:                 2026-06-16 14:00:01.682608  (before deadline)
+Not all 5 uploaded yet, still within SLA -- no email (waiting).

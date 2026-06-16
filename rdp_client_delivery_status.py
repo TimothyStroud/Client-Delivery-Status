@@ -3181,14 +3181,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     # no need to surface Saturday/Sunday loads anymore.)
 
     # Ad-hoc loads (per user 2026-06-16):
-    #  - "Aetna MSPI"  → persistent DAILY row (every weekday).
-    #  - "BCBSNC MSPI" → persistent WEEKLY-section row (every weekday).
-    #    Both show ✓/L/Load Failure on days they ran and "-" on no-load days.
-    #  - other MSPI loads (Aetna QNXT MSPI, etc.) and HumanaRx stay ad-hoc in
-    #    weekly (surface only on the day they run).
+    #  - "Aetna MSPI" → persistent DAILY row (every weekday): ✓/L/Load Failure on
+    #    load days, "-" on no-load weekdays.
+    #  - "BCBSNC MSPI" + all other ad-hoc (Aetna QNXT MSPI, HumanaRx) → surface
+    #    in the weekly section only on the day they run. BCBSNC MSPI has no fixed
+    #    loading cycle yet, so it's NOT a persistent row (per user 2026-06-16).
     since_adhoc = date(year, month, 1) - timedelta(days=14)
     aetna_mspi_by_day = {}
-    bcbsnc_mspi_by_day = {}
     for ah in scan_adhoc_loads(ramp_queue, ramp_jobs, today, since_adhoc,
                                weekend_shift=False):
         d = ah["day"]
@@ -3196,22 +3195,18 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             continue
         if ah["label"] == "Aetna MSPI":
             aetna_mspi_by_day[d] = (ah["marker"], ah["alert"])
-        elif ah["label"] == "BCBSNC MSPI":
-            bcbsnc_mspi_by_day[d] = (ah["marker"], ah["alert"])
         else:
-            # Remaining ad-hoc (Aetna QNXT MSPI, HumanaRx) surface on a weekday.
+            # Surface on a weekday (shift weekend-start loads).
             if d.weekday() == 5:
                 d -= timedelta(days=1)
             elif d.weekday() == 6:
                 d += timedelta(days=1)
             weekly[d].append((ah["label"], ah["marker"], ah["alert"], None, None))
-    # Persistent rows every weekday — weekday-only maps (weekend-start loads land
-    # on weekend keys that all_days never reads), "-" when no load that weekday.
+    # Persistent Aetna MSPI daily row — "-" on no-load weekdays. (Weekend-start
+    # loads land on weekend keys that all_days never reads.)
     for d in all_days:
         mk, al = aetna_mspi_by_day.get(d, ("-", False))
         daily[d].append(("Aetna MSPI", mk, al, None, None))
-        mk, al = bcbsnc_mspi_by_day.get(d, ("-", False))
-        weekly[d].append(("BCBSNC MSPI", mk, al, None, None))
 
     # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month
     # surfaces on the first Tuesday of each month. Per user 2026-06-03.
