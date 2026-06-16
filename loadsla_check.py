@@ -1,0 +1,268 @@
+"""
+Load-Completion SLA monitor (RAMP) -> email from DataOperations to RDPOperations.
+
+Reports Success / Failed SLA when a monitored RAMP load job COMPLETES.
+
+Weekly clients (5-day SLA, measured from the load's own start):
+    Caresource 0200 Load            (JobId 5003)
+    HealthSpring_FWA 0110 Claims Load (JobId 1814)
+    Wellmark 0210 Claims Load       (JobId 2097)
+  -> SLA met if the latest run is Successful AND finished within 5 days of its
+     start. Failed status, or duration > 5 days, = Failed SLA.
+
+Monthly client (Optum 0110 PBM Load, first Friday):
+    Load  (JobId 1844) + Snap (Optum 0200 PBM Start Snap, JobId 1950)
+  -> Success requires: all 3 RAW files (RAW1/RAW2/RAW3) for the cycle present,
+     AND both Load and Snap Successful.  [NOTE: only RAW1 has ever appeared on
+     disk historically -- pending confirmation of what RAW2/RAW3 map to.]
+
+Data source: RAMP /api/Ramp/Job/List (includes LatestJobRun per job).
+Sends each completed run exactly once (state file keyed on QueueId / cycle).
+
+Flags: --status (print, no send), --force (ignore state).
+"""
+import sys, os, json, subprocess
+from datetime import datetime, timedelta
+
+BASE = r'C:\Users\tls2\.claude\projects\H--'
+sys.path.insert(0, BASE)
+from send_via_outlook import send
+
+STATE_FILE = os.path.join(BASE, 'loadsla_state.json')
+FROM_ADDR = 'DataOperations@machinify.com'
+TO_ADDR   = 'RDPOperations@machinify.com'
+
+WEEKLY_JOBS = [
+    {'key': 'caresource',       'name': 'Caresource 0200 Load',             'jobid': 5003, 'sla_days': 5},
+    {'key': 'healthspring_fwa', 'name': 'HealthSpring_FWA 0110 Claims Load', 'jobid': 1814, 'sla_days': 5},
+    {'key': 'wellmark',         'name': 'Wellmark 0210 Claims Load',         'jobid': 2097, 'sla_days': 5},
+]
+
+# Optum sending is gated OFF until the RAW1/2/3 definition is confirmed:
+# historically only RAW1 ever appears on disk, so "require all 3" would report
+# FAILED SLA every cycle. Status-only logging still runs. Flip to True once
+# the RAW mapping is settled.
+OPTUM_ENABLED = False
+
+OPTUM = {
+    'key': 'optum_pbm',
+    'load_name': 'Optum 0110 PBM Load',  'load_jobid': 1844,
+    'snap_name': 'Optum 0200 PBM Start Snap', 'snap_jobid': 1950,
+    'raw_labels': ['RAW1', 'RAW2', 'RAW3'],
+    'raw_dirs': [
+        r'\\etl3\Clients\OptumPBMRx\Eligibility\Raw',
+        r'\\etl3\Clients\OptumPBMRx\Eligibility\RawRecLen600',
+        r'\\etl3\Clients\OptumPBMRx\Eligibility\RawRecLen608',
+        r'\\etl3\Clients\OptumPBMRx\Eligibility\Raw\Loaded',
+        r'\\etl3\Clients\OptumPBMRx\Eligibility\Raw\SafetyCopy',
+        r'\\etl3\Clients\OptumPBMRx\Eligibility\Archive',
+    ],
+}
+
+GREEN = '#1a7f37'
+RED   = '#c00000'
+
+
+def load_jobruns():
+    """Return {jobid: LatestJobRun dict} from RAMP Job/List."""
+    out = subprocess.run(
+        ['curl', '-s', '--ntlm', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
+        capture_output=True, text=True)
+    data = json.loads(out.stdout)
+    d = data['Data']
+    jobs = d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else d
+    runs = {}
+    for j in jobs:
+        runs[j['JobId']] = j.get('LatestJobRun')
+    return runs
+
+
+def parse_dt(s):
+    return datetime.fromisoformat(s) if s else None
+
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            return json.load(open(STATE_FILE))
+        except Exception:
+            return {}
+    return {}
+
+
+def save_state(state):
+    json.dump(state, open(STATE_FILE, 'w'), indent=2)
+
+
+def fmt(dt):
+    return dt.strftime('%m/%d/%Y %I:%M %p') if dt else '&mdash;'
+
+
+def fmt_dur(start, end):
+    if not (start and end):
+        return '&mdash;'
+    secs = (end - start).total_seconds()
+    h = int(secs // 3600); m = int((secs % 3600) // 60)
+    return f'{h}h {m}m'
+
+
+def weekly_email(job, run):
+    start = parse_dt(run.get('StartDate'))
+    end   = parse_dt(run.get('EndDate'))
+    status = run.get('Status', '')
+    sla = timedelta(days=job['sla_days'])
+    within = (end - start) <= sla if (start and end) else False
+    ok = (status == 'Successful') and within
+    color = GREEN if ok else RED
+    verdict = 'SUCCESS - Within SLA' if ok else 'FAILED SLA'
+    reason = ''
+    if not ok:
+        if status != 'Successful':
+            reason = f' (load status: {status})'
+        elif not within:
+            reason = f' (exceeded {job["sla_days"]}-day SLA)'
+
+    body = f"""<html><body style="font-family:Calibri,Arial,sans-serif;font-size:14px;color:#222">
+<p><b>SLA Update &ndash; {job['name']}</b><br>
+Weekly client &middot; {job['sla_days']}-day SLA from load start &middot; Source: RAMP Dashboard</p>
+
+<p style="color:{color};font-weight:bold;font-size:16px">{verdict}{reason}</p>
+
+<table style="border-collapse:collapse;font-size:13px">
+<tr><td style="padding:5px 10px;border:1px solid #ddd;background:#f0f0f0"><b>Load Job</b></td><td style="padding:5px 10px;border:1px solid #ddd">{job['name']}</td></tr>
+<tr><td style="padding:5px 10px;border:1px solid #ddd;background:#f0f0f0"><b>Status</b></td><td style="padding:5px 10px;border:1px solid #ddd;color:{color};font-weight:bold">{status}</td></tr>
+<tr><td style="padding:5px 10px;border:1px solid #ddd;background:#f0f0f0"><b>Started</b></td><td style="padding:5px 10px;border:1px solid #ddd">{fmt(start)}</td></tr>
+<tr><td style="padding:5px 10px;border:1px solid #ddd;background:#f0f0f0"><b>Completed</b></td><td style="padding:5px 10px;border:1px solid #ddd">{fmt(end)}</td></tr>
+<tr><td style="padding:5px 10px;border:1px solid #ddd;background:#f0f0f0"><b>Duration</b></td><td style="padding:5px 10px;border:1px solid #ddd">{fmt_dur(start, end)}</td></tr>
+<tr><td style="padding:5px 10px;border:1px solid #ddd;background:#f0f0f0"><b>SLA</b></td><td style="padding:5px 10px;border:1px solid #ddd">{job['sla_days']} days from load start</td></tr>
+</table>
+<p style="color:#999;font-size:11px">Automated load-completion SLA update generated from RAMP.</p>
+</body></html>"""
+    subj = f"SLA Update - {job['name']} - {'SUCCESS' if ok else 'FAILED SLA'}"
+    return subj, body, ok
+
+
+def optum_raw_status(cycle_date):
+    """Return {label: present_bool} for RAW1/2/3 dated the cycle (MMDDYYYY)."""
+    tag = cycle_date.strftime('%m%d%Y')
+    found = {lbl: False for lbl in OPTUM['raw_labels']}
+    for d in OPTUM['raw_dirs']:
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            continue
+        for fn in entries:
+            up = fn.upper()
+            for lbl in OPTUM['raw_labels']:
+                if up.startswith(lbl + '_') and tag in fn:
+                    found[lbl] = True
+    return found
+
+
+def optum_email(load_run, snap_run, raw_found):
+    ls, le = parse_dt(load_run.get('StartDate')), parse_dt(load_run.get('EndDate'))
+    ss, se = parse_dt(snap_run.get('StartDate')), parse_dt(snap_run.get('EndDate'))
+    lstatus = load_run.get('Status', ''); sstatus = snap_run.get('Status', '')
+    all_raw = all(raw_found.values())
+    ok = (lstatus == 'Successful') and (sstatus == 'Successful') and all_raw
+    color = GREEN if ok else RED
+    verdict = 'SUCCESS - Within SLA' if ok else 'FAILED SLA'
+
+    raw_rows = ""
+    for lbl in OPTUM['raw_labels']:
+        present = raw_found[lbl]
+        c = GREEN if present else RED
+        raw_rows += (f'<tr><td style="padding:5px 10px;border:1px solid #ddd">{lbl}</td>'
+                     f'<td style="padding:5px 10px;border:1px solid #ddd;color:{c};font-weight:bold">'
+                     f'{"Present" if present else "MISSING"}</td></tr>')
+
+    def jrow(label, status, s, e):
+        c = GREEN if status == 'Successful' else RED
+        return (f'<tr><td style="padding:5px 10px;border:1px solid #ddd">{label}</td>'
+                f'<td style="padding:5px 10px;border:1px solid #ddd;color:{c};font-weight:bold">{status}</td>'
+                f'<td style="padding:5px 10px;border:1px solid #ddd">{fmt(s)}</td>'
+                f'<td style="padding:5px 10px;border:1px solid #ddd">{fmt(e)}</td></tr>')
+
+    body = f"""<html><body style="font-family:Calibri,Arial,sans-serif;font-size:14px;color:#222">
+<p><b>SLA Update &ndash; {OPTUM['load_name']}</b><br>
+Monthly client (first Friday) &middot; Success = RAW1/2/3 loaded + Snap complete &middot; Source: RAMP Dashboard</p>
+
+<p style="color:{color};font-weight:bold;font-size:16px">{verdict}</p>
+
+<p style="font-weight:bold;margin-bottom:4px">RAW files</p>
+<table style="border-collapse:collapse;font-size:13px">
+<tr style="background:#f0f0f0"><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Raw</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Status</th></tr>
+{raw_rows}
+</table>
+
+<p style="font-weight:bold;margin:12px 0 4px">Load &amp; Snap</p>
+<table style="border-collapse:collapse;font-size:13px">
+<tr style="background:#f0f0f0"><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Job</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Status</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Started</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Completed</th></tr>
+{jrow(OPTUM['load_name'], lstatus, ls, le)}
+{jrow(OPTUM['snap_name'], sstatus, ss, se)}
+</table>
+<p style="color:#999;font-size:11px">Automated load-completion SLA update generated from RAMP.</p>
+</body></html>"""
+    subj = f"SLA Update - {OPTUM['load_name']} ({le.strftime('%B %Y') if le else ''}) - {'SUCCESS' if ok else 'FAILED SLA'}"
+    return subj, body, ok
+
+
+def main():
+    status_only = '--status' in sys.argv
+    force = '--force' in sys.argv
+    runs = load_jobruns()
+    state = load_state()
+    sent_any = False
+
+    # ---- Weekly jobs ----
+    for job in WEEKLY_JOBS:
+        run = runs.get(job['jobid'])
+        if not run:
+            print(f"[{job['key']}] no run data"); continue
+        qid = run.get('QueueId'); status = run.get('Status'); end = run.get('EndDate')
+        print(f"[{job['key']}] QueueId={qid} Status={status} End={end}")
+        if not end:
+            print("   still running / not complete -- skip"); continue
+        already = state.get(job['key'], {}).get('last_qid') == qid
+        if status_only:
+            continue
+        if already and not force:
+            print("   already reported -- skip"); continue
+        subj, body, ok = weekly_email(job, run)
+        res = send(to=TO_ADDR, subject=subj, body=body, from_address=FROM_ADDR)
+        print(f"   send -> {res} | {subj}")
+        if res == 'Sent.':
+            state.setdefault(job['key'], {})['last_qid'] = qid
+            sent_any = True
+
+    # ---- Optum monthly ----
+    lrun = runs.get(OPTUM['load_jobid']); srun = runs.get(OPTUM['snap_jobid'])
+    if lrun and srun:
+        lqid = lrun.get('QueueId'); lend = lrun.get('EndDate'); send_end = srun.get('EndDate')
+        cycle = parse_dt(lrun.get('StartDate'))
+        raw_found = optum_raw_status(cycle) if cycle else {l: False for l in OPTUM['raw_labels']}
+        print(f"[optum_pbm] LoadQ={lqid} LoadEnd={lend} SnapEnd={send_end} RAW={raw_found}")
+        complete = bool(lend and send_end)
+        already = state.get(OPTUM['key'], {}).get('last_qid') == lqid
+        if not status_only and not OPTUM_ENABLED:
+            print("   OPTUM_ENABLED=False -- not sending (pending RAW1/2/3 confirmation)")
+        elif not status_only:
+            if not complete:
+                print("   load/snap not both complete -- skip")
+            elif already and not force:
+                print("   already reported -- skip")
+            else:
+                subj, body, ok = optum_email(lrun, srun, raw_found)
+                res = send(to=TO_ADDR, subject=subj, body=body, from_address=FROM_ADDR)
+                print(f"   send -> {res} | {subj}")
+                if res == 'Sent.':
+                    state.setdefault(OPTUM['key'], {})['last_qid'] = lqid
+                    sent_any = True
+
+    if not status_only and sent_any:
+        save_state(state)
+        print("State saved.")
+
+
+if __name__ == '__main__':
+    main()

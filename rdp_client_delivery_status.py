@@ -89,6 +89,11 @@ CLIENT_ALIASES = {
     # "jhhcpassfileemail" (no digit code in the name). Distinct from
     # JohnsHopkins ('JHHC Medical 0110 Load'). Per user 2026-06-08.
     "JHHCPassfile":         ["jhhcpassfileemail"],
+    # ElevanceMMMRx (daily): RAMP jobs are 'ElevanceMMMRx Masterload 0110 Load' /
+    # '0120 Snap'. build_snap_index strips the trailing "load" off "Masterload",
+    # so the snap-index key is "elevancemmmrxmaster" — alias it so snap_on_day's
+    # strict-equality match fires for ✓. Per user 2026-06-16: daily ✓ on load+snap.
+    "ElevanceMMMRx":        ["elevancemmmrxmaster"],
     "BCBSNorthCarolinaFEP": ["bcbsncfep"],
     # NCStateAetna's daily load runs through 'Aetna RCE 310 ETL Load' (Feed
     # "RCE Medical" → key "aetnarce" after stripping). Include aetnarce alias
@@ -256,7 +261,7 @@ CLIENT_ALIASES = {
 # Daily clients (load + snap every weekday; cert cadence varies).
 # Rendered at top of each week, alphabetical. KaiserPrePayCOB is also daily but
 # is rendered separately at the bottom of each week per user preference.
-DAILY_CLIENTS = ["AetnaHRP", "AetnaRCE", "AetnaRx", "NCStateAetna"]
+DAILY_CLIENTS = ["AetnaHRP", "AetnaRCE", "AetnaRx", "ElevanceMMMRx", "NCStateAetna"]
 KAISER_PREPAY_CLIENT = "KaiserPrePayCOB"  # rendered last in each week
 
 # Weekly clients keyed by canonical name -> list of weekday names they deliver on.
@@ -378,6 +383,11 @@ LOAD_NAME_REQUIRED = {
     # "Cigna RX COBC 0110 Load" (the "COBC" between "RX" and "0110" breaks
     # the substring).
     "CignaRx":           ("rx 0110 load",),
+    # ElevanceMMMRx (daily): only the Masterload load + snap steps signal
+    # delivery. Excludes the ancillary 'ElevanceMMMRx COBC 0110 Load' (and the
+    # 0100 Stage / 0130 Post Snap) from both is_loading_today and the ✓ lookup.
+    # Per user 2026-06-16.
+    "ElevanceMMMRx":     ("masterload 0110 load", "masterload 0120 snap"),
     # WellCareRx: narrowed to the Masterload Load step 2026-06-08 (was
     # "masterload","claim") so 'WellCareRx Masterload 0100 Stage' no longer
     # trips L via the snap-index activity path. Delivery = Masterload 0110 Load.
@@ -876,6 +886,9 @@ IMPLEMENTATION_CLIENTS = {}
 # Per user 2026-06-08: BCBSAR — blank all dates before this week (Mon 6/8/26).
 BLANK_BEFORE = {
     "BCBSAR": date(2026, 6, 8),
+    # ElevanceMMMRx — only show June 2026 forward (per user 2026-06-16); earlier
+    # cells were implementation-phase noise.
+    "ElevanceMMMRx": date(2026, 6, 1),
 }
 
 # Clients whose "is delivered" signal is exclusively from TRGETL3 tape loads.
@@ -964,12 +977,11 @@ L_ON_LOAD_ONLY_CLIENTS = {
 # load pipeline is running for implementation/testing. Cell behavior:
 #   - currently loading → "L"
 #   - load+snap finished → blank (NOT a ✓, NOT a cert date)
-# Per user 2026-06-03 for ElevanceMMMRx. New auto-discovered MasterLoad
-# implementations that are NOT PBMRx default into this set; promote out of
-# it once the client is being actively delivered.
-IMPLEMENTATION_LOAD_ONLY_CLIENTS = {
-    "ElevanceMMMRx",
-}
+# New auto-discovered MasterLoad implementations that are NOT PBMRx default
+# into this set; promote out of it once the client is being actively delivered.
+# (ElevanceMMMRx promoted out 2026-06-16 — now a DAILY_CLIENTS client with ✓ on
+# load+snap days; see DAILY_CLIENTS / CLIENT_ALIASES / LOAD_NAME_REQUIRED.)
+IMPLEMENTATION_LOAD_ONLY_CLIENTS = set()
 
 # Override the auto-derived primary key for clients whose name is a substring
 # of another client's name (causing spurious substring matches in
@@ -2901,6 +2913,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     # daily clients on every weekday (alphabetical)
     for d in all_days:
         for c in sorted(DAILY_CLIENTS):
+            # Blank-before clients: skip cells before their go-live cutoff
+            # (e.g. ElevanceMMMRx shows June 2026 forward only).
+            bb = BLANK_BEFORE.get(c)
+            if bb and d < bb:
+                continue
             place(daily, "daily", c, d)
 
     # KaiserPrePayCOB at the very bottom of each week (one row, all 5 columns)
@@ -4291,8 +4308,9 @@ def main():
     # and never show a ✓ (no SNAP_ONLY membership). Per user 2026-06-08: "All
     # new 'MasterLoad 0110 Load' will also be in this format." The old
     # PBMRx→SNAP_KIND_ONLY (✓ after snap) and non-PBMRx→IMPLEMENTATION_LOAD_ONLY
-    # (blank after snap) branches were removed. Existing exceptions like
-    # ElevanceMMMRx stay implementation-load-only via the static set.
+    # (blank after snap) branches were removed. (ElevanceMMMRx was promoted to a
+    # DAILY_CLIENTS client 2026-06-16 and is now "known", so it's no longer
+    # rediscovered here.)
     new_impls = find_unconfigured_masterload_clients(jobs)
     if new_impls:
         for entry in new_impls:
