@@ -1023,6 +1023,15 @@ CLIENT_PRIMARY_KEY_OVERRIDE = {
     # only the Medical jobs. Per user 2026-06-12. _keys_for_client still yields
     # base "bcbsar" for the DHT cert lookup.
     "BCBSAR": "bcbsarmedical",
+    # "medica" is a substring of "medical", so find_matching_jobs("Medica")
+    # falsely matched every "*Medical*" load (Centene Medical, WellCare Medical,
+    # BCBSAR Medical, …) — a failed 'WellCare Medical 0110 Load' was showing up
+    # as a "Load Failure" on Medica's cell (per user 2026-06-16: "Medica 0110
+    # Load ran w/o error"). Override to "medica0", which matches Medica's own
+    # step jobs ('Medica 0110 Load' → "medica0110load") but NOT "…medical0…".
+    # _keys_for_client still yields base "medica" for DHT cert / snap-index
+    # lookups (those use strict equality against the "medica" prefix key).
+    "Medica": "medica0",
 }
 
 # NYShip_Rx fires four times per month — on the 1st, 8th, 16th, 24th
