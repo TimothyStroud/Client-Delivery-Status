@@ -488,6 +488,17 @@ MANUAL_OVERRIDES = {
     # 6/2/26 cert date. Remove once DHT flips the 3593 row to Certified (then
     # cert_in_week surfaces it automatically).
     ("CignaFacets",   date(2026, 6, 2)): date(2026, 6, 2),
+    # 2026-06-16: WellCare is loading now and WellCareRx loads are upcoming, but
+    # both are for the 6/12 delivery (running late) — not for this week. Pin "L"
+    # on the 6/12 Friday cells (was "!") and blank the current-week 6/19 cells so
+    # the in-progress load doesn't show as 6/19 activity. Per user: "the next
+    # loads will be for this week (6/19)." TRANSITION: when the 6/12 delivery
+    # certifies, swap these to the cert date (or drop them); when next week's
+    # 6/19 loads start, remove the 6/19 blanks so they reflect real status.
+    ("WellCare",      date(2026, 6, 12)): "L",
+    ("WellCareRx",    date(2026, 6, 12)): "L",
+    ("WellCare",      date(2026, 6, 19)): "",
+    ("WellCareRx",    date(2026, 6, 19)): "",
 }
 
 # ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
