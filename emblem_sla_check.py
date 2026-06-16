@@ -146,6 +146,61 @@ Monthly cycle &middot; {SLA_DAYS}-day SLA measured from <i>Emblem Facets 0110 Lo
     return body, any_missed
 
 
+def build_overdue_body(anchor, deadline, files, now):
+    """Overdue-alert email: deadline passed and not all 5 are uploaded."""
+    missing_n = sum(1 for f in files if not f['found'])
+    rows = ""
+    for f in files:
+        if f['found']:
+            late = f['uploaded'] > deadline
+            color = "#c00000" if late else "#1a7f37"
+            status = "Uploaded LATE" if late else "Uploaded"
+            up = f['uploaded'].strftime('%m/%d/%Y %I:%M %p')
+        else:
+            color = "#c00000"
+            status = "NOT UPLOADED - OVERDUE"
+            up = "&mdash;"
+        rows += (
+            f'<tr style="color:{color};font-weight:bold">'
+            f'<td style="padding:6px 10px;border:1px solid #ddd;font-family:Consolas,monospace;font-size:12px">{f["label"]}</td>'
+            f'<td style="padding:6px 10px;border:1px solid #ddd">{status}</td>'
+            f'<td style="padding:6px 10px;border:1px solid #ddd">{up}</td>'
+            f'</tr>'
+        )
+
+    anchor_s   = anchor.strftime('%m/%d/%Y %I:%M %p')
+    deadline_s = deadline.strftime('%m/%d/%Y %I:%M %p')
+    now_s      = now.strftime('%m/%d/%Y %I:%M %p')
+    overdue_by = now - deadline
+    hrs = int(overdue_by.total_seconds() // 3600)
+
+    body = f"""<html><body style="font-family:Calibri,Arial,sans-serif;font-size:14px;color:#222">
+<p><b>SLA Update &ndash; EmblemFacets Response Files</b><br>
+Monthly cycle &middot; {SLA_DAYS}-day SLA measured from <i>Emblem Facets 0110 Load</i> start &middot; Source: RAMP Dashboard</p>
+
+<p style="color:#c00000;font-weight:bold;font-size:15px">&#9888; SLA BREACH &ndash; {missing_n} of 5 response files NOT uploaded by the 3-day deadline.</p>
+
+<p><b>Load (SLA clock) started:</b> {anchor_s}<br>
+<b>3-day SLA deadline:</b> {deadline_s}<br>
+<b>As of:</b> {now_s} (overdue by ~{hrs} hours)</p>
+
+<table style="border-collapse:collapse;font-size:13px">
+<tr style="background:#f0f0f0;color:#222;font-weight:bold">
+  <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Response File</th>
+  <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Status</th>
+  <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Uploaded</th>
+</tr>
+{rows}
+</table>
+
+<p style="margin-top:14px"><b>Pipeline:</b> Emblem Facets 0100 Stage &rarr; Emblem Facets 0110 Load &rarr; SFTP Emblem Upload.</p>
+<p style="color:#666;font-size:12px">Outstanding files have not reached
+{ARCHIVE}. A final confirmation will follow once all 5 upload.</p>
+<p style="color:#999;font-size:11px">Automated SLA alert generated from RAMP.</p>
+</body></html>"""
+    return body
+
+
 def main():
     status_only = '--status' in sys.argv
     force = '--force' in sys.argv
@@ -175,15 +230,36 @@ def main():
         late = " (LATE)" if (f['found'] and f['uploaded'] > deadline) else ""
         print(f"  [{mark}] {f['label']}  {when}{late}")
 
+    now = datetime.now()
+    print(f"Now:                 {now}  ({'PAST deadline' if now > deadline else 'before deadline'})")
+
     if status_only:
         return
 
+    # --- Incomplete cycle ---
     if found_n < 5:
-        print("Not all 5 uploaded yet -- no email sent (waiting for completion).")
+        if now <= deadline:
+            print("Not all 5 uploaded yet, still within SLA -- no email (waiting).")
+            return
+        # Past deadline and incomplete -> overdue alert, at most once per calendar day.
+        overdue_key = f"{cycle_key}|{now.strftime('%Y-%m-%d')}"
+        if state.get('overdue_last_key') == overdue_key and not force:
+            print("Overdue alert already sent today for this cycle. Skipping.")
+            return
+        body = build_overdue_body(anchor, deadline, files, now)
+        month = anchor.strftime('%B %Y')
+        subject = f"SLA Update - EmblemFacets Response Files ({month}) - SLA BREACH ({5 - found_n} of 5 outstanding)"
+        result = send(to=TO_ADDR, subject=subject, body=body, from_address=FROM_ADDR)
+        print(f"Overdue alert send result: {result}")
+        if result == 'Sent.':
+            state['overdue_last_key'] = overdue_key
+            json.dump(state, open(STATE_FILE, 'w'))
+            print("Overdue alert recorded.")
         return
 
+    # --- Complete cycle (all 5 uploaded) ---
     if state.get('last_sent_cycle') == cycle_key and not force:
-        print("Report already sent for this cycle. Use --force to resend.")
+        print("Completion report already sent for this cycle. Use --force to resend.")
         return
 
     body, any_missed = build_body(anchor, deadline, files)
