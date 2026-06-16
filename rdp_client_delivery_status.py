@@ -259,10 +259,32 @@ CLIENT_ALIASES = {
 
 # --------- canonical client lists (from the manual ExpectedClientDates sheet) ---------
 # Daily clients (load + snap every weekday; cert cadence varies).
-# Rendered at top of each week, alphabetical. KaiserPrePayCOB is also daily but
-# is rendered separately at the bottom of each week per user preference.
 DAILY_CLIENTS = ["AetnaHRP", "AetnaRCE", "AetnaRx", "ElevanceMMMRx", "NCStateAetna"]
-KAISER_PREPAY_CLIENT = "KaiserPrePayCOB"  # rendered last in each week
+KAISER_PREPAY_CLIENT = "KaiserPrePayCOB"
+
+# Fixed display order for the Daily section (per user 2026-06-16) — NOT
+# alphabetical. Every daily client shows on every weekday (blank or "-" when it
+# didn't load). Matched by label prefix so client suffixes like "(s)"/"(p)"
+# still resolve. "Aetna MSPI" is a persistent daily row; "Kaiser Submission"
+# sits between KaiserPrePayCOB and NCStateAetna.
+DAILY_ORDER = [
+    "Aetna MSPI",
+    "AetnaHRP",
+    "AetnaRCE",
+    "AetnaRx",
+    "ElevanceMMMRx",
+    "KaiserPrePayCOB",
+    "Kaiser Submission",
+    "NCStateAetna",
+]
+
+
+def _daily_order_key(label):
+    """Sort key mapping a daily row label to its fixed-order index."""
+    for idx, name in enumerate(DAILY_ORDER):
+        if label.startswith(name):
+            return idx
+    return len(DAILY_ORDER)
 
 # Weekly clients keyed by canonical name -> list of weekday names they deliver on.
 WEEKLY_CLIENTS = {
@@ -1953,13 +1975,18 @@ def is_loading_today(client, queue, jobs):
     return False
 
 
-def scan_adhoc_loads(queue, jobs, today, since):
+def scan_adhoc_loads(queue, jobs, today, since, weekend_shift=True):
     """Scan RAMP queue for ad-hoc Load jobs that have no fixed schedule on
     the report. Each completed run shows up as a one-off row in the weekly
     section on the day it landed; in-flight runs surface today with 'L'.
 
     Per user 2026-06-04: MSPI Load jobs and HumanaRx Load are ad-hoc — they
     only appear when they actually run. Drop the row when nothing happened.
+
+    Completions are attributed by **Start** date (matching build_snap_index) so
+    a load that begins late and finishes after midnight still counts for the day
+    it ran. `weekend_shift` (default True) surfaces Sat→Fri / Sun→Mon for ad-hoc
+    rows; pass False when the caller wants the true (unshifted) load weekday.
 
     Returns a list of dicts: {"label", "day", "marker", "alert"}.
     """
@@ -1997,7 +2024,7 @@ def scan_adhoc_loads(queue, jobs, today, since):
         label = f"{base} MSPI"
         s_lower = status.lower()
         if s_lower.startswith("success") or s_lower == "resolved":
-            day = (end or start).date()
+            day = start.date()
             marker, alert = "✓", False
             nonfailure_seen.add(label)
         elif s_lower in ("ready", "running"):
@@ -2008,14 +2035,15 @@ def scan_adhoc_loads(queue, jobs, today, since):
             # run exists for the same label.
             if label in nonfailure_seen:
                 continue
-            day = (end or start).date()
+            day = start.date()
             marker, alert = "Load Failure", True
         else:
             continue
-        if day.weekday() == 5:
-            day -= timedelta(days=1)
-        elif day.weekday() == 6:
-            day += timedelta(days=1)
+        if weekend_shift:
+            if day.weekday() == 5:
+                day -= timedelta(days=1)
+            elif day.weekday() == 6:
+                day += timedelta(days=1)
         key = (label, day, marker)
         if key in seen:
             continue
@@ -2268,10 +2296,10 @@ def build_ticket_index(tickets, jobs):
 #                       calendar planning
 # ============================================================
 def display_name(client, monthly=False, extra_suffix=""):
+    # `monthly` no longer prepends an "M - " tag — removed per user 2026-06-16.
     base = CLIENT_DISPLAY_NAME.get(client, client)
     suffix = CLIENT_SUFFIXES.get(client, "")
-    label = f"{base}{suffix}{extra_suffix}"
-    return f"M - {label}" if monthly else label
+    return f"{base}{suffix}{extra_suffix}"
 
 
 def esipbmrx_states_for_week(week_start, week_end, esipbmrx_tape_rows):
@@ -3088,7 +3116,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 extra = " — RAW " + ",".join(str(n) for n in missing) + " pending"
             elif not all_snapped:
                 extra = " — Snap pending"
-        label = f"M - OptumPBMRx {label_suffix}{extra}"
+        label = f"OptumPBMRx {label_suffix}{extra}"
         alert = False
         if marker == "No Data":
             ref_end = date(year, month, min(hi, last_day))
@@ -3136,7 +3164,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             placement = nmsp_day
             marker = "No Data"
             alert = alert_state("AetnaMMSEA", nmsp_day, marker)
-        monthly[placement].append(("M - Aetna NMSP - MMSEA", marker, alert, "bold"))
+        monthly[placement].append(("Aetna NMSP - MMSEA", marker, alert, "bold"))
 
     # (Removed) loading-today extras pass — L is now surfaced on each client's
     # scheduled weekday cell via resolve_marker / determine_monthly directly.
@@ -3149,50 +3177,41 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             continue
         bucket[day].append((label, marker, alert, highlight))
 
-    # KaiserPrePayCOB weekend handling: Saturday loads surface on the prior
-    # Friday with a " (Sat)" suffix; Sunday loads surface on the next Monday
-    # with a " (Sun)" suffix. Per user 2026-05-18.
-    kpp_keys = {k for k in _keys_for_client(KAISER_PREPAY_CLIENT)}
-    kpp_seen = set()   # dedupe by (target_day, suffix)
-    for d in sorted(snap_idx.keys()):
-        if d.year != year or d.month != month:
-            continue
-        if d.weekday() == 5:        # Saturday → previous Friday
-            target = d - timedelta(days=1)
-            suffix = " (Sat)"
-        elif d.weekday() == 6:      # Sunday → next Monday
-            target = d + timedelta(days=1)
-            suffix = " (Sun)"
-        else:
-            continue
-        if target.month != month or target.year != year:
-            continue
-        for entry in snap_idx.get(d, ()):
-            src = entry[0]
-            if src not in kpp_keys:
-                continue
-            key = (target, suffix)
-            if key in kpp_seen:
-                break
-            kpp_seen.add(key)
-            label = f"{display_name(KAISER_PREPAY_CLIENT)}{suffix}"
-            # Daily section now (KaiserPrePayCOB moved out of the kaiser bucket).
-            daily[target].append((label, "✓", False, None))
-            break
+    # (KaiserPrePayCOB Sat/Sun weekend tracking removed 2026-06-16 per user —
+    # no need to surface Saturday/Sunday loads anymore.)
 
-    # Ad-hoc loads (MSPI variants, HumanaRx) — surface only when there's
-    # actual RAMP activity. Per user 2026-06-04: no fixed schedule cell;
-    # just appear with ✓ on completion day, L while in-flight, or
-    # Load Failure on the completion day if status==Failed.
+    # Ad-hoc loads (per user 2026-06-16):
+    #  - "Aetna MSPI"  → persistent DAILY row (every weekday).
+    #  - "BCBSNC MSPI" → persistent WEEKLY-section row (every weekday).
+    #    Both show ✓/L/Load Failure on days they ran and "-" on no-load days.
+    #  - other MSPI loads (Aetna QNXT MSPI, etc.) and HumanaRx stay ad-hoc in
+    #    weekly (surface only on the day they run).
     since_adhoc = date(year, month, 1) - timedelta(days=14)
-    for ah in scan_adhoc_loads(ramp_queue, ramp_jobs, today, since_adhoc):
+    aetna_mspi_by_day = {}
+    bcbsnc_mspi_by_day = {}
+    for ah in scan_adhoc_loads(ramp_queue, ramp_jobs, today, since_adhoc,
+                               weekend_shift=False):
         d = ah["day"]
         if d.year != year or d.month != month:
             continue
-        # Aetna MSPI moves to the daily section (sorted in); other ad-hoc loads
-        # (HumanaRx) stay in the weekly section. Per user 2026-06-16.
-        target_bucket = daily if "MSPI" in ah["label"] else weekly
-        target_bucket[d].append((ah["label"], ah["marker"], ah["alert"], None, None))
+        if ah["label"] == "Aetna MSPI":
+            aetna_mspi_by_day[d] = (ah["marker"], ah["alert"])
+        elif ah["label"] == "BCBSNC MSPI":
+            bcbsnc_mspi_by_day[d] = (ah["marker"], ah["alert"])
+        else:
+            # Remaining ad-hoc (Aetna QNXT MSPI, HumanaRx) surface on a weekday.
+            if d.weekday() == 5:
+                d -= timedelta(days=1)
+            elif d.weekday() == 6:
+                d += timedelta(days=1)
+            weekly[d].append((ah["label"], ah["marker"], ah["alert"], None, None))
+    # Persistent rows every weekday — weekday-only maps (weekend-start loads land
+    # on weekend keys that all_days never reads), "-" when no load that weekday.
+    for d in all_days:
+        mk, al = aetna_mspi_by_day.get(d, ("-", False))
+        daily[d].append(("Aetna MSPI", mk, al, None, None))
+        mk, al = bcbsnc_mspi_by_day.get(d, ("-", False))
+        weekly[d].append(("BCBSNC MSPI", mk, al, None, None))
 
     # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month
     # surfaces on the first Tuesday of each month. Per user 2026-06-03.
@@ -3265,17 +3284,12 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             )
             ka_marker = "L" if (is_loading_today("Kaiser_AmbM", ramp_queue, ramp_jobs)
                                 or ka_loaded) else "No Data"
-            monthly[ka_place].append(("M - Kaiser_AmbM", ka_marker, False, None))
+            monthly[ka_place].append(("Kaiser_AmbM", ka_marker, False, None))
 
-    # Sort each cell alphabetically within each section
-    for bucket in (daily, weekly, monthly, kaiser):
-        for d in bucket:
-            bucket[d].sort(key=lambda r: r[0].lower())
-
-    # Kaiser Submission daily row — appended AFTER the sort so it renders LAST
-    # in the daily section (directly under NCStateAetna), per user 2026-06-09.
-    # ✓ when both 'Kaiser Pareo Submission Logfile' AND '...Upload' finished
-    # that day; 'L' on today while in progress; blank otherwise.
+    # Kaiser Submission daily row — ✓ when both 'Kaiser Pareo Submission Logfile'
+    # AND '...Upload' finished that day; 'L' on today while in progress; blank
+    # otherwise. Placed before the sort so DAILY_ORDER positions it (between
+    # KaiserPrePayCOB and NCStateAetna).
     ks_done, ks_running = scan_kaiser_submission(
         ramp_queue, ramp_jobs, today, date(year, month, 1) - timedelta(days=14))
     for d in all_days:
@@ -3286,6 +3300,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         else:
             mk = ""
         daily[d].append(("Kaiser Submission", mk, False, None, None))
+
+    # Sort: Daily by the fixed DAILY_ORDER; Weekly/Monthly/Kaiser alphabetical.
+    for d in daily:
+        daily[d].sort(key=lambda r: _daily_order_key(r[0]))
+    for bucket in (weekly, monthly, kaiser):
+        for d in bucket:
+            bucket[d].sort(key=lambda r: r[0].lower())
 
     return {"daily": daily, "weekly": weekly, "monthly": monthly, "kaiser": kaiser}, weeks
 
@@ -3378,25 +3399,6 @@ def _blank_separator_row(ws, cur_row):
     return cur_row + 1
 
 
-# Small section-indicator band (Daily / Weekly / Monthly), per user 2026-06-16.
-SECTION_LABEL_FILL = PatternFill("solid", fgColor="E8EDF3")
-SECTION_LABEL_FONT = Font(name="Segoe UI", bold=True, size=8, color="2C5F8A")
-
-
-def _section_label_row(ws, cur_row, text):
-    """Write a thin labeled band spanning all 10 columns as a section header."""
-    for i in range(10):
-        c = ws.cell(row=cur_row, column=i + 1, value=None)
-        c.fill = SECTION_LABEL_FILL
-        c.border = Border()
-    c0 = ws.cell(row=cur_row, column=1, value=text)
-    c0.font = SECTION_LABEL_FONT
-    c0.alignment = Alignment(horizontal="left", vertical="center")
-    ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=10)
-    ws.row_dimensions[cur_row].height = 13
-    return cur_row + 1
-
-
 def write_weekly_stacked(ws, year, month, sections, weeks, today):
     holidays = us_federal_holidays(year)
     cur_row = 1
@@ -3448,17 +3450,13 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
                     hc.border = BORDER
         cur_row += 1
 
-        # Daily → Weekly → Monthly, each under a small section-label band.
-        # (KaiserPrePayCOB now lives in the Daily section; the `kaiser` bucket is
-        # only populated for historical snapshot months and is rendered, label-
-        # free, after Monthly when present.)
-        cur_row = _section_label_row(ws, cur_row, "Daily")
+        # Daily → blank → Weekly → blank → Monthly. KaiserPrePayCOB now lives in
+        # the Daily section; the `kaiser` bucket is only populated for historical
+        # snapshot months and is rendered after Monthly when present.
         cur_row = _write_section_rows(ws, cur_row, wk, sections["daily"])
         cur_row = _blank_separator_row(ws, cur_row)
-        cur_row = _section_label_row(ws, cur_row, "Weekly")
         cur_row = _write_section_rows(ws, cur_row, wk, sections["weekly"])
         cur_row = _blank_separator_row(ws, cur_row)
-        cur_row = _section_label_row(ws, cur_row, "Monthly")
         cur_row = _write_section_rows(ws, cur_row, wk, sections["monthly"])
         if any(sections["kaiser"].get(d) for d in wk if d):
             cur_row = _blank_separator_row(ws, cur_row)
@@ -3469,7 +3467,7 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
         kc = ws.cell(row=cur_row, column=1,
                      value="Key:  Date = Certified  |  ✓ = Loaded/Snapped  |  L = Loading"
                            "  |  pink = Failure/Inactive  |  (s) SLA  |  (p) Rx Post Snap"
-                           "  |  (n) Not Delivered  |  M - Monthly")
+                           "  |  (n) Not Delivered  |  -  = No load that day")
         kc.font = Font(name="Segoe UI", italic=True, size=9, color="555555")
         kc.alignment = Alignment(horizontal="left")
         cur_row += 2
@@ -3553,7 +3551,7 @@ def write_month_sheet(ws, year, month, sections, weeks, today):
         kc = ws.cell(row=cur_row, column=1,
                      value="Key:  Date = Certified  |  ✓ = Loaded/Snapped  |  L = Loading"
                            "  |  pink Date = Failure/Inactive  |  (s) SLA  |  (p) Rx Post Snap"
-                           "  |  (n) Not Delivered  |  M - Monthly")
+                           "  |  (n) Not Delivered  |  -  = No load that day")
         kc.font = Font(name="Segoe UI", italic=True, size=9, color="555555")
         cur_row += 2
 
@@ -3841,6 +3839,9 @@ def parse_all_clients_xlsx(file_path, year):
                     display = daily_name
                 elif display.startswith("M -") or display.startswith("M-"):
                     kind = "monthly"
+                    # Strip the "M - " tag from historical snapshot labels too,
+                    # so it's gone everywhere (per user 2026-06-16).
+                    display = re.sub(r"^M\s*-\s*", "", display).strip()
                 elif "KaiserPrePayCOB" in display:
                     kind = "kaiser"
 
@@ -4076,22 +4077,18 @@ def _render_week_card_html(wk, week_no, sections, today, holidays):
             f'<td class="strip-name{hname_cls}">{_html_escape(hname)}</td>'
             f'<td class="strip-date{is_today}">{date_str}</td>')
 
-    sec_labels = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly"}
     sec_html_parts = []
     for sec_key in ("daily", "weekly", "monthly", "kaiser"):
         body = _render_section_rows_html(wk, sections[sec_key], today)
         if body:
-            lbl = sec_labels.get(sec_key)
-            label_row = (f'<tr class="sec-label"><td colspan="10">{lbl}</td></tr>'
-                         if lbl else "")
             sec_html_parts.append(
-                f'<tbody class="sec sec-{sec_key}">{label_row}{body}</tbody>'
+                f'<tbody class="sec sec-{sec_key}">{body}</tbody>'
                 '<tbody class="sec-gap"><tr><td colspan="10"></td></tr></tbody>'
             )
 
     key_line = ("Key:  Date = Certified  |  ✓ = Loaded/Snapped  |  L = Loading"
                 "  |  pink = Failure/Inactive  |  (s) SLA  |  (p) Rx Post Snap"
-                "  |  (n) Not Delivered  |  M - Monthly")
+                "  |  (n) Not Delivered  |  -  = No load that day")
 
     # Explicit column widths so the table sizes to content, not the page.
     # Client-name columns ~165 px, date columns ~70 px, Tuesday date 95 px.
@@ -4241,7 +4238,6 @@ td.hl-yellow { background: var(--yellow); color: var(--yellow-dark); font-weight
 .hl-bold { font-weight: 700; }
 td.marker.link a { color: var(--alert-dark); font-weight: 700; text-decoration: underline; }
 .sec-gap td { background: #fff; border: 0; height: 4px; padding: 0; }
-.sec-label td { background: #E8EDF3; color: #2C5F8A; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 6px; border: 0; }
 .key {
   font-style: italic; font-size: 11px; color: #555;
   margin: 4px 0 12px;
