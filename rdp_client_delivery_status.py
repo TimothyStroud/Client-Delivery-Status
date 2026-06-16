@@ -1413,18 +1413,26 @@ def fetch_aetna_nmsp_loads(since):
     return out
 
 
-def fetch_tape_loads(db, since):
-    """Query TRGETL3.<db>.etl.Tape for recent successful loads (ProcessStatus=50).
+def fetch_tape_loads(db, since, server="TRGETL3", name_like=None):
+    """Query <server>.<db>.etl.Tape for recent successful loads (ProcessStatus=50).
     Returns list of dicts: {FileName, FileLoadDate (datetime)}.
+
+    `server` defaults to TRGETL3 (the PBMRx tape server); JHHC Passfile lives on
+    TRGINTP3.JohnsHopkins. `name_like` optionally restricts to filenames matching
+    a LIKE pattern (e.g. 'PassFile') so a shared client DB only yields the rows
+    for the intended feed.
     """
+    where = f"ProcessStatus = 50 AND FileLoadDate >= '{since.isoformat()}'"
+    if name_like:
+        where += f" AND FileName LIKE '%{name_like}%'"
     q = (
         "SET NOCOUNT ON; "
         "SELECT FileName, FileLoadDate FROM [etl].[Tape] "
-        f"WHERE ProcessStatus = 50 AND FileLoadDate >= '{since.isoformat()}' "
+        f"WHERE {where} "
         "ORDER BY FileLoadDate"
     )
     r = subprocess.run(
-        ["sqlcmd", "-S", "TRGETL3", "-d", db, "-E", "-Q", q,
+        ["sqlcmd", "-S", server, "-d", db, "-E", "-Q", q,
          "-W", "-s", "\t", "-h", "-1"],
         capture_output=True, text=True, check=False,
     )
@@ -1441,11 +1449,29 @@ def fetch_tape_loads(db, since):
     return rows
 
 
-# Map of client → (TRGETL3 database name, snap-index source key).
+# Map of client → (database name, snap-index source key).
+# Server defaults to TRGETL3 (see TAPE_LOAD_SERVER for overrides).
 TAPE_LOAD_SOURCES = {
     "OptumPBMRx":      ("OptumPBMRx",      "optumpbmrx"),
     "ESIPBMRx":        ("ESIPBMRx",        "esipbmrx"),
     "MedImpactPBMRx":  ("MedImpactPBMRx",  "medimpactpbmrx"),
+    # JHHC Passfile loads to TRGINTP3.JohnsHopkins.etl.Tape (NOT TRGETL3, and the
+    # JohnsHopkins DB also holds the main JHHC Medical feed — so filter to
+    # PassFile filenames). Added 2026-06-16 per user: the 6/12 passfile reload
+    # wasn't captured by the fragile 'JHHC Passfile Email' RAMP job; the tape is
+    # authoritative. Placement lands ✓ on the latest load date (single cell).
+    "JHHCPassfile":    ("JohnsHopkins",    "jhhcpassfile"),
+}
+
+# Per-client SQL server override for TAPE_LOAD_SOURCES (default TRGETL3).
+TAPE_LOAD_SERVER = {
+    "JHHCPassfile": "TRGINTP3",
+}
+
+# Per-client FileName LIKE filter for TAPE_LOAD_SOURCES — restricts a shared
+# client DB to just the intended feed's rows.
+TAPE_LOAD_NAME_FILTER = {
+    "JHHCPassfile": "PassFile",
 }
 
 # Regex for state codes inside ESIPBMRx tape filenames (e.g. Rawlings_FL_, Rawlings_GA_)
@@ -4209,13 +4235,15 @@ def main():
     snaps = fetch_ramp_snaps()
     print(f"[info]   queue={len(queue)}, snaps={len(snaps)}")
 
-    print("[info] Fetching TRGETL3 PBMRx tape loads…")
+    print("[info] Fetching tape loads…")
     since_dt = date(year, month, 1) - timedelta(days=14)
     tape_loads = {}
     for client, (db, src_key) in TAPE_LOAD_SOURCES.items():
-        rows = fetch_tape_loads(db, since_dt)
+        server = TAPE_LOAD_SERVER.get(client, "TRGETL3")
+        name_like = TAPE_LOAD_NAME_FILTER.get(client)
+        rows = fetch_tape_loads(db, since_dt, server=server, name_like=name_like)
         tape_loads[src_key] = rows
-        print(f"[info]   {db}: {len(rows)} rows")
+        print(f"[info]   {server}.{db}: {len(rows)} rows")
 
     print("[info] Fetching multi-week client tape loads…")
     multi_week_loads = {}
