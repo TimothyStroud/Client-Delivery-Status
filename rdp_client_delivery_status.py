@@ -3403,6 +3403,26 @@ def _blank_separator_row(ws, cur_row):
     return cur_row + 1
 
 
+# Section-header band (Daily / Weekly / Monthly). Doubles as the visual
+# separator between sections, so no blank row is needed alongside it.
+SECTION_LABEL_FILL = PatternFill("solid", fgColor="E8EDF3")
+SECTION_LABEL_FONT = Font(name="Segoe UI", bold=True, size=9, color="2C5F8A")
+
+
+def _section_label_row(ws, cur_row, text):
+    """Write a thin labeled band spanning all 10 columns as a section header."""
+    for i in range(10):
+        c = ws.cell(row=cur_row, column=i + 1, value=None)
+        c.fill = SECTION_LABEL_FILL
+        c.border = Border()
+    c0 = ws.cell(row=cur_row, column=1, value=text)
+    c0.font = SECTION_LABEL_FONT
+    c0.alignment = Alignment(horizontal="left", vertical="center")
+    ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=10)
+    ws.row_dimensions[cur_row].height = 14
+    return cur_row + 1
+
+
 def write_weekly_stacked(ws, year, month, sections, weeks, today):
     holidays = us_federal_holidays(year)
     cur_row = 1
@@ -3454,16 +3474,17 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
                     hc.border = BORDER
         cur_row += 1
 
-        # Daily → blank → Weekly → blank → Monthly. KaiserPrePayCOB now lives in
-        # the Daily section; the `kaiser` bucket is only populated for historical
-        # snapshot months and is rendered after Monthly when present.
+        # Each section is introduced by its header band (which also separates
+        # it from the section above — no blank row needed). KaiserPrePayCOB now
+        # lives in the Daily section; the `kaiser` bucket is only populated for
+        # historical snapshot months and is rendered after Monthly when present.
+        cur_row = _section_label_row(ws, cur_row, "Daily")
         cur_row = _write_section_rows(ws, cur_row, wk, sections["daily"])
-        cur_row = _blank_separator_row(ws, cur_row)
+        cur_row = _section_label_row(ws, cur_row, "Weekly")
         cur_row = _write_section_rows(ws, cur_row, wk, sections["weekly"])
-        cur_row = _blank_separator_row(ws, cur_row)
+        cur_row = _section_label_row(ws, cur_row, "Monthly")
         cur_row = _write_section_rows(ws, cur_row, wk, sections["monthly"])
         if any(sections["kaiser"].get(d) for d in wk if d):
-            cur_row = _blank_separator_row(ws, cur_row)
             cur_row = _write_section_rows(ws, cur_row, wk, sections["kaiser"])
 
         # per-week key block
@@ -4081,13 +4102,16 @@ def _render_week_card_html(wk, week_no, sections, today, holidays):
             f'<td class="strip-name{hname_cls}">{_html_escape(hname)}</td>'
             f'<td class="strip-date{is_today}">{date_str}</td>')
 
+    sec_labels = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly"}
     sec_html_parts = []
     for sec_key in ("daily", "weekly", "monthly", "kaiser"):
         body = _render_section_rows_html(wk, sections[sec_key], today)
         if body:
+            lbl = sec_labels.get(sec_key)
+            label_row = (f'<tr class="sec-label"><td colspan="10">{lbl}</td></tr>'
+                         if lbl else "")
             sec_html_parts.append(
-                f'<tbody class="sec sec-{sec_key}">{body}</tbody>'
-                '<tbody class="sec-gap"><tr><td colspan="10"></td></tr></tbody>'
+                f'<tbody class="sec sec-{sec_key}">{label_row}{body}</tbody>'
             )
 
     key_line = ("Key:  Date = Certified  |  ✓ = Loaded/Snapped  |  L = Loading"
@@ -4242,6 +4266,7 @@ td.hl-yellow { background: var(--yellow); color: var(--yellow-dark); font-weight
 .hl-bold { font-weight: 700; }
 td.marker.link a { color: var(--alert-dark); font-weight: 700; text-decoration: underline; }
 .sec-gap td { background: #fff; border: 0; height: 4px; padding: 0; }
+.sec-label td { background: #E8EDF3; color: #2C5F8A; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 6px; border: 0; }
 .key {
   font-style: italic; font-size: 11px; color: #555;
   margin: 4px 0 12px;
