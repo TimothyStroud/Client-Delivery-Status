@@ -1,5 +1,5 @@
 """
-Email report of all inactive RAMP jobs, grouped by Last Updated Date.
+Email report of all inactive RAMP jobs, grouped by Last Run Date.
 Columns: Job Name, Last Updated On, Last Updated By, Last Run, Toggle Notes
 """
 import subprocess, json, sys
@@ -115,7 +115,7 @@ def build_html(groups_data, total):
 </p>
 <p style="margin-bottom:16px;">
   <strong>{total} inactive job(s)</strong> as of {datetime.now().strftime('%Y-%m-%d %H:%M')},
-  grouped by Last Updated Date. Jobs whose Last Updated date is before 2026 are excluded from this report.
+  grouped by Last Run Date. Jobs whose Last Updated date is before 2026 are excluded from this report.
 </p>
 <div style="margin:0 0 20px 0;padding:12px 16px;background:#fff8e1;border-left:5px solid #f39c12;border-radius:4px;font-size:14px;color:#222;">
   <span style="font-weight:700;color:#b9770e;">Action Requested:</span>
@@ -153,8 +153,8 @@ def main(to_override=None, from_override=None):
             notes_map[jid] = (note, note_date, tfs_id)
 
     def sort_key(j):
-        pc = j.get('PreviousJobConfig') or {}
-        return pc.get('TrackLastUpdated') or ''
+        run = j.get('LatestJobRun') or {}
+        return run.get('StartDate') or ''
 
     inactive.sort(key=sort_key, reverse=True)
 
@@ -166,8 +166,8 @@ def main(to_override=None, from_override=None):
         pc  = j.get('PreviousJobConfig') or {}
         run = j.get('LatestJobRun') or {}
         last_updated_str = pc.get('TrackLastUpdated') or ''
-        days = age_days(last_updated_str, now)
         last_run_str = run.get('StartDate') or ''
+        days = age_days(last_run_str, now)
         note_text, note_date, tfs_id = notes_map.get(j['JobId'], ('', '', None))
         try:
             note_within_month = note_date and (now - datetime.fromisoformat(note_date)).days <= 30
