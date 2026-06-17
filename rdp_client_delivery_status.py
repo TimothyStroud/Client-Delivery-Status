@@ -527,17 +527,19 @@ MANUAL_OVERRIDES = {
     # the regression can't recur. Per user: "Once a client gets certified, do not
     # change the cell to an '!'." Remove once DHT flips 3598 back to Certified.
     ("CignaFacets",   date(2026, 6, 9)): date(2026, 6, 9),
-    # 2026-06-16: WellCare is loading now and WellCareRx loads are upcoming, but
-    # both are for the 6/12 delivery (running late) — not for this week. Pin "L"
-    # on the 6/12 Friday cells (was "!") and blank the current-week 6/19 cells so
-    # the in-progress load doesn't show as 6/19 activity. Per user: "the next
-    # loads will be for this week (6/19)." TRANSITION: when the 6/12 delivery
-    # certifies, swap these to the cert date (or drop them); when next week's
-    # 6/19 loads start, remove the 6/19 blanks so they reflect real status.
-    ("WellCare",      date(2026, 6, 12)): "L",
+    # WellCare / WellCareRx delivery tracking (updated 2026-06-17):
+    #  - WellCare Medical certified today 6/17 for the 6/12 delivery → pin the
+    #    6/17 cert date on the 6/12 cell (cert_in_week for 6/12 = 6/8–6/12 window
+    #    misses a 6/17 cert). The current WellCare load is for the 6/19 delivery →
+    #    force "L" on 6/19 (also blocks the 6/17 cert from auto-landing there via
+    #    cert_in_week's 6/15–6/19 window).
+    #  - WellCareRx is loading TWO weeks of data at once → "L" on BOTH 6/12 and
+    #    6/19; per user both cells will get the SAME cert date once it certifies.
+    #    TRANSITION: when WellCareRx certifies, swap both to that cert date.
+    ("WellCare",      date(2026, 6, 12)): date(2026, 6, 17),
+    ("WellCare",      date(2026, 6, 19)): "L",
     ("WellCareRx",    date(2026, 6, 12)): "L",
-    ("WellCare",      date(2026, 6, 19)): "",
-    ("WellCareRx",    date(2026, 6, 19)): "",
+    ("WellCareRx",    date(2026, 6, 19)): "L",
 }
 
 # --- Sticky certifications --------------------------------------------------
