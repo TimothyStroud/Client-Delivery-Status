@@ -2248,7 +2248,12 @@ def has_recent_failure(client, queue, jobs, today):
         # Only LOAD-named jobs count for failure detection
         if "load" not in jn:
             continue
-        if any(kw in jn for kw in ("stage", "snap", "mine", "logfile", "sftp", "upload")):
+        # COBC and ABII are ancillary file pipelines — a COBC/ABII load failure
+        # must NOT mark the client's claims delivery as a failure (per user
+        # 2026-06-18: CareFirstRx's "Load Failure" was the COBC load, not the
+        # 'CareFirstRx 0110 Load' claims job). Excluded globally for all clients.
+        if any(kw in jn for kw in ("stage", "snap", "mine", "logfile",
+                                   "sftp", "upload", "cobc", "abii")):
             continue
         if required_kwds and not any(kw in jn for kw in required_kwds):
             continue

@@ -30,3 +30,27 @@
    already reported -- skip
 [optum_pbm] LoadQ=1370920 LoadEnd=2026-06-06T12:36:23.453 SnapEnd=2026-06-06T13:13:51.703 tag=06052026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
    already reported -- skip
+[caresource] QueueId=1378239 Status=Successful End=2026-06-16T01:57:28.75
+   already reported -- skip
+[healthspring_fwa] QueueId=1368201 Status=Successful End=2026-06-02T18:20:42.99
+   already reported -- skip
+[wellmark] QueueId=1377606 Status=Successful End=2026-06-14T19:32:06.767
+   already reported -- skip
+[optum_pbm] LoadQ=1370920 LoadEnd=2026-06-06T12:36:23.453 SnapEnd=2026-06-06T13:13:51.703 tag=06052026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   already reported -- skip
+[caresource] QueueId=1378239 Status=Successful End=2026-06-16T01:57:28.75
+   already reported -- skip
+[healthspring_fwa] QueueId=1368201 Status=Successful End=2026-06-02T18:20:42.99
+   already reported -- skip
+[wellmark] QueueId=1377606 Status=Successful End=2026-06-14T19:32:06.767
+   already reported -- skip
+[optum_pbm] LoadQ=1370920 LoadEnd=2026-06-06T12:36:23.453 SnapEnd=2026-06-06T13:13:51.703 tag=06052026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   already reported -- skip
+[caresource] QueueId=1378239 Status=Successful End=2026-06-16T01:57:28.75
+   already reported -- skip
+[healthspring_fwa] QueueId=1368201 Status=Successful End=2026-06-02T18:20:42.99
+   already reported -- skip
+[wellmark] QueueId=1377606 Status=Successful End=2026-06-14T19:32:06.767
+   already reported -- skip
+[optum_pbm] LoadQ=1370920 LoadEnd=2026-06-06T12:36:23.453 SnapEnd=2026-06-06T13:13:51.703 tag=06052026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   already reported -- skip
