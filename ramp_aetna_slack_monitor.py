@@ -70,18 +70,18 @@ def detect(runs, state):
     if rce.get('EndDate') and rce.get('Status') in DONE_STATUSES \
             and rce.get('QueueId') != state.get('rce_last_completed_qid'):
         if rce['Status'] == 'Successful':
-            txt = (":white_check_mark: *Aetna RCE 310 ETL Load* completed "
+            txt = ("<!here> :white_check_mark: *Aetna RCE 310 ETL Load* completed "
                    f"*successfully* in RAMP.\n> QueueId {rce['QueueId']} | "
                    f"started {fmt(rce.get('StartDate'))} | finished {fmt(rce.get('EndDate'))}")
         else:
-            txt = (":x: *Aetna RCE 310 ETL Load* *FAILED* in RAMP.\n> QueueId "
+            txt = ("<!here> :x: *Aetna RCE 310 ETL Load* *FAILED* in RAMP.\n> QueueId "
                    f"{rce['QueueId']} | started {fmt(rce.get('StartDate'))} | "
                    f"ended {fmt(rce.get('EndDate'))} | please investigate.")
         events.append(('rce', txt))
 
     # NCState: new run started, once per QueueId
     if ncs.get('QueueId') and ncs.get('QueueId') != state.get('ncstate_last_started_qid'):
-        txt = (":arrow_forward: *NCStateAetna 0100 Delivery Ticket* has *started* in "
+        txt = ("<!here> :arrow_forward: *NCStateAetna 0100 Delivery Ticket* has *started* in "
                f"RAMP.\n> QueueId {ncs['QueueId']} | started {fmt(ncs.get('StartDate'))}")
         events.append(('ncs', txt))
     return events
