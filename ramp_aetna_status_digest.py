@@ -96,7 +96,7 @@ def sql_job(server, name):
 
 def main():
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
-    lines = [f":bar_chart: *Aetna RCE 310 - Status Update*  ({now})", ""]
+    lines = [f"<!here> :bar_chart: *Aetna RCE 310 - Status Update*  ({now})", ""]
     lines.append("*RAMP - Aetna RCE 310 ETL Load*")
     lines.append("- " + rce_status())
     lines.append("")
