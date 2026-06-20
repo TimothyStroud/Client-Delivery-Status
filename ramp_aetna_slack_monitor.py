@@ -1,15 +1,16 @@
 """
-RAMP -> Slack monitor for two AetnaRCE/NCState jobs.
+RAMP -> Slack monitor for the Aetna RCE 310 ETL Load job.
 
-Events posted to #team-rdp-operations-support (C09EPLQL2D9):
+Event posted to #team-rdp-operations-support (C09EPLQL2D9):
   - 'Aetna RCE 310 ETL Load' (JobId 2257): when a run FINISHES Successful or Failed.
-  - 'NCStateAetna 0100 Delivery Ticket' (JobId 10735): when a run STARTS.
+
+(NCStateAetna 0100 Delivery Ticket start check removed per user 2026-06-20.)
 
 Data source: RAMP /api/Ramp/Job/List (LatestJobRun per job).
 
 Two-phase to avoid lost alerts if a Slack post fails:
   - default run  -> prints events as 'SLACK|<text>' lines; does NOT change state.
-  - --commit     -> records the current QueueIds to state (call only AFTER posting).
+  - --commit     -> records the current QueueId to state (call only AFTER posting).
   - --baseline   -> seeds state to current so pre-existing runs aren't announced.
   - --status     -> prints current detection without posting/committing.
 """
@@ -21,7 +22,6 @@ STATE_FILE = os.path.join(BASE, 'ramp_aetna_slack_state.json')
 CHANNEL = 'C09EPLQL2D9'  # #team-rdp-operations-support
 
 RCE_JOBID = 2257      # Aetna RCE 310 ETL Load -> on completion (Successful/Failed)
-NCS_JOBID = 10735     # NCStateAetna 0100 Delivery Ticket -> on start
 
 DONE_STATUSES = ('Successful', 'Failed')
 
@@ -35,7 +35,7 @@ def jobruns():
     jobs = d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else d
     runs = {}
     for j in jobs:
-        if j.get('JobId') in (RCE_JOBID, NCS_JOBID):
+        if j.get('JobId') == RCE_JOBID:
             runs[j['JobId']] = j.get('LatestJobRun') or {}
     return runs
 
@@ -64,7 +64,6 @@ def detect(runs, state):
     """Return list of (key, text) events vs current state (no state change)."""
     events = []
     rce = runs.get(RCE_JOBID, {})
-    ncs = runs.get(NCS_JOBID, {})
 
     # RCE: completion (Successful/Failed), once per QueueId
     if rce.get('EndDate') and rce.get('Status') in DONE_STATUSES \
@@ -78,22 +77,13 @@ def detect(runs, state):
                    f"{rce['QueueId']} | started {fmt(rce.get('StartDate'))} | "
                    f"ended {fmt(rce.get('EndDate'))} | please investigate.")
         events.append(('rce', txt))
-
-    # NCState: new run started, once per QueueId
-    if ncs.get('QueueId') and ncs.get('QueueId') != state.get('ncstate_last_started_qid'):
-        txt = ("<!here> :arrow_forward: *NCStateAetna 0100 Delivery Ticket* has *started* in "
-               f"RAMP.\n> QueueId {ncs['QueueId']} | started {fmt(ncs.get('StartDate'))}")
-        events.append(('ncs', txt))
     return events
 
 
 def commit(runs, state):
     rce = runs.get(RCE_JOBID, {})
-    ncs = runs.get(NCS_JOBID, {})
     if rce.get('EndDate') and rce.get('Status') in DONE_STATUSES:
         state['rce_last_completed_qid'] = rce.get('QueueId')
-    if ncs.get('QueueId'):
-        state['ncstate_last_started_qid'] = ncs.get('QueueId')
     save_state(state)
 
 
@@ -102,11 +92,10 @@ def main():
     state = load_state()
 
     if '--baseline' in sys.argv:
-        rce = runs.get(RCE_JOBID, {}); ncs = runs.get(NCS_JOBID, {})
+        rce = runs.get(RCE_JOBID, {})
         # Only suppress an RCE completion if the current latest run is ALREADY done.
         state['rce_last_completed_qid'] = (rce.get('QueueId')
             if (rce.get('EndDate') and rce.get('Status') in DONE_STATUSES) else None)
-        state['ncstate_last_started_qid'] = ncs.get('QueueId')
         save_state(state)
         print('Baselined:', json.dumps(state))
         return
@@ -122,7 +111,6 @@ def main():
     if '--status' in sys.argv:
         print('STATE|' + json.dumps(state))
         print('RCE|' + json.dumps(runs.get(RCE_JOBID, {})))
-        print('NCS|' + json.dumps(runs.get(NCS_JOBID, {})))
     if not events:
         print('NO_EVENTS')
 
