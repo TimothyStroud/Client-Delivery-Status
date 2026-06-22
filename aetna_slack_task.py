@@ -18,8 +18,11 @@ Design notes:
     detection logic lives in one place. This wrapper only handles posting.
   - Monitor is two-phase: only run --commit AFTER every event posted OK, so a
     failed Slack post is retried on the next tick instead of being silently lost.
-  - Digest self-skips Sat/Sun (the original cron was weekdays only); schedule it
-    every 3 hours on all days and let this gate handle weekends.
+  - Active-window gate (see active()): no Sunday file is loaded, so BOTH modes
+    skip Sunday AND Monday entirely; the first run after Saturday is at/after 3am
+    Tuesday. Monitor runs Tue-Sat; digest runs Tue-Fri (keeps its weekday-only
+    footprint). The scheduled-task triggers still fire on their interval every
+    day -- this gate decides which firings actually do work.
 """
 import sys, os, json, subprocess, urllib.request
 from datetime import datetime
@@ -62,6 +65,23 @@ def post(url, text):
             raise RuntimeError(f"HTTP {resp.status}: {body[:200]}")
 
 
+def active(mode, now):
+    """Should this firing do work? Returns (bool, reason_if_skipped).
+
+    No Sunday file is loaded, so both modes skip Sunday + Monday entirely and
+    resume at 3am Tuesday. Monitor is active Tue-Sat; digest stays weekday-only
+    (Tue-Fri). weekday(): Mon=0 .. Sun=6.
+    """
+    wd = now.weekday()
+    if wd in (6, 0):                      # Sunday, Monday
+        return False, "Sun/Mon skip (no Sunday file)"
+    if wd == 1 and now.hour < 3:          # Tuesday before 3am
+        return False, "Tue pre-3am skip (resume 3am Tue)"
+    if wd == 5 and mode == 'digest':      # Saturday: digest is weekday-only
+        return False, "Sat skip (digest weekday-only)"
+    return True, None
+
+
 def run_script(args):
     return subprocess.run([sys.executable] + args,
                           capture_output=True, text=True, timeout=300)
@@ -100,9 +120,6 @@ def do_monitor(url):
 
 
 def do_digest(url):
-    if datetime.now().weekday() >= 5:  # Sat=5, Sun=6
-        log("digest: weekend, skipping")
-        return 0
     r = run_script([DIGEST])
     if r.returncode != 0:
         log(f"digest build FAILED rc={r.returncode}: {r.stderr.strip()[:300]}")
@@ -128,6 +145,10 @@ def main():
     url = get_webhook()
     if not url:
         log(f"INERT: no webhook URL in {WEBHOOK_FILE}; skipping {mode}")
+        return 0
+    ok, reason = active(mode, datetime.now())
+    if not ok:
+        log(f"{mode}: outside active window ({reason}); skipping")
         return 0
     return do_monitor(url) if mode == 'monitor' else do_digest(url)
 
