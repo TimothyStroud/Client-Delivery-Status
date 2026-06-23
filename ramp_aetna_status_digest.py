@@ -40,17 +40,24 @@ def fmt(iso):
             return iso or '?'
 
 
-def rce_status():
+def rce_run():
+    """Return the LatestJobRun dict for RAMP 'Aetna RCE 310 ETL Load' (2257)."""
     out = subprocess.run(['curl', '-s', '--ntlm', '-u', ':',
                           'http://ramp/api/Ramp/Job/List'],
                          capture_output=True, text=True, timeout=180)
-    d = json.loads(out.stdout)['Data']
+    try:
+        d = json.loads(out.stdout)['Data']
+    except Exception:
+        return {}
     jobs = d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else d
-    lr = {}
     for j in jobs:
         if j.get('JobId') == RCE_JOBID:
-            lr = j.get('LatestJobRun') or {}
-            break
+            return j.get('LatestJobRun') or {}
+    return {}
+
+
+def rce_status():
+    lr = rce_run()
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
     # Per user: green check for Successful (red X for Failed) instead of the
@@ -81,6 +88,25 @@ def fmt_dt(d, t):
 EXEC_STATUS = {'1': 'Executing', '2': 'Waiting for thread', '3': 'Between retries',
                '4': 'Idle', '5': 'Suspended', '7': 'Completing'}
 RUN_OUTCOME = {'0': 'Failed', '1': 'Succeeded', '3': 'Canceled', '5': 'Unknown'}
+
+
+def _sp_help_job(server, name):
+    """Run sp_help_job raw and return its single wide data row as a list of
+    stripped fields (>=32), or None. See sql_job for why it's run raw and parsed
+    from the end."""
+    q = f"SET NOCOUNT ON; EXEC msdb.dbo.sp_help_job @job_name=N'{name}', @job_aspect=N'JOB';"
+    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-s', '~', '-Q', q],
+                         capture_output=True, text=True, timeout=120)
+    for line in out.stdout.splitlines():
+        line = line.rstrip()
+        if not line or line.startswith('job_id') or 'rows affected' in line:
+            continue
+        if set(line) <= set('-~'):          # the ---- separator row
+            continue
+        parts = line.split('~')
+        if len(parts) >= 32:
+            return [p.strip() for p in parts]
+    return None
 
 
 def remaining_secs(server, name, cur_step):
@@ -123,23 +149,9 @@ def sql_job(server, name):
       [-7]=current_execution_status [-6]=current_execution_step
       [-11]=last_run_outcome [-12]=last_run_time [-13]=last_run_date
     """
-    q = f"SET NOCOUNT ON; EXEC msdb.dbo.sp_help_job @job_name=N'{name}', @job_aspect=N'JOB';"
-    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-s', '~', '-Q', q],
-                         capture_output=True, text=True, timeout=120)
-    row = None
-    for line in out.stdout.splitlines():
-        line = line.rstrip()
-        if not line or line.startswith('job_id') or 'rows affected' in line:
-            continue
-        if set(line) <= set('-~'):          # the ---- separator row
-            continue
-        parts = line.split('~')
-        if len(parts) >= 32:
-            row = [p.strip() for p in parts]
-            break
+    row = _sp_help_job(server, name)
     if not row:
-        err = (out.stderr or out.stdout).strip().replace('\n', ' ')[:120]
-        return f"(no data{' - ' + err if err else ''})"
+        return "(no data)"
 
     status, step = row[-7], row[-6]
     if status == '1':                        # Executing -> current step + ETA
@@ -155,7 +167,41 @@ def sql_job(server, name):
     return f"*{st}* | last run {oc} ({fmt_dt(row[-13], row[-12])})"
 
 
+def rce_succeeded_today():
+    """True if RAMP 'Aetna RCE 310 ETL Load' (2257) completed Successful today."""
+    lr = rce_run()
+    end = lr.get('EndDate')
+    if lr.get('Status') == 'Successful' and end:
+        try:
+            return datetime.fromisoformat(str(end).split('.')[0]).date() == datetime.now().date()
+        except Exception:
+            return False
+    return False
+
+
+def job_succeeded_today(server, name):
+    """True if a SQL Agent job is Idle with last run Succeeded today."""
+    row = _sp_help_job(server, name)
+    if not row:
+        return False
+    status, outcome, lrd = row[-7], row[-11], row[-13]
+    try:
+        d = int(lrd)
+    except (ValueError, TypeError):
+        return False
+    t = datetime.now()
+    return status == '4' and outcome == '1' and d == t.year * 10000 + t.month * 100 + t.day
+
+
 def main():
+    # Per user 2026-06-23: once BOTH the RCE load and NCStateAetna MasterLoad
+    # have already SUCCEEDED today, the rest of the day's digests are redundant
+    # -> emit no SLACK line so the cron/task posts nothing. (If either is still
+    # running, failed, or hasn't run, the digest still posts.)
+    if (rce_succeeded_today()
+            and job_succeeded_today('TRGETL4', 'ETL NCStateAetna MasterLoad')):
+        print('NO_POST: RCE + NCStateAetna both Succeeded today')
+        return
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
     lines = [f"<!here> :bar_chart: *Aetna RCE 310 - Status Update*  ({now})", ""]
     lines.append("*RAMP - Aetna RCE 310 ETL Load*")

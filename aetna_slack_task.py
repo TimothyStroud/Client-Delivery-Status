@@ -126,8 +126,10 @@ def do_digest(url):
         return 1
     lines = slack_lines(r.stdout)
     if not lines:
-        log("digest: no SLACK line produced")
-        return 1
+        # Intentional skip (e.g. both RCE + NCStateAetna already succeeded today),
+        # not an error.
+        log("digest: nothing to post (skipped)")
+        return 0
     try:
         post(url, lines[0])
         log("posted digest")
