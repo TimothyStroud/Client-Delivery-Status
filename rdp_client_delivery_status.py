@@ -540,6 +540,18 @@ MANUAL_OVERRIDES = {
     ("WellCare",      date(2026, 6, 19)): "L",
     ("WellCareRx",    date(2026, 6, 12)): "L",
     ("WellCareRx",    date(2026, 6, 19)): "L",
+    # 2026-06-23: Centene / CenteneRx / OscarRx all certified 6/22 (DHT), but
+    # that delivery was for the 6/16-data cycle. The live cert window landed it
+    # on the current 6/22-6/26 week, so pin the 6/22 cert onto the correct
+    # earlier cell and blank the duplicate in the current week. Per user. Remove
+    # after this cycle rolls off. (Centene = weekly Tue 6/16↔6/23; CenteneRx &
+    # OscarRx = weekly Fri 6/19↔6/26.)
+    ("Centene",       date(2026, 6, 16)): date(2026, 6, 22),
+    ("Centene",       date(2026, 6, 23)): "",
+    ("CenteneRx",     date(2026, 6, 19)): date(2026, 6, 22),
+    ("CenteneRx",     date(2026, 6, 26)): "",
+    ("OscarRx",       date(2026, 6, 19)): date(2026, 6, 22),
+    ("OscarRx",       date(2026, 6, 26)): "",
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -1054,6 +1066,11 @@ NYSHIP_OVERRIDES = {
     # auto-detection window. One-off; clear after the June 2026 cycle.
     (2026, 6, 1): date(2026, 6, 9),
     (2026, 6, 8): date(2026, 6, 9),
+    # 2026-06-23: the 16th load ran 6/22 (for the 6/16 data) but has NOT
+    # certified yet (DHT NYSHIP_RX still only shows the 6/9 cert), so show "L".
+    # The next load is for the 24th. Swap to the cert date once it certifies.
+    # Per user.
+    (2026, 6, 16): "L",
 }
 
 # Suffix conventions per the All Clients tab key:
