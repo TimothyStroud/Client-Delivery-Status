@@ -13,8 +13,8 @@ Always emits (it's a periodic status report, not event-driven).
 Note: msdb.dbo.agent_datetime is permission-blocked here, so run_date/run_time
 are converted to a datetime manually.
 """
-import json, subprocess
-from datetime import datetime
+import json, re, subprocess
+from datetime import datetime, timedelta
 
 RCE_JOBID = 2257
 CHANNEL = 'C09EPLQL2D9'
@@ -83,6 +83,32 @@ EXEC_STATUS = {'1': 'Executing', '2': 'Waiting for thread', '3': 'Between retrie
 RUN_OUTCOME = {'0': 'Failed', '1': 'Succeeded', '3': 'Canceled', '5': 'Unknown'}
 
 
+def remaining_secs(server, name, cur_step):
+    """Estimated seconds left = sum of avg historical durations of steps
+    cur_step..end (avg over the last 8 successful runs per step). Counts the
+    current step in full (slight overestimate) and skips step 1's variable
+    upstream 'Wait' (it logs ~0 duration). Returns int seconds or None."""
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         ";WITH h AS (SELECT step_id, "
+         "(run_duration/10000)*3600+((run_duration/100)%100)*60+(run_duration%100) AS dur_sec, "
+         "ROW_NUMBER() OVER (PARTITION BY step_id ORDER BY run_date DESC, run_time DESC) rn "
+         f"FROM msdb.dbo.sysjobhistory WITH (NOLOCK) WHERE @jid=job_id AND step_id>={cur_step} "
+         "AND step_id<50 AND run_status=1) "
+         "SELECT ISNULL(SUM(a),0) FROM (SELECT AVG(dur_sec) a FROM h WHERE rn<=8 GROUP BY step_id) y;")
+    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
+                         capture_output=True, text=True, timeout=120)
+    for line in out.stdout.splitlines():
+        s = line.strip()
+        if s.lstrip('-').isdigit():
+            return int(s)
+    return None
+
+
+def _clock(dt):
+    return dt.strftime('%I:%M %p').lstrip('0')
+
+
 def sql_job(server, name):
     """Report where the CURRENT load is, via sp_help_job (the value SSMS Job
     Activity Monitor shows). When executing, returns the live step e.g.
@@ -116,8 +142,14 @@ def sql_job(server, name):
         return f"(no data{' - ' + err if err else ''})"
 
     status, step = row[-7], row[-6]
-    if status == '1':                        # Executing -> show current step only
-        return f"*Executing*: {step}"
+    if status == '1':                        # Executing -> current step + ETA
+        line = f"*Executing*: {step}"
+        m = re.match(r'\s*(\d+)', step)      # leading step number, e.g. "4 (Build Chimera)"
+        if m:
+            secs = remaining_secs(server, name, int(m.group(1)))
+            if secs and secs > 0:
+                line += f" | ETA ~{_clock(datetime.now() + timedelta(seconds=secs))}"
+        return line
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
     return f"*{st}* | last run {oc} ({fmt_dt(row[-13], row[-12])})"
