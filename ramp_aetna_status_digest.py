@@ -50,18 +50,14 @@ def rce_status():
             break
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
-    # Slack has no inline text color; the ```diff code-block trick is the only
-    # way to render colored TEXT — a line starting with '+' shows GREEN, '-' RED.
-    # So a completed-Successful status renders green, a Failed status red. The
-    # timing detail stays on a normal line below.
+    # Per user: green check for Successful (red X for Failed) instead of the
+    # ```diff color trick.
     if end and status == 'Successful':
-        return ("```diff\n+ Successful\n```\n"
-                f"- started {fmt(start)} | completed {fmt(end)}")
+        return f"- Status: :white_check_mark: *Successful* | started {fmt(start)} | *completed {fmt(end)}*"
     if end and status == 'Failed':
-        return ("```diff\n- FAILED\n```\n"
-                f"- started {fmt(start)} | ended {fmt(end)} - please investigate")
+        return f"- Status: :x: *FAILED* | started {fmt(start)} | ended {fmt(end)} - please investigate"
     if end:
-        return f"- Status: *{status}* | started {fmt(start)} | completed {fmt(end)}"
+        return f"- Status: *{status}* | started {fmt(start)} | *completed {fmt(end)}*"
     return f"- Status: *{status}* (running) | started {fmt(start)} | not yet complete"
 
 
