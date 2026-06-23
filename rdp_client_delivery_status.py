@@ -538,17 +538,15 @@ MANUAL_OVERRIDES = {
     ("WellCare",      date(2026, 6, 19)): date(2026, 6, 18),
     ("WellCareRx",    date(2026, 6, 12)): "L",
     ("WellCareRx",    date(2026, 6, 19)): "L",
-    # 2026-06-23: Centene / CenteneRx / OscarRx all certified 6/22 (DHT), but
-    # that delivery was for the 6/16-data cycle. The live cert window landed it
-    # on the current 6/22-6/26 week, so pin the 6/22 cert onto the correct
-    # earlier cell and blank the duplicate in the current week. Per user. Remove
-    # after this cycle rolls off. (Centene = weekly Tue 6/16↔6/23; CenteneRx &
-    # OscarRx = weekly Fri 6/19↔6/26.)
-    ("Centene",       date(2026, 6, 16)): date(2026, 6, 22),
-    ("Centene",       date(2026, 6, 23)): "",
-    ("CenteneRx",     date(2026, 6, 19)): date(2026, 6, 22),
+    # 2026-06-24: cert-to-week is now attributed via DHT StatTimestamp (see
+    # cert_in_week / build_cert_week_index), so the 6/22 certs land on the
+    # correct DATA week automatically — Centene split two weeks (stat 6/18 ->
+    # 6/16 cell, stat 6/21 Sun -> 6/23 cell); CenteneRx (stat 6/20 Sat) &
+    # OscarRx (stat 6/18) -> the 6/19 week. The four date-pins those needed are
+    # gone. Keep only the explicit blanks so the next-week 6/26 Friday cells
+    # stay empty (the system places no cert there; this just stops a stray
+    # L/"!"). Remove after this cycle rolls off the calendar.
     ("CenteneRx",     date(2026, 6, 26)): "",
-    ("OscarRx",       date(2026, 6, 19)): date(2026, 6, 22),
     ("OscarRx",       date(2026, 6, 26)): "",
 }
 
@@ -1268,7 +1266,7 @@ def fetch_dht_certs(since):
     """
     q = (
         "SET NOCOUNT ON; "
-        "SELECT DatabaseName, [Name], PCN, CertTimestamp, CurrentStatus "
+        "SELECT DatabaseName, [Name], PCN, CertTimestamp, CurrentStatus, StatTimestamp "
         f"FROM [DHTStats].[DHT].[TableList] "
         f"WHERE CertTimestamp >= '{since.isoformat()}' "
         "ORDER BY CertTimestamp"
@@ -1297,6 +1295,7 @@ def fetch_dht_certs(since):
             "PCN":            parts[2].strip(),
             "CertTimestamp":  ts,
             "CurrentStatus":  parts[4].strip(),
+            "StatTimestamp":  parse_dt(parts[5]) if len(parts) > 5 else None,
         })
     return rows
 
@@ -1310,6 +1309,51 @@ def build_cert_index(certs):
             idx[key].append((c["CertTimestamp"], c["CurrentStatus"]))
     for k in idx:
         idx[k].sort()
+    return idx
+
+
+def stat_week_monday(d):
+    """Monday of the delivery week a StatTimestamp (data date) belongs to.
+
+    Per user 2026-06-24, validated against DHT: the delivery week runs
+    Mon-Sat, and SUNDAY rolls forward into the next week. So a Sat data date
+    stays with the week that just ended; a Sun data date belongs to the
+    upcoming week.
+      - Thu 6/18 -> Mon 6/15  (that week)
+      - Sat 6/20 -> Mon 6/15  (week just ended; CenteneRx -> 6/19 cell)
+      - Sun 6/21 -> Mon 6/22  (next week; Centene -> 6/23 cell)
+    """
+    if isinstance(d, datetime):
+        d = d.date()
+    wd = d.weekday()           # Mon=0 .. Sat=5, Sun=6
+    if wd == 6:                # Sunday -> next week's Monday
+        return d + timedelta(days=1)
+    return d - timedelta(days=wd)   # Mon-Sat -> this week's Monday
+
+
+# normalized_db -> {week_monday(date): latest Certified CertTimestamp}. Built in
+# main() from DHT StatTimestamp so a weekly client's cert lands on the cell for
+# the week its DATA covers (not the week it happened to certify). Used by
+# cert_in_week for non-forward weekly clients.
+CERT_WEEK_IDX = {}
+
+
+def build_cert_week_index(certs):
+    """normalized_db -> {week_monday: latest CertTimestamp} over Certified rows,
+    grouping by the delivery week of each row's StatTimestamp (falls back to the
+    CertTimestamp's own week when StatTimestamp is missing)."""
+    idx = defaultdict(dict)
+    for c in certs:
+        if c.get("CurrentStatus") != "Certified":
+            continue
+        key = normalize(c["DatabaseName"])
+        if not key:
+            continue
+        certdt = c["CertTimestamp"]
+        wk = stat_week_monday(c.get("StatTimestamp") or certdt)
+        cur = idx[key].get(wk)
+        if cur is None or certdt > cur:
+            idx[key][wk] = certdt
     return idx
 
 
@@ -1333,30 +1377,39 @@ def cert_on_day(client, day, cert_idx):
 
 
 def cert_in_week(client, scheduled_day, cert_idx):
-    """Latest cert in the lookup window for this client+scheduled_day.
+    """Latest cert attributed to this client's delivery week (the week of
+    `scheduled_day`).
 
-    Default (backward): Mon-Fri week containing scheduled_day. A cert that
-    lands any weekday of the same calendar week belongs to that week's cell.
+    Default: attribute each cert to the week its DATA covers via the
+    StatTimestamp of the certified tapes (CERT_WEEK_IDX, built by
+    build_cert_week_index). Per user 2026-06-24 a single cert run can certify
+    two data weeks at once — e.g. Centene's 6/22 cert had StatTimestamp 6/18
+    (-> the 6/16 cell) AND 6/21 (Sun -> the 6/23 cell) — and StatTimestamp
+    picks the right cell for each. Falls back to the CertTimestamp week for rows
+    with no StatTimestamp (handled in build_cert_week_index).
 
-    `CERT_DIRECTION[client] = "forward"`: 7-day window starting at scheduled
-    day. Used for clients like Premera where a Mon 5/11 cert is the LATE
-    completion of the previous Thu 5/7 cycle.
+    `CERT_DIRECTION[client] = "forward"` (Premera): keeps the explicit 7-day
+    forward window on CertTimestamp.
     """
     if CERT_DIRECTION.get(client) == "forward":
         cycle_start = scheduled_day
         cycle_end   = scheduled_day + timedelta(days=6)
-    else:
-        cycle_start = scheduled_day - timedelta(days=scheduled_day.weekday())
-        cycle_end   = cycle_start + timedelta(days=4)
+        best = None
+        for key in _keys_for_client(client):
+            for dt, status in cert_idx.get(key, ()):
+                if status != "Certified":
+                    continue
+                if cycle_start <= dt.date() <= cycle_end:
+                    if best is None or dt > best:
+                        best = dt
+        return best
+
+    cell_monday = scheduled_day - timedelta(days=scheduled_day.weekday())
     best = None
     for key in _keys_for_client(client):
-        for dt, status in cert_idx.get(key, ()):
-            if status != "Certified":
-                continue
-            d = dt.date()
-            if cycle_start <= d <= cycle_end:
-                if best is None or dt > best:
-                    best = dt
+        dt = CERT_WEEK_IDX.get(key, {}).get(cell_monday)
+        if dt and (best is None or dt > best):
+            best = dt
     return best
 
 
@@ -4375,6 +4428,8 @@ def main():
     # pull 3 months back for monthly clients' avg-day calc
     certs = fetch_dht_certs(since=date(year, month, 1) - timedelta(days=90))
     cert_idx = build_cert_index(certs)
+    global CERT_WEEK_IDX
+    CERT_WEEK_IDX = build_cert_week_index(certs)
     print(f"[info]   {len(certs)} cert rows / {len(cert_idx)} distinct DatabaseNames")
 
     print("[info] Fetching ADO tickets…")
