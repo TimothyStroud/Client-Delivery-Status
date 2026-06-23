@@ -50,11 +50,19 @@ def rce_status():
             break
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
+    # Slack has no inline text color; the ```diff code-block trick is the only
+    # way to render colored TEXT — a line starting with '+' shows GREEN, '-' RED.
+    # So a completed-Successful status renders green, a Failed status red. The
+    # timing detail stays on a normal line below.
+    if end and status == 'Successful':
+        return ("```diff\n+ Successful\n```\n"
+                f"- started {fmt(start)} | completed {fmt(end)}")
+    if end and status == 'Failed':
+        return ("```diff\n- FAILED\n```\n"
+                f"- started {fmt(start)} | ended {fmt(end)} - please investigate")
     if end:
-        line = f"Status: *{status}* | started {fmt(start)} | *completed {fmt(end)}*"
-    else:
-        line = f"Status: *{status}* (running) | started {fmt(start)} | not yet complete"
-    return line
+        return f"- Status: *{status}* | started {fmt(start)} | completed {fmt(end)}"
+    return f"- Status: *{status}* (running) | started {fmt(start)} | not yet complete"
 
 
 def fmt_dt(d, t):
@@ -120,7 +128,7 @@ def main():
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
     lines = [f"<!here> :bar_chart: *Aetna RCE 310 - Status Update*  ({now})", ""]
     lines.append("*RAMP - Aetna RCE 310 ETL Load*")
-    lines.append("- " + rce_status())
+    lines.append(rce_status())
     lines.append("")
     lines.append("*SQL Job Activity Monitor*")
     for server, name in SQL_JOBS:
