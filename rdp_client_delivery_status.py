@@ -527,17 +527,15 @@ MANUAL_OVERRIDES = {
     # the regression can't recur. Per user: "Once a client gets certified, do not
     # change the cell to an '!'." Remove once DHT flips 3598 back to Certified.
     ("CignaFacets",   date(2026, 6, 9)): date(2026, 6, 9),
-    # WellCare / WellCareRx delivery tracking (updated 2026-06-17):
-    #  - WellCare Medical certified today 6/17 for the 6/12 delivery → pin the
-    #    6/17 cert date on the 6/12 cell (cert_in_week for 6/12 = 6/8–6/12 window
-    #    misses a 6/17 cert). The current WellCare load is for the 6/19 delivery →
-    #    force "L" on 6/19 (also blocks the 6/17 cert from auto-landing there via
-    #    cert_in_week's 6/15–6/19 window).
-    #  - WellCareRx is loading TWO weeks of data at once → "L" on BOTH 6/12 and
-    #    6/19; per user both cells will get the SAME cert date once it certifies.
-    #    TRANSITION: when WellCareRx certifies, swap both to that cert date.
+    # WellCare / WellCareRx delivery tracking (updated 2026-06-23):
+    #  - WellCare Medical 6/12 delivery certified 6/17 (pinned on the 6/12 cell —
+    #    outside its 6/8–6/12 window). 6/19 delivery certified 6/18 (per user +
+    #    DHT 6/18 10:46) → pin 6/18 on the 6/19 cell.
+    #  - WellCareRx loads TWO weeks at once → "L" on BOTH 6/12 and 6/19. Still
+    #    under review as of 6/23 (no DHT cert yet), expected to certify today.
+    #    TRANSITION: when WellCareRx certifies, swap both cells to that cert date.
     ("WellCare",      date(2026, 6, 12)): date(2026, 6, 17),
-    ("WellCare",      date(2026, 6, 19)): "L",
+    ("WellCare",      date(2026, 6, 19)): date(2026, 6, 18),
     ("WellCareRx",    date(2026, 6, 12)): "L",
     ("WellCareRx",    date(2026, 6, 19)): "L",
     # 2026-06-23: Centene / CenteneRx / OscarRx all certified 6/22 (DHT), but
