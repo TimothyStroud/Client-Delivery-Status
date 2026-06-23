@@ -19,9 +19,12 @@ from datetime import datetime
 RCE_JOBID = 2257
 CHANNEL = 'C09EPLQL2D9'
 
+# (server, SQL Agent job name, display label). The RCE ETL Load is the SQL job
+# 'SSIS AetnaRCE Daily Process' (its steps are the real RCE monitor steps, e.g.
+# step 4 = 'Build Chimera') — NOT ETL_AetnaSupport_MasterLoad (AuditSupport).
 SQL_JOBS = [
-    ("TRGETL2", "ETL_AetnaSupport_MasterLoad"),
-    ("TRGETL4", "ETL NCStateAetna MasterLoad"),
+    ("TRGETL2", "SSIS AetnaRCE Daily Process", "Aetna RCE ETL Load"),
+    ("TRGETL4", "ETL NCStateAetna MasterLoad", "ETL NCStateAetna MasterLoad"),
 ]
 
 OUTCOME = {1: "Succeeded", 0: "Failed", 2: "Retry", 3: "Canceled", 4: "In Progress"}
@@ -127,8 +130,8 @@ def main():
     lines.append(rce_status())
     lines.append("")
     lines.append("*SQL Job Activity Monitor*")
-    for server, name in SQL_JOBS:
-        lines.append(f"- `{name}` ({server}): " + sql_job(server, name))
+    for server, name, label in SQL_JOBS:
+        lines.append(f"- `{label}` ({server}): " + sql_job(server, name))
     msg = "\n".join(lines)
     print("SLACK|" + msg.replace("\n", "\\n"))
 
