@@ -57,41 +57,63 @@ def rce_status():
     return line
 
 
+def fmt_dt(d, t):
+    """Build mm/dd/yyyy h:MM AM/PM from SQL Agent run_date (yyyymmdd) + run_time (hhmmss) ints."""
+    try:
+        d, t = int(d), int(t)
+        if d == 0:
+            return '?'
+        dt = datetime(d // 10000, (d // 100) % 100, d % 100,
+                      t // 10000, (t // 100) % 100, t % 100)
+        return dt.strftime('%m/%d/%Y %I:%M %p')
+    except Exception:
+        return '?'
+
+
+# SQL Agent current_execution_status / last_run_outcome code maps.
+EXEC_STATUS = {'1': 'Executing', '2': 'Waiting for thread', '3': 'Between retries',
+               '4': 'Idle', '5': 'Suspended', '7': 'Completing'}
+RUN_OUTCOME = {'0': 'Failed', '1': 'Succeeded', '3': 'Canceled', '5': 'Unknown'}
+
+
 def sql_job(server, name):
-    dt = ("DATEADD(SECOND,(h.run_time/10000)*3600+((h.run_time%10000)/100)*60+(h.run_time%100),"
-          "CONVERT(datetime,CONVERT(char(8),h.run_date)))")
-    q = (
-        "SET NOCOUNT ON; "
-        "SELECT CASE WHEN act.start_execution_date IS NOT NULL AND act.stop_execution_date IS NULL "
-        "THEN 'Executing' ELSE 'Idle' END, "
-        "CONVERT(varchar(19),act.start_execution_date,120), "
-        "h.run_status, CONVERT(varchar(19)," + dt + ",120), "
-        "STUFF(STUFF(RIGHT('000000'+CAST(h.run_duration AS varchar),6),5,0,':'),3,0,':') "
-        "FROM msdb.dbo.sysjobs j "
-        "OUTER APPLY (SELECT TOP 1 start_execution_date, stop_execution_date FROM msdb.dbo.sysjobactivity a "
-        "WHERE a.job_id=j.job_id ORDER BY a.session_id DESC) act "
-        "OUTER APPLY (SELECT TOP 1 run_status, run_date, run_time, run_duration FROM msdb.dbo.sysjobhistory hh "
-        "WHERE hh.job_id=j.job_id AND hh.step_id=0 ORDER BY hh.run_date DESC, hh.run_time DESC) h "
-        f"WHERE j.name=N'{name}';"
-    )
-    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-s', '|', '-h', '-1', '-Q', q],
+    """Report where the CURRENT load is, via sp_help_job (the value SSMS Job
+    Activity Monitor shows). When executing, returns the live step e.g.
+    '*Executing*: 4 (Build Chimera)'. When not running, returns Idle + the most
+    recent load's outcome.
+
+    sp_help_job is run raw (NOT via INSERT EXEC -- it nests an INSERT EXEC of
+    xp_sqlagent_enum_jobs internally, which also lets a non-sysadmin read the
+    live current step through ownership chaining). The single wide data row is
+    parsed positionally FROM THE END so leading text columns (description/owner)
+    can't shift the fields we need:
+      [-7]=current_execution_status [-6]=current_execution_step
+      [-11]=last_run_outcome [-12]=last_run_time [-13]=last_run_date
+    """
+    q = f"SET NOCOUNT ON; EXEC msdb.dbo.sp_help_job @job_name=N'{name}', @job_aspect=N'JOB';"
+    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-s', '~', '-Q', q],
                          capture_output=True, text=True, timeout=120)
+    row = None
     for line in out.stdout.splitlines():
-        line = line.strip()
-        if '|' in line and 'rows affected' not in line:
-            parts = line.split('|')
-            if len(parts) == 5:
-                state, cur_start, run_status, last_run, dur = parts
-                try:
-                    oc = OUTCOME.get(int(run_status), run_status)
-                except ValueError:
-                    oc = run_status
-                if state == 'Executing':
-                    return (f"*{state}* since {fmt(cur_start)} | last outcome {oc} "
-                            f"({fmt(last_run)}, {dur})")
-                return f"*{state}* | last outcome *{oc}* | {fmt(last_run)} | duration {dur}"
-    err = (out.stderr or out.stdout).strip().replace('\n', ' ')[:120]
-    return f"(no data{' — ' + err if err else ''})"
+        line = line.rstrip()
+        if not line or line.startswith('job_id') or 'rows affected' in line:
+            continue
+        if set(line) <= set('-~'):          # the ---- separator row
+            continue
+        parts = line.split('~')
+        if len(parts) >= 32:
+            row = [p.strip() for p in parts]
+            break
+    if not row:
+        err = (out.stderr or out.stdout).strip().replace('\n', ' ')[:120]
+        return f"(no data{' - ' + err if err else ''})"
+
+    status, step = row[-7], row[-6]
+    if status == '1':                        # Executing -> show current step only
+        return f"*Executing*: {step}"
+    st = EXEC_STATUS.get(status, f'State {status}')
+    oc = RUN_OUTCOME.get(row[-11], row[-11])
+    return f"*{st}* | last run {oc} ({fmt_dt(row[-13], row[-12])})"
 
 
 def main():
