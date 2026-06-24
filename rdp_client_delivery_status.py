@@ -527,27 +527,21 @@ MANUAL_OVERRIDES = {
     # the regression can't recur. Per user: "Once a client gets certified, do not
     # change the cell to an '!'." Remove once DHT flips 3598 back to Certified.
     ("CignaFacets",   date(2026, 6, 9)): date(2026, 6, 9),
-    # WellCare / WellCareRx delivery tracking (updated 2026-06-23):
-    #  - WellCare Medical 6/12 delivery certified 6/17 (pinned on the 6/12 cell —
-    #    outside its 6/8–6/12 window). 6/19 delivery certified 6/18 (per user +
-    #    DHT 6/18 10:46) → pin 6/18 on the 6/19 cell.
-    #  - WellCareRx loads TWO weeks at once → "L" on BOTH 6/12 and 6/19. Still
-    #    under review as of 6/23 (no DHT cert yet), expected to certify today.
-    #    TRANSITION: when WellCareRx certifies, swap both cells to that cert date.
+    # WellCare / WellCareRx delivery tracking (updated 2026-06-24):
+    #  - WellCare Medical: 6/12 cell certified 6/17; 6/19 cell certified 6/18.
+    #  - WellCareRx loaded 6/12+6/19 together and CERTIFIED 6/24 (per user; DHT
+    #    6/24 cert covers StatTimestamp weeks 6/19 + 6/24). Per user, pin 6/24 on
+    #    the 6/12, 6/19 AND 6/26 cells — the combined load's 6/12 week has no own
+    #    StatTimestamp so 6/12 needs the explicit pin; 6/19 & 6/26 pinned too.
     ("WellCare",      date(2026, 6, 12)): date(2026, 6, 17),
     ("WellCare",      date(2026, 6, 19)): date(2026, 6, 18),
-    ("WellCareRx",    date(2026, 6, 12)): "L",
-    ("WellCareRx",    date(2026, 6, 19)): "L",
-    # 2026-06-24: cert-to-week is now attributed via DHT StatTimestamp (see
-    # cert_in_week / build_cert_week_index), so the 6/22 certs land on the
-    # correct DATA week automatically — Centene split two weeks (stat 6/18 ->
-    # 6/16 cell, stat 6/21 Sun -> 6/23 cell); CenteneRx (stat 6/20 Sat) &
-    # OscarRx (stat 6/18) -> the 6/19 week. The four date-pins those needed are
-    # gone. Keep only the explicit blanks so the next-week 6/26 Friday cells
-    # stay empty (the system places no cert there; this just stops a stray
-    # L/"!"). Remove after this cycle rolls off the calendar.
-    ("CenteneRx",     date(2026, 6, 26)): "",
-    ("OscarRx",       date(2026, 6, 26)): "",
+    ("WellCareRx",    date(2026, 6, 12)): date(2026, 6, 24),
+    ("WellCareRx",    date(2026, 6, 19)): date(2026, 6, 24),
+    ("WellCareRx",    date(2026, 6, 26)): date(2026, 6, 24),
+    # 2026-06-24: CenteneRx/OscarRx 6/22 certs land on the 6/19 cell
+    # automatically via the StatTimestamp system. The 6/26 blank overrides were
+    # REMOVED 2026-06-24 — OscarRx & CenteneRx are now LOADING their 6/26
+    # delivery and must show "L" (the blanks were hiding it).
 }
 
 # --- Sticky certifications --------------------------------------------------
