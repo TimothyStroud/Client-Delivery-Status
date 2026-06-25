@@ -779,7 +779,7 @@ MONTHLY_CLIENTS = {
 # DHT cert. Value = exact RAMP JobName. UnitedRx(P) can't certify, so it's dated
 # off 'United 0130 RX Post Snap' (JobId 10218).
 ADHOC_MONTHLY_SNAP_CLIENTS = {
-    "UnitedRx(P)": "United 0130 RX Post Snap",
+    "UnitedRx(p)": "United 0130 RX Post Snap",
 }
 
 # Override display name for a client (the label only; client_key stays the same).
