@@ -772,6 +772,14 @@ MONTHLY_CLIENTS = {
     "SamaritanHealth", "Tufts_PublicPlan", "TuftsRx",
 }
 
+# Ad-hoc MONTHLY cert clients (per user 2026-06-25): appear ONCE per month on
+# their DHT certification date, ONLY after they certify — no fixed expected day,
+# never flagged "No Data"/missing before cert. Deliberately NOT in
+# MONTHLY_CLIENTS (that would flag them pre-cert). Value = DHT DatabaseName key.
+ADHOC_MONTHLY_CERT_CLIENTS = {
+    "UnitedRx": "UnitedRx",   # ticket certifying ~2026-06-25; surfaces on cert
+}
+
 # Override display name for a client (the label only; client_key stays the same).
 CLIENT_DISPLAY_NAME = {
     "BCBSFLEligibilityLoad": "BCBSFL Elig",
@@ -3280,6 +3288,19 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         elif disp.weekday() == 6:
             disp += timedelta(days=1)
         monthly[disp].append((label, mk, al, None, None))
+
+    # Ad-hoc MONTHLY cert clients (per user 2026-06-25): surface ONCE per month
+    # in the MONTHLY section on the DHT cert date, ONLY after certified. No cert
+    # this month -> no row (never flagged missing). e.g. UnitedRx.
+    for label, db in ADHOC_MONTHLY_CERT_CLIENTS.items():
+        best = None
+        for key in _keys_for_client(db):
+            for dt, status in cert_idx.get(key, ()):
+                if status == "Certified" and dt.year == year and dt.month == month:
+                    if best is None or dt > best:
+                        best = dt
+        if best is not None:
+            monthly[best.date()].append((label, best.date(), False, None, None))
 
     # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month
     # surfaces on the first Tuesday of each month. Per user 2026-06-03.
