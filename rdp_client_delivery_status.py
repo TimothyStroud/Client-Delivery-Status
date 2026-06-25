@@ -772,12 +772,14 @@ MONTHLY_CLIENTS = {
     "SamaritanHealth", "Tufts_PublicPlan", "TuftsRx",
 }
 
-# Ad-hoc MONTHLY cert clients (per user 2026-06-25): appear ONCE per month on
-# their DHT certification date, ONLY after they certify — no fixed expected day,
-# never flagged "No Data"/missing before cert. Deliberately NOT in
-# MONTHLY_CLIENTS (that would flag them pre-cert). Value = DHT DatabaseName key.
-ADHOC_MONTHLY_CERT_CLIENTS = {
-    "UnitedRx": "UnitedRx",   # ticket certifying ~2026-06-25; surfaces on cert
+# Ad-hoc MONTHLY snap-driven clients (per user 2026-06-25): appear ONCE per
+# month in the MONTHLY section, dated to when a specific RAMP job FINISHES
+# (Successful/Resolved) — no fixed expected day, never flagged missing. Used when
+# a client can't be certified, so its cell is dated off a RAMP job instead of a
+# DHT cert. Value = exact RAMP JobName. UnitedRx(P) can't certify, so it's dated
+# off 'United 0130 RX Post Snap' (JobId 10218).
+ADHOC_MONTHLY_SNAP_CLIENTS = {
+    "UnitedRx(P)": "United 0130 RX Post Snap",
 }
 
 # Override display name for a client (the label only; client_key stays the same).
@@ -3289,18 +3291,30 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             disp += timedelta(days=1)
         monthly[disp].append((label, mk, al, None, None))
 
-    # Ad-hoc MONTHLY cert clients (per user 2026-06-25): surface ONCE per month
-    # in the MONTHLY section on the DHT cert date, ONLY after certified. No cert
-    # this month -> no row (never flagged missing). e.g. UnitedRx.
-    for label, db in ADHOC_MONTHLY_CERT_CLIENTS.items():
-        best = None
-        for key in _keys_for_client(db):
-            for dt, status in cert_idx.get(key, ()):
-                if status == "Certified" and dt.year == year and dt.month == month:
-                    if best is None or dt > best:
-                        best = dt
-        if best is not None:
-            monthly[best.date()].append((label, best.date(), False, None, None))
+    # Ad-hoc MONTHLY snap-driven clients (per user 2026-06-25): surface ONCE per
+    # month in the MONTHLY section, dated to when the named RAMP job FINISHES
+    # (LatestJobRun EndDate, Successful/Resolved) this month; 'L' on today while
+    # it's Ready/Running; no row if it hasn't run this month. e.g. UnitedRx(P)
+    # <- 'United 0130 RX Post Snap' (UnitedRx can't certify).
+    for label, jobname in ADHOC_MONTHLY_SNAP_CLIENTS.items():
+        jn_l = jobname.strip().lower()
+        for j in ramp_jobs:
+            if (j.get("JobName") or "").strip().lower() != jn_l:
+                continue
+            lr = j.get("LatestJobRun") or {}
+            status = (lr.get("Status") or "").strip().lower()
+            if status.startswith("success") or status == "resolved":
+                fin = parse_dt(lr.get("EndDate")) or parse_dt(lr.get("StartDate"))
+                if fin and fin.year == year and fin.month == month:
+                    disp = fin.date()
+                    if disp.weekday() == 5:
+                        disp -= timedelta(days=1)
+                    elif disp.weekday() == 6:
+                        disp += timedelta(days=1)
+                    monthly[disp].append((label, fin.date(), False, None, None))
+            elif status in ("ready", "running"):
+                monthly[today].append((label, "L", False, None, None))
+            break
 
     # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month
     # surfaces on the first Tuesday of each month. Per user 2026-06-03.
