@@ -265,10 +265,9 @@ KAISER_PREPAY_CLIENT = "KaiserPrePayCOB"
 # Fixed display order for the Daily section (per user 2026-06-16) — NOT
 # alphabetical. Every daily client shows on every weekday (blank or "-" when it
 # didn't load). Matched by label prefix so client suffixes like "(s)"/"(p)"
-# still resolve. "Aetna MSPI" is a persistent daily row; "Kaiser Submission"
-# sits between KaiserPrePayCOB and NCStateAetna.
+# still resolve. "Kaiser Submission" sits between KaiserPrePayCOB and
+# NCStateAetna. (Aetna MSPI moved to Monthly Ad Hoc 2026-06-25.)
 DAILY_ORDER = [
-    "Aetna MSPI",
     "AetnaHRP",
     "AetnaRCE",
     "AetnaRx",
@@ -3258,33 +3257,29 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     # (KaiserPrePayCOB Sat/Sun weekend tracking removed 2026-06-16 per user —
     # no need to surface Saturday/Sunday loads anymore.)
 
-    # Ad-hoc loads (per user 2026-06-16):
-    #  - "Aetna MSPI" → persistent DAILY row (every weekday): ✓/L/Load Failure on
-    #    load days, "-" on no-load weekdays.
-    #  - "BCBSNC MSPI" + all other ad-hoc (Aetna QNXT MSPI, HumanaRx) → surface
-    #    in the weekly section only on the day they run. BCBSNC MSPI has no fixed
-    #    loading cycle yet, so it's NOT a persistent row (per user 2026-06-16).
+    # Ad-hoc MSPI loads -> "Monthly Ad Hoc" (per user 2026-06-25): each MSPI
+    # client (Aetna MSPI, BCBSNC MSPI, Aetna QNXT MSPI) appears ONCE per month,
+    # on the date of its LATEST ad-hoc load that month, in the MONTHLY section.
+    # No persistent daily row, no per-run weekly entries, never flagged missing
+    # (matches HumanaRx, which is already monthly). Weekend-start loads shift to
+    # an adjacent weekday for display.
     since_adhoc = date(year, month, 1) - timedelta(days=14)
-    aetna_mspi_by_day = {}
+    mspi_latest = {}   # label -> (orig_day, marker, alert)
     for ah in scan_adhoc_loads(ramp_queue, ramp_jobs, today, since_adhoc,
                                weekend_shift=False):
         d = ah["day"]
         if d.year != year or d.month != month:
             continue
-        if ah["label"] == "Aetna MSPI":
-            aetna_mspi_by_day[d] = (ah["marker"], ah["alert"])
-        else:
-            # Surface on a weekday (shift weekend-start loads).
-            if d.weekday() == 5:
-                d -= timedelta(days=1)
-            elif d.weekday() == 6:
-                d += timedelta(days=1)
-            weekly[d].append((ah["label"], ah["marker"], ah["alert"], None, None))
-    # Persistent Aetna MSPI daily row — "-" on no-load weekdays. (Weekend-start
-    # loads land on weekend keys that all_days never reads.)
-    for d in all_days:
-        mk, al = aetna_mspi_by_day.get(d, ("-", False))
-        daily[d].append(("Aetna MSPI", mk, al, None, None))
+        prev = mspi_latest.get(ah["label"])
+        if prev is None or d >= prev[0]:
+            mspi_latest[ah["label"]] = (d, ah["marker"], ah["alert"])
+    for label, (d, mk, al) in mspi_latest.items():
+        disp = d
+        if disp.weekday() == 5:
+            disp -= timedelta(days=1)
+        elif disp.weekday() == 6:
+            disp += timedelta(days=1)
+        monthly[disp].append((label, mk, al, None, None))
 
     # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month
     # surfaces on the first Tuesday of each month. Per user 2026-06-03.
