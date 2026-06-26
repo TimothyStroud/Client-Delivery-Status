@@ -32,6 +32,11 @@ TO_ADDR   = 'RDPOperations@machinify.com'
 SLA_DAYS = 3
 LOAD_JOB_NAME = 'Emblem Facets 0110 Load'
 
+# Only run during the monthly window (per user 2026-06-26): the 15th-20th of the
+# month, inclusive. The Scheduled Task still fires daily 9am/2pm, but the script
+# no-ops on any other day. --force / --status bypass the window.
+WINDOW_START, WINDOW_END = 15, 20
+
 # (display label, filename prefix) for the 5 expected response files
 EXPECTED = [
     ("RESP_RWGS_CEE_FF_*",                              "RESP_RWGS_CEE_FF_"),
@@ -204,6 +209,12 @@ Monthly cycle &middot; {SLA_DAYS}-day SLA measured from <i>Emblem Facets 0110 Lo
 def main():
     status_only = '--status' in sys.argv
     force = '--force' in sys.argv
+
+    day = datetime.now().day
+    if not (WINDOW_START <= day <= WINDOW_END) and not force and not status_only:
+        print(f"Outside monthly check window ({WINDOW_START}th-{WINDOW_END}th); "
+              f"today is the {day}. Skipping.")
+        return
 
     anchor = get_load_start()
     if anchor is None:
