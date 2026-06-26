@@ -235,7 +235,9 @@ def main():
             print(f"NO_POST: deduped (a digest was already emitted at "
                   f"{recent.strftime('%I:%M %p')}, within {DEDUPE_MINUTES} min)")
             return
-        _claim_slot()
+    # Claim the slot (both normal and --force) so any near-simultaneous run dedupes
+    # against this one. Done before the slow SQL/curl work to shrink the race window.
+    _claim_slot()
 
     # Per user 2026-06-23: once BOTH the RCE load and NCStateAetna MasterLoad
     # have already SUCCEEDED today, the rest of the day's digests are redundant
