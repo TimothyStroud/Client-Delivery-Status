@@ -3,23 +3,27 @@ Load-Completion SLA monitor (RAMP) -> email from DataOperations to RDPOperations
 
 Reports Success / Failed SLA when a monitored RAMP load job COMPLETES.
 
-Weekly clients (5-day SLA, measured from the load's own start):
-    Caresource 0200 Load            (JobId 5003)
-    HealthSpring_FWA 0110 Claims Load (JobId 1814)
-    Wellmark 0210 Claims Load       (JobId 2097)
-  -> SLA met if the latest run is Successful AND finished within 5 days of its
-     start. Failed status, or duration > 5 days, = Failed SLA.
+Schedule: task runs 8am Mon-Fri. Each client is reported ONCE per period, then
+goes dormant until the next period starts (weekly -> Monday, monthly -> 1st
+weekday). Per user 2026-06-26.
+
+5-day-SLA clients (SLA met if latest run Successful AND finished within 5 days of
+its start; Failed status or >5 days = Failed SLA):
+    Caresource 0200 Load             (JobId 5003)  -- WEEKLY
+    Wellmark 0210 Claims Load        (JobId 2097)  -- WEEKLY
+    HealthSpring_FWA 0110 Claims Load (JobId 1814) -- MONTHLY (reclassified
+        from weekly 2026-06-26; SLA still the 5-day load duration)
 
 Monthly client (Optum 0110 PBM Load, first Friday):
     Load  (JobId 1844) + Snap (Optum 0200 PBM Start Snap, JobId 1950)
   -> Success requires: all 3 RAW files (RAW1/RAW2/RAW3) for the cycle present,
-     AND both Load and Snap Successful.  [NOTE: only RAW1 has ever appeared on
-     disk historically -- pending confirmation of what RAW2/RAW3 map to.]
+     AND both Load and Snap Successful. RAW1/2/3 verified via OptumPBMRx.etl.Tape
+     on TRGETL3.
 
 Data source: RAMP /api/Ramp/Job/List (includes LatestJobRun per job).
-Sends each completed run exactly once (state file keyed on QueueId / cycle).
+State (loadsla_state.json) records per client: last_qid + last_period.
 
-Flags: --status (print, no send), --force (ignore state).
+Flags: --status (print, no send), --force (ignore state + period gate).
 """
 import sys, os, json, subprocess
 from datetime import datetime, timedelta
@@ -32,11 +36,27 @@ STATE_FILE = os.path.join(BASE, 'loadsla_state.json')
 FROM_ADDR = 'DataOperations@machinify.com'
 TO_ADDR   = 'RDPOperations@machinify.com'
 
-WEEKLY_JOBS = [
-    {'key': 'caresource',       'name': 'Caresource 0200 Load',             'jobid': 5003, 'sla_days': 5},
-    {'key': 'healthspring_fwa', 'name': 'HealthSpring_FWA 0110 Claims Load', 'jobid': 1814, 'sla_days': 5},
-    {'key': 'wellmark',         'name': 'Wellmark 0210 Claims Load',         'jobid': 2097, 'sla_days': 5},
+# 5-day-SLA jobs (duration = EndDate-StartDate). `cadence` drives the
+# report-once-per-period gating (added 2026-06-26 per user): once a job's
+# completion is reported for the current period, it goes dormant until the next
+# period starts -- weekly restarts Monday, monthly restarts the 1st weekday of
+# the month. The task runs 8am Mon-Fri, so the first run of a new period IS the
+# Monday / 1st-weekday restart.
+JOBS = [
+    {'key': 'caresource',       'name': 'Caresource 0200 Load',             'jobid': 5003, 'sla_days': 5, 'cadence': 'weekly'},
+    {'key': 'wellmark',         'name': 'Wellmark 0210 Claims Load',         'jobid': 2097, 'sla_days': 5, 'cadence': 'weekly'},
+    {'key': 'healthspring_fwa', 'name': 'HealthSpring_FWA 0110 Claims Load', 'jobid': 1814, 'sla_days': 5, 'cadence': 'monthly'},
 ]
+
+
+def period_key(cadence, today=None):
+    """Identifier for the current SLA period. Weekly = ISO year-week (restarts
+    Monday); monthly = year-month (restarts the 1st)."""
+    today = today or datetime.now()
+    if cadence == 'weekly':
+        y, w, _ = today.isocalendar()
+        return f"{y}-W{w:02d}"
+    return f"{today.year}-{today.month:02d}"
 
 OPTUM_ENABLED = True
 
@@ -116,7 +136,7 @@ def weekly_email(job, run):
 
     body = f"""<html><body style="font-family:Calibri,Arial,sans-serif;font-size:14px;color:#222">
 <p><b>SLA Update &ndash; {job['name']}</b><br>
-Weekly client &middot; {job['sla_days']}-day SLA from load start &middot; Source: RAMP Dashboard</p>
+{job['cadence'].title()} client &middot; {job['sla_days']}-day SLA from load start &middot; Source: RAMP Dashboard</p>
 
 <p style="color:{color};font-weight:bold;font-size:16px">{verdict}{reason}</p>
 
@@ -208,25 +228,30 @@ def main():
     state = load_state()
     sent_any = False
 
-    # ---- Weekly jobs ----
-    for job in WEEKLY_JOBS:
+    # ---- 5-day-SLA jobs (weekly + monthly), report-once-per-period ----
+    for job in JOBS:
         run = runs.get(job['jobid'])
         if not run:
             print(f"[{job['key']}] no run data"); continue
         qid = run.get('QueueId'); status = run.get('Status'); end = run.get('EndDate')
-        print(f"[{job['key']}] QueueId={qid} Status={status} End={end}")
-        if not end:
-            print("   still running / not complete -- skip"); continue
-        already = state.get(job['key'], {}).get('last_qid') == qid
+        pk = period_key(job['cadence'])
+        cell = state.get(job['key'], {})
+        print(f"[{job['key']}] ({job['cadence']}) QueueId={qid} Status={status} End={end} period={pk}")
         if status_only:
             continue
-        if already and not force:
-            print("   already reported -- skip"); continue
+        if not force:
+            if cell.get('last_period') == pk:
+                print("   already reported this period -- dormant until restart"); continue
+            if cell.get('last_qid') == qid:
+                print("   this completion already reported -- skip"); continue
+        if not end:
+            print("   still running / not complete -- skip"); continue
         subj, body, ok = weekly_email(job, run)
         res = send(to=TO_ADDR, subject=subj, body=body, from_address=FROM_ADDR)
         print(f"   send -> {res} | {subj}")
         if res == 'Sent.':
-            state.setdefault(job['key'], {})['last_qid'] = qid
+            cell['last_qid'] = qid; cell['last_period'] = pk
+            state[job['key']] = cell
             sent_any = True
 
     # ---- Optum monthly ----
@@ -240,20 +265,24 @@ def main():
             raw_found, tag = {l: False for l in OPTUM['raw_labels']}, '?'
         print(f"[optum_pbm] LoadQ={lqid} LoadEnd={lend} SnapEnd={send_end} tag={tag} RAW={raw_found}")
         complete = bool(lend and send_end)
-        already = state.get(OPTUM['key'], {}).get('last_qid') == lqid
+        pk = period_key('monthly')  # Optum is monthly: report once/month, restart 1st weekday
+        cell = state.get(OPTUM['key'], {})
         if not status_only and not OPTUM_ENABLED:
             print("   OPTUM_ENABLED=False -- not sending (pending RAW1/2/3 confirmation)")
         elif not status_only:
-            if not complete:
+            if not force and cell.get('last_period') == pk:
+                print("   already reported this month -- dormant until restart")
+            elif not complete:
                 print("   load/snap not both complete -- skip")
-            elif already and not force:
-                print("   already reported -- skip")
+            elif not force and cell.get('last_qid') == lqid:
+                print("   this completion already reported -- skip")
             else:
                 subj, body, ok = optum_email(lrun, srun, raw_found, tag)
                 res = send(to=TO_ADDR, subject=subj, body=body, from_address=FROM_ADDR)
                 print(f"   send -> {res} | {subj}")
                 if res == 'Sent.':
-                    state.setdefault(OPTUM['key'], {})['last_qid'] = lqid
+                    cell['last_qid'] = lqid; cell['last_period'] = pk
+                    state[OPTUM['key']] = cell
                     sent_any = True
 
     if not status_only and sent_any:
