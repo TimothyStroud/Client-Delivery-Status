@@ -13,11 +13,42 @@ Always emits (it's a periodic status report, not event-driven).
 Note: msdb.dbo.agent_datetime is permission-blocked here, so run_date/run_time
 are converted to a datetime manually.
 """
-import json, re, subprocess
+import json, os, re, subprocess, sys
 from datetime import datetime, timedelta
 
 RCE_JOBID = 2257
 CHANNEL = 'C09EPLQL2D9'
+
+# ---- Cross-session dedupe guard (added 2026-06-26) ----------------------------
+# The digest cron is session-only and recreated in EVERY open Claude session, so
+# if two sessions are idle near the same slot they BOTH fire and BOTH post to
+# both channels -> duplicate posts. This guard records the last emit time to a
+# shared on-disk file; any run within DEDUPE_MINUTES of the last emit prints
+# 'NO_POST: deduped ...' and emits nothing. The slot is CLAIMED (file written)
+# before the slow SQL/curl work, so a second session bails almost immediately.
+# Window (25 min) > max cron jitter (15 min), < real slot spacing (~2 h).
+# Use --force to bypass (e.g. a deliberate manual on-demand post).
+DEDUPE_MINUTES = 25
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'ramp_aetna_digest_post_state.json')
+
+
+def _recent_emit():
+    """Return the last-emit datetime if within DEDUPE_MINUTES, else None."""
+    try:
+        with open(STATE_FILE) as f:
+            last = datetime.fromisoformat(json.load(f)['last_emit'])
+    except Exception:
+        return None
+    return last if datetime.now() - last < timedelta(minutes=DEDUPE_MINUTES) else None
+
+
+def _claim_slot():
+    """Stamp now as the last-emit time (atomic replace), claiming this slot."""
+    tmp = STATE_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump({'last_emit': datetime.now().isoformat()}, f)
+    os.replace(tmp, STATE_FILE)
 
 # (server, SQL Agent job name, display label). The RCE ETL Load is the SQL job
 # 'SSIS AetnaRCE Daily Process' (its steps are the real RCE monitor steps, e.g.
@@ -194,6 +225,18 @@ def job_succeeded_today(server, name):
 
 
 def main():
+    # Cross-session dedupe (added 2026-06-26): bail if another session/run already
+    # emitted a digest within the last DEDUPE_MINUTES. Claim the slot up front so a
+    # near-simultaneous second session bails before doing the slow SQL/curl work.
+    force = '--force' in sys.argv
+    if not force:
+        recent = _recent_emit()
+        if recent:
+            print(f"NO_POST: deduped (a digest was already emitted at "
+                  f"{recent.strftime('%I:%M %p')}, within {DEDUPE_MINUTES} min)")
+            return
+        _claim_slot()
+
     # Per user 2026-06-23: once BOTH the RCE load and NCStateAetna MasterLoad
     # have already SUCCEEDED today, the rest of the day's digests are redundant
     # -> emit no SLACK line so the cron/task posts nothing. (If either is still
