@@ -2,7 +2,8 @@
 RAMP -> Slack monitor for the Aetna RCE 310 ETL Load job.
 
 Event posted to #team-rdp-operations-support (C09EPLQL2D9):
-  - 'Aetna RCE 310 ETL Load' (JobId 2257): when a run FINISHES Successful or Failed.
+  - 'Aetna RCE 310 ETL Load' (JobId 2257): when a run FINISHES *Failed* only
+    (success completions are not posted, per user 2026-06-26).
 
 (NCStateAetna 0100 Delivery Ticket start check removed per user 2026-06-20.)
 
@@ -65,17 +66,15 @@ def detect(runs, state):
     events = []
     rce = runs.get(RCE_JOBID, {})
 
-    # RCE: completion (Successful/Failed), once per QueueId
-    if rce.get('EndDate') and rce.get('Status') in DONE_STATUSES \
+    # RCE: announce ONLY a FAILED completion, once per QueueId (per user
+    # 2026-06-26: success completions are no longer posted). Successful runs emit
+    # no SLACK line, so the cron never --commits them; that's fine since a run's
+    # final status never flips and a later failure carries a new QueueId.
+    if rce.get('EndDate') and rce.get('Status') == 'Failed' \
             and rce.get('QueueId') != state.get('rce_last_completed_qid'):
-        if rce['Status'] == 'Successful':
-            txt = ("<!here> :white_check_mark: *Aetna RCE 310 ETL Load* completed "
-                   f"*successfully* in RAMP.\n> QueueId {rce['QueueId']} | "
-                   f"started {fmt(rce.get('StartDate'))} | finished {fmt(rce.get('EndDate'))}")
-        else:
-            txt = ("<!here> :x: *Aetna RCE 310 ETL Load* *FAILED* in RAMP.\n> QueueId "
-                   f"{rce['QueueId']} | started {fmt(rce.get('StartDate'))} | "
-                   f"ended {fmt(rce.get('EndDate'))} | please investigate.")
+        txt = ("<!here> :x: *Aetna RCE 310 ETL Load* *FAILED* in RAMP.\n> QueueId "
+               f"{rce['QueueId']} | started {fmt(rce.get('StartDate'))} | "
+               f"ended {fmt(rce.get('EndDate'))} | please investigate.")
         events.append(('rce', txt))
     return events
 
