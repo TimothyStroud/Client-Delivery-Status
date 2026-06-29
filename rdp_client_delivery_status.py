@@ -541,6 +541,12 @@ MANUAL_OVERRIDES = {
     # automatically via the StatTimestamp system. The 6/26 blank overrides were
     # REMOVED 2026-06-24 — OscarRx & CenteneRx are now LOADING their 6/26
     # delivery and must show "L" (the blanks were hiding it).
+    # 2026-06-29: Centene Medical (weekly Tue) was rendering "Load Failure" on
+    # its 6/30 cell, but per user it is NOT failed — it has Snapped and is ready
+    # for certification today. Centene is cert-pending (not SNAP_ONLY), so the
+    # snapped-not-yet-certified state is "L". Remove once DHT cert lands (the
+    # cell then surfaces the cert date automatically).
+    ("Centene",       date(2026, 6, 30)): "L",
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -644,6 +650,10 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     "AetnaQNXT":  (date(2026, 5, 19), "AUTO"),
     # Kaiser_AmbM override removed 2026-06-08 — snap re-enabled; it now follows
     # the standard Kaiser_Amb cert-only placement (Thursday anchor).
+    # 2026-06-29: BCBSFL Elig (monthly, 6/25) was auto-rendering ✓, but per user
+    # it is in a Load Failure status — not completed. Pin "Load Failure" (pink)
+    # on its 6/25 expected day. Remove once the reload completes / certifies.
+    "BCBSFLEligibilityLoad": (date(2026, 6, 25), "Load Failure"),
 }
 
 # Extra rows injected into the calendar after standard placement runs. Use for
@@ -3208,6 +3218,19 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         if marker == "No Data":
             ref_end = date(year, month, min(hi, last_day))
             alert = (today - ref_end).days > 7
+        # 2026-06-29 one-off: per user, OptumPBMRx RAW5 is currently loading but
+        # the tape row / is_loading_today hasn't surfaced it yet, leaving the
+        # RAW 5/6 half at "No Data". Force "L" on today for this half. The L must
+        # land on the tab that actually RENDERS today's week (6/29 falls in the
+        # 6/29-7/3 week, which month_weeks claims for July), so gate on that —
+        # not on the loop month. Remove once the RAW load completes (✓ takes over).
+        if (label_suffix == "(RAW 5/6)" and today.year == 2026 and today.month == 6
+                and marker != "✓"
+                and any(today in wk for wk in month_weeks(year, month))):
+            placement = today
+            marker = "L"
+            label = "OptumPBMRx (RAW 5/6) — RAW 5 loading"
+            alert = False
         monthly[placement].append((label, marker, alert, None))
 
     place_optum_half("(RAW 1/2/3)", 1, 7, {1, 2, 3},

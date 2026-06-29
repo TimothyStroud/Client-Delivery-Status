@@ -304,3 +304,12 @@ State saved.
    already reported -- skip
 [optum_pbm] LoadQ=1370920 LoadEnd=2026-06-06T12:36:23.453 SnapEnd=2026-06-06T13:13:51.703 tag=06052026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
    already reported -- skip
+[caresource] (weekly) QueueId=1383364 Status=Successful End=2026-06-23T02:22:58.037 period=2026-W27
+   this completion already reported -- skip
+[wellmark] (weekly) QueueId=1389313 Status=Failed End=2026-06-29T02:36:20.607 period=2026-W27
+   send -> Sent. | SLA Update - Wellmark 0210 Claims Load - FAILED SLA
+[healthspring_fwa] (monthly) QueueId=1368201 Status=Successful End=2026-06-02T18:20:42.99 period=2026-06
+   this completion already reported -- skip
+[optum_pbm] LoadQ=1389476 LoadEnd=None SnapEnd=2026-06-06T13:13:51.703 tag=06292026 RAW={'RAW1': False, 'RAW2': False, 'RAW3': False}
+   load/snap not both complete -- skip
+State saved.
