@@ -547,12 +547,15 @@ MANUAL_OVERRIDES = {
     # snapped-not-yet-certified state is "L". Remove once DHT cert lands (the
     # cell then surfaces the cert date automatically).
     ("Centene",       date(2026, 6, 30)): "L",
+    # KPP_OVERRIDE_START (auto-removed by kpp_override_cleanup.py once the
+    # 'Kaiser Pareo Prepay 0110 Load' succeeds on 2026-06-29)
     # 2026-06-29: KaiserPrePayCOB did NOT load today yet — 'Kaiser Pareo Prepay
     # 0100 Stage' is running and '0110 Load' is next. The Mon 6/29 cell was
     # showing the weekend (6/28) snap as a stale ✓; per user it should show "L"
-    # (load in progress). Remove once today's load+snap completes (the cell then
-    # surfaces ✓/cert naturally).
+    # (load in progress). Auto-removed once today's load completes so the cell
+    # surfaces ✓/cert naturally.
     ("KaiserPrePayCOB", date(2026, 6, 29)): "L",
+    # KPP_OVERRIDE_END
 }
 
 # --- Sticky certifications --------------------------------------------------
