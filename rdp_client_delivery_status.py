@@ -1586,40 +1586,60 @@ def fetch_ramp_snaps():
     return out
 
 
-def fetch_evernorth_claims_dates(since):
-    r"""Dates on which an EverNorthRx CLAIMS file (ESI_PAID_CLAIMS_*) was
-    staged / ready for loading, from [RAMP].[ramp].[FileLog].
+def compute_evernorth_claims_pending(queue, jobs, since):
+    r"""True if EverNorthRx has a CLAIMS file (ESI_PAID_CLAIMS_*) staged and NOT
+    yet loaded — i.e. genuinely "ready for loading" right now.
 
-    Drives the EverNorthRx "L": the weekly claims row should only flag "L" when
-    actual claims are present — the daily Masterload also stages eligibility-only
-    files (ESI_*_ELIG_*, COBC, TRR, ACUM, ABII) that must NOT light up the claims
-    row. Per user 2026-06-29: "Only flag EverNorthRx as 'L' if the 'EvernorthRx
-    Masterload 0100 Stage' has Claim ('ESI_PAID_CLAIMS_*') ready for loading."
+    The EverNorthRx weekly claims row should flag "L" only while claims are
+    staged/awaiting load — the daily Masterload also stages eligibility-only files
+    (ESI_*_ELIG_*, COBC, TRR, ACUM, ABII) that must NOT light up the claims row,
+    and the L must DROP the moment the claims actually load (not linger through the
+    snap-awaiting-cert window). Per user 2026-06-29.
 
-    Returns a set of date objects (the FileLog LogDate = when the claims file was
-    staged). `[_]` escapes the literal underscores (T-SQL LIKE treats _ as a
-    single-char wildcard).
+    RAMP's FileLog has no "Loaded" status (only Completed -> Staged), so "not yet
+    loaded" is inferred by time: claims are pending when the latest staged
+    ESI_PAID_CLAIMS file (ramp.FileLog LogDate) is NEWER than the latest successful
+    'EvernorthRx Masterload 0110 Load' completion (the load that consumes them).
+    Once a Masterload Load completes after the stage, the claims are loaded and
+    this returns False. `[_]` escapes the literal underscores (T-SQL LIKE treats
+    _ as a single-char wildcard).
     """
     q = (
         "SET NOCOUNT ON; "
-        "SELECT DISTINCT CONVERT(varchar(10), LogDate, 121) "
+        "SELECT CONVERT(varchar(19), MAX(LogDate), 121) "
         "FROM [RAMP].[ramp].[FileLog] "
-        "WHERE FileName LIKE 'ESI[_]PAID[_]CLAIMS%' "
+        "WHERE FileName LIKE 'ESI[_]PAID[_]CLAIMS%' AND Status = 'Staged' "
         f"AND LogDate >= '{since:%Y-%m-%d}'"
     )
     r = subprocess.run(
         ["sqlcmd", "-S", SQL_SERVER, "-d", "RAMP", "-E", "-Q", q, "-W", "-h", "-1"],
         capture_output=True, text=True, check=False,
     )
-    out = set()
+    claims_stage = None
     for line in r.stdout.splitlines():
-        s = line.strip()
-        if len(s) == 10 and s[4] == "-":
-            try:
-                out.add(date.fromisoformat(s))
-            except ValueError:
-                pass
-    return out
+        claims_stage = parse_dt(line.strip())
+        if claims_stage:
+            break
+    if not claims_stage:
+        return False
+    # Latest successful 'EvernorthRx Masterload 0110 Load' completion from queue.
+    load_ids = {
+        j.get("JobId") for j in jobs
+        if "masterload" in (j.get("JobName") or "").lower()
+        and "0110 load" in (j.get("JobName") or "").lower()
+        and "evernorth" in (j.get("JobName") or "").lower()
+    }
+    load_end = None
+    for item in queue:
+        if item.get("JobId") not in load_ids:
+            continue
+        st = (item.get("Status") or "").lower()
+        if not (st.startswith("success") or st == "resolved"):
+            continue
+        e = parse_dt(item.get("EndDate"))
+        if e and (load_end is None or e > load_end):
+            load_end = e
+    return load_end is None or claims_stage > load_end
 
 
 def fetch_aetna_nmsp_loads(since):
@@ -2582,7 +2602,7 @@ def is_friday_or_later_in_week(today, scheduled_day):
 
 def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_placements,
                   ramp_jobs, ramp_queue, esipbmrx_tape=None, multi_week_loads=None,
-                  aetna_nmsp_loads=None, optumpbmrx_tape=None, evernorth_claims_dates=None):
+                  aetna_nmsp_loads=None, optumpbmrx_tape=None, evernorth_claims_pending=False):
     """Return ((sections, weeks)) layout.
 
     sections: dict {kind: dict {date: [(label, marker, alert)] }}
@@ -2768,21 +2788,17 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             return ""
 
         # EverNorthRx: weekly CLAIMS row. The daily Masterload also stages
-        # eligibility-only files (ELIG / COBC / TRR / ACUM / ABII), so only flag
-        # "L" when actual claims (ESI_PAID_CLAIMS_*) are staged/ready for loading
-        # in this cell's week. Cert (handled above) still wins; a recent claims-
-        # load failure still surfaces. Per user 2026-06-29.
+        # eligibility-only files (ELIG / COBC / TRR / ACUM / ABII), so flag "L"
+        # ONLY while actual claims (ESI_PAID_CLAIMS_*) are staged and NOT yet
+        # loaded (evernorth_claims_pending) — the L drops the moment the Masterload
+        # Load consumes them, rather than lingering through snap-awaiting-cert.
+        # Cert (handled above) still wins; a claims-load failure still surfaces.
+        # Per user 2026-06-29 (tightened from the per-week claims check same day).
         if client == "EverNorthRx":
             if in_current_week:
-                wk_s = day - timedelta(days=day.weekday())
-                wk_e = wk_s + timedelta(days=6)
-                claims_ready = any(wk_s <= cd <= wk_e
-                                   for cd in (evernorth_claims_dates or ()))
-                if claims_ready and is_loading_today(client, ramp_queue, ramp_jobs):
-                    return "L"
                 if has_recent_failure(client, ramp_queue, ramp_jobs, today):
                     return "Load Failure"
-                if claims_ready and snap_in_week(client, day, snap_idx):
+                if evernorth_claims_pending:
                     return "L"
             return ""
 
@@ -4608,9 +4624,10 @@ def main():
     aetna_nmsp_loads = fetch_aetna_nmsp_loads(since=date(year, month, 1) - timedelta(days=30))
     print(f"[info]   {len(aetna_nmsp_loads)} Aetna NonMSP entries")
 
-    print("[info] Querying RAMP FileLog for EverNorthRx claims (ESI_PAID_CLAIMS_*)…")
-    evernorth_claims_dates = fetch_evernorth_claims_dates(since=date(year, month, 1) - timedelta(days=14))
-    print(f"[info]   EverNorthRx claims-staged dates: {len(evernorth_claims_dates)}")
+    print("[info] Checking EverNorthRx claims (ESI_PAID_CLAIMS_*) staged-not-loaded…")
+    evernorth_claims_pending = compute_evernorth_claims_pending(
+        queue, jobs, since=date(year, month, 1) - timedelta(days=14))
+    print(f"[info]   EverNorthRx claims pending load: {evernorth_claims_pending}")
 
     latest_tickets, monthly_placements = build_ticket_index(tickets, jobs)
     print(f"[info] latest tickets indexed for {len(latest_tickets)} clients")
@@ -4660,7 +4677,7 @@ def main():
                                         multi_week_loads=multi_week_loads,
                                         aetna_nmsp_loads=aetna_nmsp_loads,
                                         optumpbmrx_tape=tape_loads.get("optumpbmrx"),
-                                        evernorth_claims_dates=evernorth_claims_dates)
+                                        evernorth_claims_pending=evernorth_claims_pending)
 
         tab_name = f"{_cal_mod.month_name[m]} {year}"
         ws_m = wb.create_sheet(tab_name)
