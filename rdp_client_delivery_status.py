@@ -1707,6 +1707,60 @@ def fetch_tape_loads(db, since, server="TRGETL3", name_like=None):
     return rows
 
 
+def fetch_optum_raw_instances(since):
+    r"""OptumPBMRx per-RAW file instances for the broken-out report rows.
+
+    Scans TRGETL3 OptumPBMRx etl.Tape for RAW files at ALL ProcessStatus values
+    (50 = loaded; <50, e.g. 42 = staging/loading) — NOT just 50 like
+    fetch_tape_loads — so a RAW shows "L" while it's still loading. Keyed by
+    (raw_n, data_date) so each monthly cycle's RAW is a distinct instance.
+    Returns list of dicts: {raw_n:int, data_date:str, loaded:bool,
+    load_date:datetime|None, latest:datetime}. Snap attribution is done by the
+    caller. Per user 2026-06-30. RAW53YR / non RAW<digits>_ files are ignored
+    (not standalone RAW loads); RAW numbers outside 1,2,3,5,6 surface as ad-hoc.
+    """
+    rx = re.compile(r"RAW\s*0*(\d+)_(\d{8})", re.IGNORECASE)
+    inst = {}
+    SEP = "\x1f"
+
+    def touch(raw_n, ddate, dt, loaded):
+        e = inst.get((raw_n, ddate))
+        if e is None:
+            e = inst[(raw_n, ddate)] = {"raw_n": raw_n, "data_date": ddate,
+                                        "loaded": False, "load_date": None, "latest": dt}
+        if dt and (e["latest"] is None or dt > e["latest"]):
+            e["latest"] = dt
+        if loaded:
+            e["loaded"] = True
+            if dt and (e["load_date"] is None or dt > e["load_date"]):
+                e["load_date"] = dt
+
+    q = (
+        "SET NOCOUNT ON; SELECT FileName, ProcessStatus, "
+        "CONVERT(varchar(19), FileLoadDate, 121) FROM [etl].[Tape] "
+        f"WHERE FileName LIKE '%RAW%' AND FileLoadDate >= '{since:%Y-%m-%d}' "
+        "ORDER BY FileLoadDate"
+    )
+    r = subprocess.run(
+        ["sqlcmd", "-S", "TRGETL3", "-d", "OptumPBMRx", "-E", "-Q", q,
+         "-W", "-s", SEP, "-h", "-1"],
+        capture_output=True, text=True, check=False,
+    )
+    for line in r.stdout.splitlines():
+        p = line.split(SEP)
+        if len(p) < 3:
+            continue
+        m = rx.search(p[0] or "")
+        if not m:
+            continue
+        try:
+            status = int(p[1].strip())
+        except ValueError:
+            continue
+        touch(int(m.group(1)), m.group(2), parse_dt(p[2].strip()), loaded=(status == 50))
+    return list(inst.values())
+
+
 # Map of client → (database name, snap-index source key).
 # Server defaults to TRGETL3 (see TAPE_LOAD_SERVER for overrides).
 TAPE_LOAD_SOURCES = {
@@ -2596,7 +2650,8 @@ def is_friday_or_later_in_week(today, scheduled_day):
 
 def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_placements,
                   ramp_jobs, ramp_queue, esipbmrx_tape=None, multi_week_loads=None,
-                  aetna_nmsp_loads=None, optumpbmrx_tape=None, evernorth_claims_pending=False):
+                  aetna_nmsp_loads=None, optumpbmrx_tape=None, evernorth_claims_pending=False,
+                  optum_raw_instances=None):
     """Return ((sections, weeks)) layout.
 
     sections: dict {kind: dict {date: [(label, marker, alert)] }}
@@ -3181,163 +3236,53 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             continue
         place(monthly, "monthly", c, d, marker_override=marker)
 
-    # OptumPBMRx: two delivery sets per month (RAW1/2/3 early + RAW5/6 late).
-    # For each half of the month place separately based on tape-load activity.
-    def first_friday(y, m):
-        d = date(y, m, 1)
-        return d + timedelta(days=(4 - d.weekday()) % 7)
-
-    # Per user 2026-06-05: ✓ requires ALL of the half's RAW files to be
-    # tape-loaded AND a matching number of 'Optum 0200 PBM Start Snap'
-    # successful completions in the same window. Partial load → L.
-    _OPTUM_RAW_RE = re.compile(r"RAW\s*0*(\d+)_", re.IGNORECASE)
+    # OptumPBMRx: per-RAW breakout — one row per RAW file ("OptumPBMRx - Raw N").
+    # Per user 2026-06-30: show each RAW loading individually instead of the two
+    # grouped (RAW 1/2/3) / (RAW 5/6) rows. Lifecycle per file: "L" while the
+    # specific file is staging/loading (Optum 0100 PBM Stage → 0110 Load; tape
+    # ProcessStatus 42), "✓" once its Snap (Optum 0200 PBM Start Snap) completes.
+    # Only show a RAW once it's PRESENT (no placeholder/No-Data rows). RAW numbers
+    # outside the expected set surface as "(ad hoc)" rows (pink) so unexpected
+    # loads are visible. Each instance is placed on its own load-date week and
+    # emitted only on the month-tab that renders that week (so the RAW5/6 end-of-
+    # month set lands correctly on the next month's tab when the week straddles
+    # the boundary — no special-casing needed).
     _OPTUM_SNAP_RE = re.compile(r"optum.*0200.*pbm.*start.*snap", re.IGNORECASE)
     _optum_job_by_id = {j.get("JobId"): (j.get("JobName") or "") for j in ramp_jobs}
+    OPTUM_EXPECTED_RAWS = {1, 2, 3, 5, 6}
 
-    def place_optum_half(label_suffix, day_lo, day_hi, required_raws,
-                         default_day=None):
-        last_day = calendar.monthrange(year, month)[1]
-        hi = min(day_hi, last_day)
-        window_start = date(year, month, day_lo)
-        window_end   = date(year, month, hi)
+    # Snap completion datetimes. The Optum pipeline is sequential (Stage→Load→Snap
+    # per file, one file fully processed before the next — confirmed by the user),
+    # so a loaded RAW is "snapped" once a snap completes AFTER its load: the next
+    # snap can only be that file's (the prior file's snap ran before this load).
+    _optum_snap_dts = []
+    for q in ramp_queue:
+        if not _OPTUM_SNAP_RE.search(_optum_job_by_id.get(q.get("JobId"), "")):
+            continue
+        stt = (q.get("Status") or "").lower()
+        if not (stt.startswith("success") or stt == "resolved"):
+            continue
+        ed = parse_dt(q.get("EndDate"))
+        if ed:
+            _optum_snap_dts.append(ed)
 
-        # Scan TRGETL3 OptumPBMRx tape rows for filenames matching the
-        # required RAW numbers within the window.
-        loaded_raws = {}   # raw_n → latest FileLoadDate
-        for tape in (optumpbmrx_tape or ()):
-            fname = tape.get("FileName") or ""
-            dt = tape.get("FileLoadDate")
-            if not (dt and window_start <= dt.date() <= window_end):
-                continue
-            m = _OPTUM_RAW_RE.search(fname)
-            if not m:
-                continue
-            raw_n = int(m.group(1))
-            if raw_n not in required_raws:
-                continue
-            if raw_n not in loaded_raws or dt > loaded_raws[raw_n]:
-                loaded_raws[raw_n] = dt
-
-        # Count successful 'Optum 0200 PBM Start Snap' completions in window.
-        snap_count = 0
-        latest_snap_dt = None
-        for q in ramp_queue:
-            jn = _optum_job_by_id.get(q.get("JobId"), "")
-            if not _OPTUM_SNAP_RE.search(jn):
-                continue
-            status = (q.get("Status") or "").lower()
-            if not (status.startswith("success") or status == "resolved"):
-                continue
-            end_dt = parse_dt(q.get("EndDate"))
-            if not end_dt or not (window_start <= end_dt.date() <= window_end):
-                continue
-            snap_count += 1
-            if latest_snap_dt is None or end_dt > latest_snap_dt:
-                latest_snap_dt = end_dt
-
-        need = len(required_raws)
-        all_loaded  = len(loaded_raws) >= need
-        all_snapped = snap_count >= need
-
-        if all_loaded and all_snapped:
-            candidates = list(loaded_raws.values())
-            if latest_snap_dt:
-                candidates.append(latest_snap_dt)
-            latest = max(candidates)
-            placement = next_monday_if_weekend(latest.date())
-            if placement.month != month:
-                placement = date(year, month, last_day)
-            marker = "✓"
-        elif loaded_raws or (today.year == year and today.month == month
-                             and window_start <= today <= window_end
-                             and is_loading_today("OptumPBMRx", ramp_queue, ramp_jobs)):
-            # Partial load (any RAW present but not all) OR actively loading
-            # right now — stay L.
-            if loaded_raws:
-                latest = max(loaded_raws.values())
-                placement = next_monday_if_weekend(latest.date())
-                if placement.month != month:
-                    placement = date(year, month, last_day)
-            elif today.year == year and today.month == month and window_start <= today <= window_end:
-                placement = today
-            elif default_day is not None:
-                placement = default_day
-            else:
-                mid = day_lo + (hi - day_lo) // 2
-                placement = next_monday_if_weekend(date(year, month, mid))
-            marker = "L"
-        else:
-            # Nothing yet — placeholder.
-            if default_day is not None:
-                placement = default_day
-            else:
-                mid = day_lo + (hi - day_lo) // 2
-                placement = next_monday_if_weekend(date(year, month, mid))
-            marker = "No Data"
-
-        # Show what's pending so the team can see which RAW files are still
-        # outstanding mid-cycle (only when partial-load L state).
-        extra = ""
-        if marker == "L":
-            missing = sorted(set(required_raws) - set(loaded_raws.keys()))
-            if missing:
-                extra = " — RAW " + ",".join(str(n) for n in missing) + " pending"
-            elif not all_snapped:
-                extra = " — Snap pending"
-        label = f"OptumPBMRx {label_suffix}{extra}"
-        alert = False
-        if marker == "No Data":
-            ref_end = date(year, month, min(hi, last_day))
-            alert = (today - ref_end).days > 7
-
-        # Month-boundary fix for the RAW 5/6 end-of-month set: its files are dated
-        # late in month N, but the week that displays them (e.g. 6/29-7/3) is
-        # RENDERED on month N+1's tab (month_weeks gives a split week to whichever
-        # month has >=3 weekdays). The strict per-month window then loses the row
-        # on BOTH tabs — month N places it on a week N doesn't render (dropped),
-        # and N+1's window contains no files (No Data). When TODAY is late-month
-        # (>=24) and falls in THIS tab's rendered weeks, recompute RAW 5/6 status
-        # over a today-anchored window (so the boundary files are seen) and pin the
-        # row to today. Fires only on the tab that renders the current week.
-        # Per user 2026-06-29/30 (RAW5 loads, then RAW6, across the boundary).
-        if (label_suffix == "(RAW 5/6)" and today.day >= 24
-                and any(today in wk for wk in month_weeks(year, month))):
-            bw_start, bw_end = today - timedelta(days=12), today + timedelta(days=1)
-            b_loaded = {}
-            for tape in (optumpbmrx_tape or ()):
-                dt = tape.get("FileLoadDate")
-                if not (dt and bw_start <= dt.date() <= bw_end):
-                    continue
-                mm = _OPTUM_RAW_RE.search(tape.get("FileName") or "")
-                if mm and int(mm.group(1)) in required_raws:
-                    rn = int(mm.group(1))
-                    if rn not in b_loaded or dt > b_loaded[rn]:
-                        b_loaded[rn] = dt
-            b_snaps = 0
-            for q in ramp_queue:
-                if not _OPTUM_SNAP_RE.search(_optum_job_by_id.get(q.get("JobId"), "")):
-                    continue
-                stt = (q.get("Status") or "").lower()
-                if not (stt.startswith("success") or stt == "resolved"):
-                    continue
-                ed = parse_dt(q.get("EndDate"))
-                if ed and bw_start <= ed.date() <= bw_end:
-                    b_snaps += 1
-            if b_loaded:  # at least one of the half's RAWs is in the boundary window
-                placement, alert = today, False
-                if len(b_loaded) >= need and b_snaps >= need:
-                    marker, label = "✓", f"OptumPBMRx {label_suffix}"
-                else:
-                    marker = "L"
-                    miss = sorted(set(required_raws) - set(b_loaded))
-                    label = "OptumPBMRx " + label_suffix + (
-                        " — RAW " + ",".join(str(n) for n in miss) + " pending" if miss
-                        else (" — Snap pending" if b_snaps < need else ""))
-        monthly[placement].append((label, marker, alert, None))
-
-    place_optum_half("(RAW 1/2/3)", 1, 7, {1, 2, 3},
-                     default_day=first_friday(year, month))
-    place_optum_half("(RAW 5/6)",   24, 31, {5, 6})
+    _rendered_days = set(all_days)
+    for ri in sorted((optum_raw_instances or ()),
+                     key=lambda x: (x.get("raw_n", 0), x.get("data_date", ""))):
+        load_dt = ri.get("load_date")
+        activity = load_dt or ri.get("latest")
+        if not activity:
+            continue
+        placement = next_monday_if_weekend(activity.date())
+        if placement not in _rendered_days:
+            continue  # this RAW's load week is rendered on another month's tab
+        loaded = bool(ri.get("loaded"))
+        snapped = loaded and load_dt is not None and any(s > load_dt for s in _optum_snap_dts)
+        marker = "✓" if snapped else "L"
+        raw_n = ri.get("raw_n")
+        adhoc = raw_n not in OPTUM_EXPECTED_RAWS
+        label = f"OptumPBMRx - Raw {raw_n}" + (" (ad hoc)" if adhoc else "")
+        monthly[placement].append((label, marker, adhoc, None))
 
     # Aetna NMSP - MMSEA: ✓ once SourceLog shows a NonMSP file fully imported
     # (ImportCompleteDate) this month, placed on the completion date. While a
@@ -4664,6 +4609,10 @@ def main():
         queue, jobs, since=date(year, month, 1) - timedelta(days=14))
     print(f"[info]   EverNorthRx claims pending load: {evernorth_claims_pending}")
 
+    print("[info] Fetching OptumPBMRx per-RAW instances (TRGETL3 tape, all statuses)…")
+    optum_raw_instances = fetch_optum_raw_instances(since=date(year, month, 1) - timedelta(days=14))
+    print(f"[info]   OptumPBMRx RAW instances: {len(optum_raw_instances)}")
+
     latest_tickets, monthly_placements = build_ticket_index(tickets, jobs)
     print(f"[info] latest tickets indexed for {len(latest_tickets)} clients")
 
@@ -4712,7 +4661,8 @@ def main():
                                         multi_week_loads=multi_week_loads,
                                         aetna_nmsp_loads=aetna_nmsp_loads,
                                         optumpbmrx_tape=tape_loads.get("optumpbmrx"),
-                                        evernorth_claims_pending=evernorth_claims_pending)
+                                        evernorth_claims_pending=evernorth_claims_pending,
+                                        optum_raw_instances=optum_raw_instances)
 
         tab_name = f"{_cal_mod.month_name[m]} {year}"
         ws_m = wb.create_sheet(tab_name)
