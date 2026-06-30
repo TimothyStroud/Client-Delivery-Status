@@ -542,11 +542,10 @@ MANUAL_OVERRIDES = {
     # REMOVED 2026-06-24 — OscarRx & CenteneRx are now LOADING their 6/26
     # delivery and must show "L" (the blanks were hiding it).
     # 2026-06-29: Centene Medical (weekly Tue) was rendering "Load Failure" on
-    # its 6/30 cell, but per user it is NOT failed — it has Snapped and is ready
-    # for certification today. Centene is cert-pending (not SNAP_ONLY), so the
-    # snapped-not-yet-certified state is "L". Remove once DHT cert lands (the
-    # cell then surfaces the cert date automatically).
-    ("Centene",       date(2026, 6, 30)): "L",
+    # its 6/30 cell, but per user it was NOT failed — it had Snapped and was
+    # ready for certification. Pinned to "L" while snapped-not-yet-certified.
+    # REMOVED 2026-06-30: DHT cert landed 6/29 09:33, so the 6/30 cell now
+    # surfaces the cert date automatically (week of 6/29 contains the cert).
 }
 
 # --- Sticky certifications --------------------------------------------------
