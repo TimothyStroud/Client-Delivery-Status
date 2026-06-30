@@ -547,15 +547,6 @@ MANUAL_OVERRIDES = {
     # snapped-not-yet-certified state is "L". Remove once DHT cert lands (the
     # cell then surfaces the cert date automatically).
     ("Centene",       date(2026, 6, 30)): "L",
-    # KPP_OVERRIDE_START (auto-removed by kpp_override_cleanup.py once the
-    # 'Kaiser Pareo Prepay 0110 Load' succeeds on 2026-06-29)
-    # 2026-06-29: KaiserPrePayCOB did NOT load today yet — 'Kaiser Pareo Prepay
-    # 0100 Stage' is running and '0110 Load' is next. The Mon 6/29 cell was
-    # showing the weekend (6/28) snap as a stale ✓; per user it should show "L"
-    # (load in progress). Auto-removed once today's load completes so the cell
-    # surfaces ✓/cert naturally.
-    ("KaiserPrePayCOB", date(2026, 6, 29)): "L",
-    # KPP_OVERRIDE_END
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -3298,19 +3289,50 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         if marker == "No Data":
             ref_end = date(year, month, min(hi, last_day))
             alert = (today - ref_end).days > 7
-        # 2026-06-29 one-off: per user, OptumPBMRx RAW5 is currently loading but
-        # the tape row / is_loading_today hasn't surfaced it yet, leaving the
-        # RAW 5/6 half at "No Data". Force "L" on today for this half. The L must
-        # land on the tab that actually RENDERS today's week (6/29 falls in the
-        # 6/29-7/3 week, which month_weeks claims for July), so gate on that —
-        # not on the loop month. Remove once the RAW load completes (✓ takes over).
-        if (label_suffix == "(RAW 5/6)" and today.year == 2026 and today.month == 6
-                and marker != "✓"
+
+        # Month-boundary fix for the RAW 5/6 end-of-month set: its files are dated
+        # late in month N, but the week that displays them (e.g. 6/29-7/3) is
+        # RENDERED on month N+1's tab (month_weeks gives a split week to whichever
+        # month has >=3 weekdays). The strict per-month window then loses the row
+        # on BOTH tabs — month N places it on a week N doesn't render (dropped),
+        # and N+1's window contains no files (No Data). When TODAY is late-month
+        # (>=24) and falls in THIS tab's rendered weeks, recompute RAW 5/6 status
+        # over a today-anchored window (so the boundary files are seen) and pin the
+        # row to today. Fires only on the tab that renders the current week.
+        # Per user 2026-06-29/30 (RAW5 loads, then RAW6, across the boundary).
+        if (label_suffix == "(RAW 5/6)" and today.day >= 24
                 and any(today in wk for wk in month_weeks(year, month))):
-            placement = today
-            marker = "L"
-            label = "OptumPBMRx (RAW 5/6) — RAW 5 loading"
-            alert = False
+            bw_start, bw_end = today - timedelta(days=12), today + timedelta(days=1)
+            b_loaded = {}
+            for tape in (optumpbmrx_tape or ()):
+                dt = tape.get("FileLoadDate")
+                if not (dt and bw_start <= dt.date() <= bw_end):
+                    continue
+                mm = _OPTUM_RAW_RE.search(tape.get("FileName") or "")
+                if mm and int(mm.group(1)) in required_raws:
+                    rn = int(mm.group(1))
+                    if rn not in b_loaded or dt > b_loaded[rn]:
+                        b_loaded[rn] = dt
+            b_snaps = 0
+            for q in ramp_queue:
+                if not _OPTUM_SNAP_RE.search(_optum_job_by_id.get(q.get("JobId"), "")):
+                    continue
+                stt = (q.get("Status") or "").lower()
+                if not (stt.startswith("success") or stt == "resolved"):
+                    continue
+                ed = parse_dt(q.get("EndDate"))
+                if ed and bw_start <= ed.date() <= bw_end:
+                    b_snaps += 1
+            if b_loaded:  # at least one of the half's RAWs is in the boundary window
+                placement, alert = today, False
+                if len(b_loaded) >= need and b_snaps >= need:
+                    marker, label = "✓", f"OptumPBMRx {label_suffix}"
+                else:
+                    marker = "L"
+                    miss = sorted(set(required_raws) - set(b_loaded))
+                    label = "OptumPBMRx " + label_suffix + (
+                        " — RAW " + ",".join(str(n) for n in miss) + " pending" if miss
+                        else (" — Snap pending" if b_snaps < need else ""))
         monthly[placement].append((label, marker, alert, None))
 
     place_optum_half("(RAW 1/2/3)", 1, 7, {1, 2, 3},
@@ -4507,12 +4529,22 @@ body.search-active td.client-cell.match-cell { opacity: 1; background: #fffbe8; 
     });
   }
   search.addEventListener('input', applySearch);
-  // Today jump
+  // Today jump. The today cell can live in a NON-active month panel — a
+  // month-end week (e.g. 6/29-7/3) is rendered on the next month's tab, and a
+  // hidden (display:none) panel can't be scrolled to. So switch to the panel
+  // that contains today first, then scroll.
   const todayBtn = document.getElementById('today-jump');
   if (todayBtn) {
     todayBtn.addEventListener('click', () => {
       const el = document.querySelector('.strip td.is-today');
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (!el) return;
+      const panel = el.closest('.month-panel');
+      if (panel && !panel.classList.contains('active')) {
+        const tabBtn = document.querySelector(
+          'nav.tabs button.tab[data-target="' + panel.id + '"]');
+        if (tabBtn) show(tabBtn);
+      }
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
   }
 })();
