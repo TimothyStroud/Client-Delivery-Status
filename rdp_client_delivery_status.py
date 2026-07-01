@@ -1722,12 +1722,15 @@ def fetch_optum_raw_instances(since):
     (50 = loaded; <50, e.g. 42 = staging/loading) — NOT just 50 like
     fetch_tape_loads — so a RAW shows "L" while it's still loading. Keyed by
     (raw_n, data_date) so each monthly cycle's RAW is a distinct instance.
-    Returns list of dicts: {raw_n:int, data_date:str, loaded:bool,
+    Returns list of dicts: {raw_n:int|str, data_date:str, loaded:bool,
     load_date:datetime|None, latest:datetime}. Snap attribution is done by the
-    caller. Per user 2026-06-30. RAW53YR / non RAW<digits>_ files are ignored
-    (not standalone RAW loads); RAW numbers outside 1,2,3,5,6 surface as ad-hoc.
+    caller. Per user 2026-06-30. `raw_n` is an int for the normal numeric RAW
+    files (1,2,3,5,6) and a STRING for alphanumeric ad-hoc RAW tokens such as
+    "53YR" (RAWLINGS_RAW53YR_06282026) — 2026-07-01 the user asked that these
+    ad-hoc RAW loads surface too (they were previously ignored). Numeric RAWs
+    outside {1,2,3,5,6} and every alphanumeric token surface as ad-hoc rows.
     """
-    rx = re.compile(r"RAW\s*0*(\d+)_(\d{8})", re.IGNORECASE)
+    rx = re.compile(r"RAW\s*0*([0-9A-Z]+)_(\d{8})", re.IGNORECASE)
     inst = {}
     SEP = "\x1f"
 
@@ -1765,7 +1768,11 @@ def fetch_optum_raw_instances(since):
             status = int(p[1].strip())
         except ValueError:
             continue
-        touch(int(m.group(1)), m.group(2), parse_dt(p[2].strip()), loaded=(status == 50))
+        # Numeric token → int (normal RAW 1/2/3/5/6); alphanumeric → uppercase
+        # string (ad-hoc, e.g. "53YR"). The caller keys ad-hoc off type/value.
+        tok = m.group(1)
+        raw_key = int(tok) if tok.isdigit() else tok.upper()
+        touch(raw_key, m.group(2), parse_dt(p[2].strip()), loaded=(status == 50))
     return list(inst.values())
 
 
@@ -3275,8 +3282,14 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             _optum_snap_dts.append(ed)
 
     _rendered_days = set(all_days)
-    for ri in sorted((optum_raw_instances or ()),
-                     key=lambda x: (x.get("raw_n", 0), x.get("data_date", ""))):
+    # raw_n is an int (normal 1/2/3/5/6) or a str (ad-hoc token like "53YR").
+    # Sort numeric RAWs first (by value), then alphanumeric ad-hoc (by string);
+    # never compare int vs str directly (TypeError in py3).
+    def _optum_sort_key(x):
+        rn = x.get("raw_n")
+        is_str = isinstance(rn, str)
+        return (1 if is_str else 0, str(rn) if is_str else rn, x.get("data_date", ""))
+    for ri in sorted((optum_raw_instances or ()), key=_optum_sort_key):
         load_dt = ri.get("load_date")
         activity = load_dt or ri.get("latest")
         if not activity:
