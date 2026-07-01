@@ -1054,6 +1054,15 @@ CLIENT_PRIMARY_KEY_OVERRIDE = {
     # _keys_for_client still yields base "medica" for DHT cert / snap-index
     # lookups (those use strict equality against the "medica" prefix key).
     "Medica": "medica0",
+    # "ncstate" (NCState Medical's key) is a substring of "ncstaterx", so
+    # find_matching_jobs("NCState") falsely matched NCStateRx's jobs — a
+    # loading 'NC State Rx 0110 Load' put a spurious "L" on NCState while
+    # NCState itself was not loading. Override to "ncstate0", which matches
+    # NCState's own step jobs ('NC State 0110 Load' → "ncstate0110load") but
+    # NOT "ncstaterx0110load" ("ncstate" + "rx", not "ncstate" + "0"). Same
+    # trick as Medica. _keys_for_client still yields base "ncstate" for the
+    # snap-index strict-equality lookups. Per user 2026-07-01.
+    "NCState": "ncstate0",
 }
 
 # NYShip_Rx fires four times per month — on the 1st, 8th, 16th, 24th
@@ -3398,10 +3407,12 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         if override is not None:
             marker = override
         else:
-            # Window: 7 days before SOM through 14 days into month — catches
-            # the EOM load tail and the (often exception-cert) early-month
-            # cert landing.
-            win_start = date(year, month, 1) - timedelta(days=7)
+            # Window: from the 1st of the month through 14 days in. Restricted
+            # to the current month (was -7 days) so the prior month's regular
+            # weekly CignaRx certs (e.g. 6/24, 6/30) aren't pulled onto this
+            # cell — the EOM/SOM cycle is the NEXT CignaRx load in the new
+            # month, which stays blank until it loads. Per user 2026-07-01.
+            win_start = date(year, month, 1)
             win_end   = date(year, month, 1) + timedelta(days=14)
             # Cert preference: earliest cert in the window.
             cig_cert = None
@@ -3428,7 +3439,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                                 break
                     if loaded:
                         break
-                marker = "L" if loaded else "No Data"
+                marker = "L" if loaded else ""   # blank until the next load
         alert = alert_state("CignaRx", cigna_target, marker)
         weekly[cigna_target].append((cig_label, marker, alert, None))
 

@@ -321,3 +321,12 @@ State saved.
    this completion already reported -- skip
 [optum_pbm] LoadQ=1390178 LoadEnd=None SnapEnd=2026-06-30T01:10:42.12 tag=06302026 RAW={'RAW1': False, 'RAW2': False, 'RAW3': False}
    load/snap not both complete -- skip
+[caresource] (weekly) QueueId=1390569 Status=Successful End=2026-07-01T02:28:49.377 period=2026-W27
+   send -> Sent. | SLA Update - Caresource 0200 Load - SUCCESS
+[wellmark] (weekly) QueueId=1389766 Status=Successful End=2026-06-29T12:21:00.567 period=2026-W27
+   already reported this period -- dormant until restart
+[healthspring_fwa] (monthly) QueueId=1368201 Status=Successful End=2026-06-02T18:20:42.99 period=2026-07
+   this completion already reported -- skip
+[optum_pbm] LoadQ=1391267 LoadEnd=None SnapEnd=2026-06-30T22:24:00.327 tag=07012026 RAW={'RAW1': False, 'RAW2': False, 'RAW3': False}
+   load/snap not both complete -- skip
+State saved.
