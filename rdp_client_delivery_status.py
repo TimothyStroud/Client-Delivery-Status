@@ -3301,9 +3301,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         snapped = loaded and load_dt is not None and any(s > load_dt for s in _optum_snap_dts)
         marker = "✓" if snapped else "L"
         raw_n = ri.get("raw_n")
-        adhoc = raw_n not in OPTUM_EXPECTED_RAWS
-        label = f"OptumPBMRx - Raw {raw_n}" + (" (ad hoc)" if adhoc else "")
-        monthly[placement].append((label, marker, adhoc, None))
+        # Alphanumeric tokens (e.g. "53YR") are legitimate ad-hoc RAW loads — show
+        # them as a plain row (no "(ad hoc)" suffix, no pink; per user 2026-07-01
+        # the 0110 Load did not fail). A NUMERIC RAW outside the expected set still
+        # flags as ad-hoc pink so a genuinely unexpected numeric load is visible.
+        numeric_adhoc = (not isinstance(raw_n, str)) and (raw_n not in OPTUM_EXPECTED_RAWS)
+        label = f"OptumPBMRx - Raw {raw_n}" + (" (ad hoc)" if numeric_adhoc else "")
+        monthly[placement].append((label, marker, numeric_adhoc, None))
 
     # Aetna NMSP - MMSEA: ✓ once SourceLog shows a NonMSP file fully imported
     # (ImportCompleteDate) this month, placed on the completion date. While a
