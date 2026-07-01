@@ -3411,8 +3411,12 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 monthly[today].append((label, "L", False, None, None))
             break
 
-    # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month
-    # surfaces on the first Tuesday of each month. Per user 2026-06-03.
+    # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month.
+    # Surfaces on the first Tuesday of each month (per user 2026-06-03), EXCEPT
+    # while it is actively loading in the current month: then it moves to TODAY
+    # with an "L" so the live cycle shows where the activity is (per user
+    # 2026-07-01 — the current 'Cigna RX 0110 Load' IS the EOM/SOM). Once the
+    # cert lands the row returns to the first Tuesday with the cert date.
     cigna_target = None
     for d in all_days:
         if d.month == month and d.weekday() == 1:  # Tuesday
@@ -3456,9 +3460,21 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                                 break
                     if loaded:
                         break
-                marker = "L" if loaded else ""   # blank until the next load
-        alert = alert_state("CignaRx", cigna_target, marker)
-        weekly[cigna_target].append((cig_label, marker, alert, None))
+                # Also show "L" while the EOM/SOM Cigna RX 0110 Load is
+                # Ready/Running right now (before it lands in snap_idx) — only
+                # for the CURRENT month tab so past months aren't disturbed.
+                is_current = (year == today.year and month == today.month)
+                if loaded or (is_current and is_loading_today("CignaRx", ramp_queue, ramp_jobs)):
+                    marker = "L"
+                else:
+                    marker = ""   # blank until the next load
+        # While loading in the current month, place the row on TODAY; otherwise
+        # (blank, or a landed cert) keep it on the first Tuesday.
+        placement = cigna_target
+        if marker == "L" and year == today.year and month == today.month and today in all_days:
+            placement = today
+        alert = alert_state("CignaRx", placement, marker)
+        weekly[placement].append((cig_label, marker, alert, None))
 
     # One-off (per user 2026-06-11): Kaiser_AmbM runs a SECOND June cycle — it
     # certified 6/11, and a new monthly load lands ~6/18. determine_monthly only
