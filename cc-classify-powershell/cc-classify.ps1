@@ -64,6 +64,16 @@ $BucketMap = @{
 }
 $DefaultBucket = 'Dev'
 
+# Optional: display-name overrides for initiatives (project-dir name -> label).
+# Anything not listed shows its raw project-dir name.
+$InitiativeNames = @{
+    'H--' = 'RDP Data Operations'
+}
+function Get-InitiativeName([string]$key) {
+    if ($InitiativeNames.ContainsKey($key)) { return $InitiativeNames[$key] }
+    return $key
+}
+
 function Get-Rate([string]$model) {
     if ([string]::IsNullOrEmpty($model)) { return $null }
     foreach ($k in $Rates.Keys) {
@@ -212,7 +222,7 @@ if ($Command -eq 'summary' -or $Command -eq 'initiatives') {
     foreach ($kv in $sorted) {
         $b = $DefaultBucket; if ($BucketMap.ContainsKey($kv.Key)) { $b = $BucketMap[$kv.Key] }
         $cap = 100; if ($b -eq 'COS' -or $b -eq 'Strategy') { $cap = 0 }
-        Write-Host ('  {0,-24}{1,14}{2,16}{3,6}{4,10}{5,7}%' -f $kv.Key, ('$' + ('{0:N2}' -f $kv.Value.Cost)), ('{0:N0}' -f $kv.Value.Tokens), $kv.Value.Sessions.Count, $b, $cap)
+        Write-Host ('  {0,-24}{1,14}{2,16}{3,6}{4,10}{5,7}%' -f (Get-InitiativeName $kv.Key), ('$' + ('{0:N2}' -f $kv.Value.Cost)), ('{0:N0}' -f $kv.Value.Tokens), $kv.Value.Sessions.Count, $b, $cap)
     }
     Write-Host ('  ' + ('-' * 78))
     Write-Host ('  {0,-24}{1,14}{2,16}{3,6}' -f 'TOTAL', ('$' + ('{0:N2}' -f $totCost)), ('{0:N0}' -f $totTok), $totalSessions)
@@ -223,7 +233,7 @@ if ($Command -eq 'summary' -or $Command -eq 'initiatives') {
 if ($Command -eq 'sessions') {
     $rows = $sessAgg.Values | Where-Object { -not $Initiative -or $_.Init -eq $Initiative } | Sort-Object { $_.Cost } -Descending
     $sc = 0.0; $st = 0.0; foreach ($r in $rows) { $sc += $r.Cost; $st += $r.Tokens }
-    $scope = if ($Initiative) { "'$Initiative'" } else { 'all initiatives' }
+    $scope = if ($Initiative) { "'$(Get-InitiativeName $Initiative)'" } else { 'all initiatives' }
     Write-Host ("  SESSIONS in {0}  (sorted by cost)" -f $scope)
     Write-Host ('  ' + ('-' * 80))
     Write-Host ('  {0,-20}{1,-12}{2,12}{3,16}{4,8}' -f 'SESSION START', 'ID', 'COST', 'TOKENS', '%')

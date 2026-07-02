@@ -38,6 +38,17 @@ RATES = {  # match by substring of the model id
 }
 
 
+# Display-name overrides for initiatives (project-dir name -> label).
+# Anything not listed shows its raw project-dir name.
+INITIATIVE_NAMES = {
+    "H--": "RDP Data Operations",
+}
+
+
+def display_name(key):
+    return INITIATIVE_NAMES.get(key, key)
+
+
 def rate_for(model):
     if not model:
         return None
@@ -176,7 +187,7 @@ def main():
     print("  " + "-" * 78)
     for name, v in rows:
         pct = (v["cost"] / tot_cost * 100) if tot_cost else 0
-        print(f"  {name:<28}{'$'+format(v['cost'], ',.2f'):>13}"
+        print(f"  {display_name(name):<28}{'$'+format(v['cost'], ',.2f'):>13}"
               f"{format(v['tokens'], ','):>18}{len(v['sessions']):>7}{pct:>7.1f}%")
     print("  " + "-" * 78)
     print(f"  {'TOTAL':<28}{'$'+format(tot_cost, ',.2f'):>13}"
@@ -187,7 +198,7 @@ def main():
             key=lambda kv: kv[1]["cost"], reverse=True)
         s_cost = sum(v["cost"] for _, v in srows)
         s_tok = sum(v["tokens"] for _, v in srows)
-        print(f"  SESSIONS in '{args.sessions}'  (sorted by cost)")
+        print(f"  SESSIONS in '{display_name(args.sessions)}'  (sorted by cost)")
         print("  " + "-" * 84)
         print(f"  {'SESSION START (local)':<22}{'SESSION ID':<16}{'COST':>12}{'TOKENS':>18}{'$%':>8}")
         print("  " + "-" * 84)

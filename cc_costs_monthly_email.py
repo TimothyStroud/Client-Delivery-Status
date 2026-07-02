@@ -132,7 +132,7 @@ def build_html(label, summary_text, init_agg, sess_agg, unpriced):
     for (init, sid), v in srows:
         pct = (v['cost'] / tot_cost * 100) if tot_cost else 0
         start_local = v['first'].astimezone()
-        parts.append(f"<tr><td style='{td}'>{start_local:%Y-%m-%d %H:%M}</td><td style='{td}'>{init}</td>"
+        parts.append(f"<tr><td style='{td}'>{start_local:%Y-%m-%d %H:%M}</td><td style='{td}'>{cc.display_name(init)}</td>"
                      f"<td style='{td}'>{sid[:8]}</td><td style='{tdr}'>${v['cost']:,.2f}</td>"
                      f"<td style='{tdr}'>{v['tokens']:,}</td><td style='{tdr}'>{pct:.1f}%</td></tr>")
     parts.append("</table>")
