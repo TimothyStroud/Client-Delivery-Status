@@ -546,6 +546,13 @@ MANUAL_OVERRIDES = {
     # ready for certification. Pinned to "L" while snapped-not-yet-certified.
     # REMOVED 2026-06-30: DHT cert landed 6/29 09:33, so the 6/30 cell now
     # surfaces the cert date automatically (week of 6/29 contains the cert).
+    # 2026-07-02: Premera certified 7/1 14:55 (Wed, one day before its Thu 7/2
+    # cell). Forward window for 7/2 [7/2-7/8] misses it, and the prior Thu 6/25
+    # window [6/25-7/1] would otherwise grab the 7/1 cert and overwrite 6/25's
+    # own 6/25 cert. Pin each cell to its own cert date. Per user: "Premera was
+    # certified on 7/1/26."
+    ("Premera",      date(2026, 6, 25)): date(2026, 6, 25),
+    ("Premera",      date(2026, 7, 2)):  date(2026, 7, 1),
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -2406,7 +2413,18 @@ def auto_inactive_from_ramp(jobs):
     for client, state in primary_state.items():
         if state["inactive"] > 0 and state["active"] == 0:
             out.add(client)
-    return out
+    return out - AUTO_INACTIVE_EXCLUDE
+
+
+# Clients to keep OUT of the RAMP auto-inactive sweep even though their
+# 0100/0110 jobs are disabled. CareFirstRx is offboarding so its load jobs are
+# disabled in RAMP, but it is still delivering + certifying (certified 7/2/26);
+# forcing it Inactive made determine_monthly() step 0 short-circuit before the
+# cert lookup, hiding the cert date. Per user 2026-07-02: "CareFirstRx is no
+# longer Inactive and was certified today." With it excluded, the cert wins
+# naturally; if a future month has no cert + no enabled jobs, has_inactive_jobs
+# still surfaces "Inactive" correctly.
+AUTO_INACTIVE_EXCLUDE = {"CareFirstRx"}
 
 
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
