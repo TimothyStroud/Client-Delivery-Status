@@ -313,7 +313,6 @@ WEEKLY_CLIENTS = {
     "JohnsHopkins":          ["Tuesday"],
     "MedStar":               ["Tuesday"],
     "MMOHRx":                ["Tuesday"],
-    "UPMC":                  ["Tuesday"],
     "Wellmark":              ["Tuesday"],
     # === WEDNESDAY ===
     "CareSource":            ["Wednesday"],
@@ -337,6 +336,7 @@ WEEKLY_CLIENTS = {
     "KaiserSCPareo":         ["Thursday"],
     "Premera":               ["Thursday"],
     "PrimePBMRx":            ["Thursday"],
+    "UPMC":                  ["Thursday"],   # moved from Tuesday per user 2026-07-02
     # === FRIDAY ===
     "CenteneRx":             ["Friday"],
     "OscarRx":               ["Friday"],
