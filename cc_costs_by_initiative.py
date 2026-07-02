@@ -102,15 +102,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", default="1month")
     ap.add_argument("--until", default=None)
+    ap.add_argument("--sessions", metavar="INITIATIVE", default=None,
+                    help="break out per-session detail for one initiative")
     args = ap.parse_args()
 
     since = parse_since(args.since)
     until = (datetime.strptime(args.until, "%Y-%m-%d").replace(tzinfo=timezone.utc)
              + timedelta(days=1)) if args.until else datetime.now(timezone.utc)
 
-    # initiative -> {cost, tokens, sessions:set, unknown_models:set}
+    # initiative -> {cost, tokens, sessions:set}
     agg = {}
     unpriced = {}
+    # per-session detail (only populated when --sessions is used):
+    #   (initiative, sessionId) -> {cost, tokens, first_ts, last_ts, model}
+    sess = {}
     for jf in glob.glob(os.path.join(PROJECTS_DIR, "*", "*.jsonl")):
         initiative = os.path.basename(os.path.dirname(jf))
         try:
@@ -143,9 +148,17 @@ def main():
                 e = agg.setdefault(initiative, {"cost": 0.0, "tokens": 0, "sessions": set()})
                 e["cost"] += usd
                 e["tokens"] += toks
-                sid = o.get("sessionId")
-                if sid:
-                    e["sessions"].add(sid)
+                sid = o.get("sessionId") or os.path.splitext(os.path.basename(jf))[0]
+                e["sessions"].add(sid)
+                if args.sessions and initiative == args.sessions:
+                    s = sess.setdefault((initiative, sid),
+                                        {"cost": 0.0, "tokens": 0, "first": ts, "last": ts, "model": model})
+                    s["cost"] += usd
+                    s["tokens"] += toks
+                    if ts < s["first"]:
+                        s["first"] = ts
+                    if ts > s["last"]:
+                        s["last"] = ts
 
     rows = sorted(agg.items(), key=lambda kv: kv[1]["cost"], reverse=True)
     tot_cost = sum(v["cost"] for _, v in rows)
@@ -168,7 +181,26 @@ def main():
     print("  " + "-" * 78)
     print(f"  {'TOTAL':<28}{'$'+format(tot_cost, ',.2f'):>13}"
           f"{format(tot_tok, ','):>18}{tot_sess:>7}{100.0:>7.1f}%")
-    print()
+    if args.sessions:
+        srows = sorted(
+            [(sid, v) for (init, sid), v in sess.items() if init == args.sessions],
+            key=lambda kv: kv[1]["cost"], reverse=True)
+        s_cost = sum(v["cost"] for _, v in srows)
+        s_tok = sum(v["tokens"] for _, v in srows)
+        print(f"  SESSIONS in '{args.sessions}'  (sorted by cost)")
+        print("  " + "-" * 84)
+        print(f"  {'SESSION START (local)':<22}{'SESSION ID':<16}{'COST':>12}{'TOKENS':>18}{'$%':>8}")
+        print("  " + "-" * 84)
+        for sid, v in srows:
+            pct = (v["cost"] / s_cost * 100) if s_cost else 0
+            start_local = v["first"].astimezone()
+            print(f"  {start_local:%Y-%m-%d %H:%M}     {sid[:8]:<16}"
+                  f"{'$'+format(v['cost'], ',.2f'):>12}{format(v['tokens'], ','):>18}{pct:>7.1f}%")
+        print("  " + "-" * 84)
+        print(f"  {'TOTAL ('+str(len(srows))+' sessions)':<38}"
+              f"{'$'+format(s_cost, ',.2f'):>12}{format(s_tok, ','):>18}{100.0:>7.1f}%")
+        print()
+
     if unpriced:
         print("  [warning] unpriced models skipped (add to RATES):")
         for m, n in unpriced.items():
