@@ -25,7 +25,8 @@ import sys
 sys.path.insert(0, BASE)
 from send_via_outlook import send
 
-EMAIL_TO = "timothy.stroud@machinify.com"
+EMAIL_TO = "RDPOperations@machinify.com"
+EMAIL_FROM = "DataOperations@machinify.com"
 YEAR = 2026
 
 
@@ -445,8 +446,8 @@ Saturdays cream, holidays purple. First draft &mdash; reply with any layout / ex
 </body></html>"""
 
 subject = f"CareFirstRx — ABII, COBC & TRR delivery check {YEAR} (through {today:%Y-%m-%d})"
-result = send(to=EMAIL_TO, subject=subject, body=html)
-print(f"[send] {result}")
+result = send(to=EMAIL_TO, subject=subject, body=html, from_address=EMAIL_FROM)
+print(f"[send] to={EMAIL_TO} from={EMAIL_FROM} -> {result}")
 print(f"[TRR]  contracts={trr_stats['contracts']} files={trr_stats['total_files']}")
 print(f"[COBC] contracts={cobc_stats['contracts']} files={cobc_stats['total_files']}")
 print(f"[ABII] rows_pulled={len(abii_rows)}")
