@@ -117,6 +117,33 @@ def parse_daily(rows):
     return per_day
 
 
+# ---------------- Contract lifecycle detection (offboarding / new) ----------------
+OFFBOARD_DAYS = 10   # no delivery in this many days (while others deliver) => offboarding
+NEW_DAYS = 15        # first-seen within this many days => newly added
+
+
+def detect_lifecycle(daily_feeds, today):
+    """daily_feeds = {'TRR': per_day, 'COBC': per_day}. Return (offboarding, new)
+    lists of (contract, detail) using combined first/last-seen across feeds."""
+    first_seen, last_seen = {}, {}
+    for per_day in daily_feeds.values():
+        for d in per_day:
+            for c in per_day[d]:
+                if c not in first_seen or d < first_seen[c]:
+                    first_seen[c] = d
+                if c not in last_seen or d > last_seen[c]:
+                    last_seen[c] = d
+    offboarding, added = [], []
+    for c in sorted(first_seen):
+        gap = (today - last_seen[c]).days
+        span = (last_seen[c] - first_seen[c]).days
+        if gap > OFFBOARD_DAYS and span > 0:      # had a history, now silent
+            offboarding.append((c, f"last delivery {last_seen[c]:%Y-%m-%d} ({gap} days ago)"))
+        if (today - first_seen[c]).days <= NEW_DAYS:
+            added.append((c, f"first delivery {first_seen[c]:%Y-%m-%d}"))
+    return offboarding, added
+
+
 # ---------------- Daily calendar table (TRR / COBC) ----------------
 def first_seen_map(per_day):
     fs = {}
@@ -206,10 +233,25 @@ def build_daily_table(per_day, cadence_note):
 
 
 # ---------------- Monthly table (ABII) ----------------
-def build_abii_table(rows):
-    """rows = [[TapeID, FileName, TableName], ...] -> monthly grid per ABII type."""
+def _ym_int(ym):
+    return int(ym[:4]) * 100 + int(ym[4:])
+
+
+def _ym_add(ym_int, months):
+    y, m = divmod(ym_int, 100)
+    total = (y * 12 + (m - 1)) + months
+    return (total // 12) * 100 + (total % 12) + 1
+
+
+def _ym_label(ym_int):
+    return f"{ym_int // 100}-{ym_int % 100:02d}"
+
+
+def build_abii_table(rows, dialysis_last):
+    """rows = [[TapeID, FileName, TableName], ...] -> monthly grid per ABII type.
+    Dialysis: highlighted if no YEAR files. Transplant: every-other-month cadence
+    with missing-month flags."""
     seen = set()
-    # (kind) -> month(YYYYMM) -> contract -> count
     data = {"Dialysis": defaultdict(lambda: defaultdict(int)),
             "Transplant": defaultdict(lambda: defaultdict(int))}
     for parts in rows:
@@ -228,29 +270,81 @@ def build_abii_table(rows):
         seen.add(key)
         data[kind][ym][contract] += 1
 
-    sub_tables = []
-    for kind in ("Dialysis", "Transplant"):
-        md = data[kind]
-        if not md:
-            sub_tables.append(f"<p><b>ABII {kind}:</b> no {YEAR} files received.</p>")
-            continue
-        contracts = sorted({c for m in md.values() for c in m})
+    out = []
+
+    # --- Dialysis: highlight when nothing received this year ---
+    dmd = data["Dialysis"]
+    if not dmd:
+        last_note = f" Most recent file on record: <b>{dialysis_last}</b>." if dialysis_last else ""
+        out.append(
+            "<h4>ABII Dialysis</h4>"
+            f"<p class='alert'>&#9888; ABII Dialysis &mdash; <b>NO files received in {YEAR}.</b>{last_note}</p>")
+    else:
+        contracts = sorted({c for mm in dmd.values() for c in mm})
         th = "".join(f"<th>{c}</th>" for c in contracts)
         body = []
-        for ym in sorted(md):
-            label = f"{ym[:4]}-{ym[4:]}"
-            cells = [f"<td>{label}</td>"]
-            zero = "<span style='color:#999'>0</span>"
+        zero = "<span style='color:#999'>0</span>"
+        for ym in sorted(dmd):
+            cells = [f"<td>{ym[:4]}-{ym[4:]}</td>"]
             for c in contracts:
-                n = md[ym].get(c, 0)
-                cls = "num ok" if n else "num"
-                val = str(n) if n else zero
-                cells.append(f"<td class='{cls}'>{val}</td>")
+                n = dmd[ym].get(c, 0)
+                cells.append(f"<td class='{'num ok' if n else 'num'}'>{n if n else zero}</td>")
             body.append("<tr>" + "".join(cells) + "</tr>")
-        sub_tables.append(
-            f"<h4>ABII {kind}</h4><table><thead><tr><th>Month</th>{th}</tr></thead>"
-            f"<tbody>{''.join(body)}</tbody></table>")
-    return "".join(sub_tables)
+        out.append(f"<h4>ABII Dialysis</h4><table><thead><tr><th>Month</th>{th}</tr></thead>"
+                   f"<tbody>{''.join(body)}</tbody></table>")
+
+    # --- Transplant: every-other-month; flag missing due months ---
+    tmd = data["Transplant"]
+    if not tmd:
+        out.append(f"<h4>ABII Transplant</h4><p class='alert'>&#9888; ABII Transplant &mdash; "
+                   f"<b>NO files received in {YEAR}.</b> (expected every other month)</p>")
+    else:
+        present = sorted(_ym_int(ym) for ym in tmd)
+        contracts = sorted({c for mm in tmd.values() for c in mm})
+        cur_ym = date.today().year * 100 + date.today().month
+        # Expected sequence: from first present month, stepping +2, up to now.
+        expected = []
+        ym = present[0]
+        while ym <= cur_ym:
+            expected.append(ym)
+            ym = _ym_add(ym, 2)
+        # Due = expected months strictly before the current month (current month
+        # not yet overdue). Missing = due months with no file.
+        missing = [m for m in expected if m < cur_ym and m not in present]
+        th = "".join(f"<th>{c}</th>" for c in contracts)
+        body = []
+        zero = "<span style='color:#999'>0</span>"
+        # Render every expected month row (present or missing) so gaps are visible.
+        for m in expected:
+            is_missing = m in missing
+            is_pending = (m == cur_ym and m not in present)
+            if is_missing:
+                lbl = f"{_ym_label(m)} <b>&#9888; MISSING</b>"
+                rcls = " class='missing'"
+            elif is_pending:
+                lbl = f"{_ym_label(m)} (pending)"
+                rcls = " class='satday'"
+            else:
+                lbl = _ym_label(m)
+                rcls = ""
+            cells = [f"<td{rcls}>{lbl}</td>"]
+            for c in contracts:
+                n = tmd.get(f"{m//100}{m%100:02d}", {}).get(c, 0)
+                if n:
+                    cells.append(f"<td class='num ok'>{n}</td>")
+                elif is_missing:
+                    cells.append("<td class='num missing'>0</td>")
+                else:
+                    cells.append(f"<td class='num'>{zero}</td>")
+            body.append(f"<tr>" + "".join(cells) + "</tr>")
+        miss_note = (f"<p class='alert'>&#9888; ABII Transplant missing expected month(s): "
+                     f"<b>{', '.join(_ym_label(m) for m in missing)}</b> "
+                     f"(delivered every other month).</p>" if missing else "")
+        out.append(f"<h4>ABII Transplant <span style='font-weight:normal;font-size:11px'>"
+                   f"(expected every other month)</span></h4>{miss_note}"
+                   f"<table><thead><tr><th>Month</th>{th}</tr></thead>"
+                   f"<tbody>{''.join(body)}</tbody></table>")
+    return "".join(out)
 
 
 # ---------------- Pull data ----------------
@@ -265,16 +359,38 @@ WHERE t.[TableID] IN (5000,5100,5200) AND t.[FileName] LIKE '%.D26%'""")
 abii_rows = query("""SELECT t.[TapeID], t.[FileName], f.[TableName]
 FROM [CareFirstRx].[etl].[tape] T (NOLOCK)
 JOIN [CareFirstRx].[config].[Table] F (NOLOCK) ON t.TableID = f.TableID
-WHERE t.[TableID] IN (5500,5600) AND t.[FileName] LIKE '%_2026%'""")
+WHERE t.[TableID] IN (5500,5600) AND t.[FileName] LIKE '%_20%'""")
+
+# Most recent Dialysis file on record (any year) for the no-2026 highlight.
+_dl = query("""SELECT TOP 1 t.[FileName] FROM [CareFirstRx].[etl].[tape] T (NOLOCK)
+WHERE t.[TableID] = 5500 ORDER BY t.[TapeID] DESC""")
+dialysis_last = None
+if _dl:
+    _m = ABII_RE.search(_dl[0][0])
+    if _m:
+        dialysis_last = f"{_m.group(3)[:4]}-{_m.group(3)[4:]}"
+
+today = date.today()
 
 trr_per_day = parse_daily(trr_rows)
 cobc_per_day = parse_daily(cobc_rows)
 
 trr_table, trr_stats = build_daily_table(trr_per_day, "daily")
 cobc_table, cobc_stats = build_daily_table(cobc_per_day, "daily")
-abii_html = build_abii_table(abii_rows)
+abii_html = build_abii_table(abii_rows, dialysis_last)
 
-today = date.today()
+# Contract lifecycle callout (offboarding / newly added) across TRR + COBC.
+offboarding, added = detect_lifecycle({"TRR": trr_per_day, "COBC": cobc_per_day}, today)
+callout = ""
+if offboarding or added:
+    items = []
+    for c, detail in offboarding:
+        items.append(f"<li><b>{c}</b> appears to be <b>offboarding</b> &mdash; {detail} "
+                     f"(no delivery in &gt;{OFFBOARD_DAYS} days while other contracts continue).</li>")
+    for c, detail in added:
+        items.append(f"<li><b>{c}</b> is a <b>newly added</b> contract &mdash; {detail}.</li>")
+    callout = ("<div class='callout'><b>&#9888; Contract changes detected</b>"
+               f"<ul>{''.join(items)}</ul></div>")
 
 STYLE = """<style>
 body { font-family: 'Segoe UI', sans-serif; font-size: 12px; }
@@ -292,6 +408,11 @@ tr.monthtotal td.month-total { background: #d6e0f0 !important; font-weight: bold
 .grp-start { border-left: 2px solid #000 !important; }
 h3 { color: #305f9c; margin-top: 26px; }
 h4 { color: #305f9c; margin: 8px 0 4px; }
+.callout { background: #fff3cd; border: 2px solid #e0a800; border-radius: 5px;
+           padding: 10px 14px; margin: 12px 0; color: #6b4e00; }
+.callout ul { margin: 6px 0 0 18px; }
+p.alert { background: #fde4e4; border-left: 4px solid #a40000; color: #a40000;
+          font-weight: bold; padding: 6px 10px; margin: 6px 0; }
 </style>"""
 
 
@@ -310,6 +431,8 @@ html = f"""<html><head>{STYLE}</head><body>
 Contract and file date are parsed from the FileName. TRR (TableID 5400) and COBC
 (5000/5100/5200, deduped to one row per physical file) are <b>daily</b>; ABII
 (5500 Dialysis / 5600 Transplant) is <b>monthly</b>. Only production (<code>P.</code>) files counted.</p>
+
+{callout}
 
 {section('TRR &mdash; daily (P.R&lt;contract&gt;.DTRRD.D&lt;YYMMDD&gt;)', trr_table, trr_stats)}
 {section('COBC &mdash; daily (P.R&lt;contract&gt;.MARXCOB.D&lt;YYMMDD&gt;)', cobc_table, cobc_stats)}
