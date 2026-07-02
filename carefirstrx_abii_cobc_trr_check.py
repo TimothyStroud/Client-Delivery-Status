@@ -100,7 +100,7 @@ def parse_daily(rows):
         if len(parts) < 2:
             continue
         tape, fname = parts[0].strip(), parts[1].strip()
-        if tape in seen_tape:          # dedup: one physical file counted once
+        if tape in seen_tape:          # safety net (TapeIDs are already unique per row)
             continue
         m = DAILY_RE.search(fname)
         if not m:
@@ -353,9 +353,12 @@ trr_rows = query("""SELECT t.[TapeID], t.[FileName]
 FROM [CareFirstRx].[etl].[tape] T (NOLOCK)
 WHERE t.[TableID] = 5400 AND t.[FileName] LIKE '%.D26%'""")
 
+# COBC is ONE physical file that gets split into DTL(5000)/PRM(5100)/SUP(5200)
+# layouts sharing the same TapeID. Count it once: query only 5000 (DTL). Per
+# user 2026-07-02 — replaces the prior IN (5000,5100,5200) + TapeID dedup.
 cobc_rows = query("""SELECT t.[TapeID], t.[FileName]
 FROM [CareFirstRx].[etl].[tape] T (NOLOCK)
-WHERE t.[TableID] IN (5000,5100,5200) AND t.[FileName] LIKE '%.D26%'""")
+WHERE t.[TableID] = 5000 AND t.[FileName] LIKE '%.D26%'""")
 
 abii_rows = query("""SELECT t.[TapeID], t.[FileName], f.[TableName]
 FROM [CareFirstRx].[etl].[tape] T (NOLOCK)
