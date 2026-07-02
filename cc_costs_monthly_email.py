@@ -12,6 +12,8 @@ import os
 import sys
 import glob
 import json
+import html as _html
+import subprocess
 from datetime import datetime, timedelta, timezone
 
 BASE = r'C:\Users\tls2\.claude\projects\H--'
@@ -20,6 +22,23 @@ import cc_costs_by_initiative as cc          # cost_of, parse_ts, PROJECTS_DIR
 from send_via_outlook import send
 
 TO = 'timothy.stroud@machinify.com'
+PS1 = os.path.join(BASE, 'cc-classify-powershell', 'cc-classify.ps1')
+
+
+def run_ps_summary(since, until_exclusive):
+    """Run cc-classify.ps1 `summary` for the given window and return its text
+    (the CAPITALIZATION REPORT + INITIATIVES sections, verbatim). until is
+    exclusive; the .ps1 -Until is inclusive, so pass the last covered day."""
+    last_day = (until_exclusive - timedelta(days=1)).strftime('%Y-%m-%d')
+    first_day = since.strftime('%Y-%m-%d')
+    r = subprocess.run(
+        ['powershell', '-NoProfile', '-NonInteractive', '-File', PS1,
+         'summary', '-Since', first_day, '-Until', last_day],
+        capture_output=True, text=True, timeout=180)
+    out = (r.stdout or '').rstrip('\n')
+    if not out:
+        out = '(cc-classify.ps1 produced no output)\n' + (r.stderr or '')
+    return out
 
 
 def prev_month_window(today=None):
@@ -81,7 +100,7 @@ def scan(since, until):
     return init_agg, sess_agg, unpriced
 
 
-def build_html(label, init_agg, sess_agg, unpriced):
+def build_html(label, summary_text, init_agg, sess_agg, unpriced):
     tot_cost = sum(v['cost'] for v in init_agg.values())
     tot_tok = sum(v['tokens'] for v in init_agg.values())
     tot_sess = sum(len(v['sessions']) for v in init_agg.values())
@@ -94,23 +113,14 @@ def build_html(label, init_agg, sess_agg, unpriced):
 
     parts = [f"<div style='{css}'>"]
     parts.append(f"<h2 style='color:#2f5496;margin-bottom:2px;'>Claude Cost Report &mdash; {label}</h2>")
-    parts.append(f"<p style='color:#666;margin-top:0;'>Spend by initiative from local Claude Code session "
-                 f"transcripts. Total: <b>${tot_cost:,.2f}</b> across {tot_tok:,} tokens in {tot_sess} sessions.</p>")
+    parts.append(f"<p style='color:#666;margin-top:0;'>Total: <b>${tot_cost:,.2f}</b> across "
+                 f"{tot_tok:,} tokens in {tot_sess} sessions.</p>")
 
-    # By initiative
-    parts.append("<h3 style='color:#2f5496;'>By initiative</h3>")
-    parts.append("<table style='border-collapse:collapse;'>")
-    parts.append(f"<tr><th style='{th}'>Initiative</th><th style='{thr}'>Cost</th>"
-                 f"<th style='{thr}'>Tokens</th><th style='{thr}'>Sessions</th><th style='{thr}'>$%</th></tr>")
-    for name, v in sorted(init_agg.items(), key=lambda kv: kv[1]['cost'], reverse=True):
-        pct = (v['cost'] / tot_cost * 100) if tot_cost else 0
-        parts.append(f"<tr><td style='{td}'>{name}</td><td style='{tdr}'>${v['cost']:,.2f}</td>"
-                     f"<td style='{tdr}'>{v['tokens']:,}</td><td style='{tdr}'>{len(v['sessions'])}</td>"
-                     f"<td style='{tdr}'>{pct:.1f}%</td></tr>")
-    parts.append(f"<tr><td style='{td}'><b>TOTAL</b></td><td style='{tdr}'><b>${tot_cost:,.2f}</b></td>"
-                 f"<td style='{tdr}'><b>{tot_tok:,}</b></td><td style='{tdr}'><b>{tot_sess}</b></td>"
-                 f"<td style='{tdr}'><b>100.0%</b></td></tr>")
-    parts.append("</table>")
+    # cc-classify.ps1 `summary` output verbatim (CAPITALIZATION REPORT + INITIATIVES)
+    parts.append("<h3 style='color:#2f5496;'>cc-classify summary</h3>")
+    parts.append("<pre style='font-family:Consolas,Courier New,monospace;font-size:12px;"
+                 "background:#f5f5f5;border:1px solid #ddd;padding:12px;white-space:pre;"
+                 "overflow-x:auto;'>" + _html.escape(summary_text) + "</pre>")
 
     # By session
     parts.append("<h3 style='color:#2f5496;'>By session</h3>")
@@ -128,8 +138,9 @@ def build_html(label, init_agg, sess_agg, unpriced):
     parts.append("</table>")
 
     note = ("Rates: Opus $5/$25, Sonnet $3/$15, Haiku $1/$5 per MTok; cache write 5m 1.25&times;, "
-            "1h 2&times;, read 0.1&times; input. Capitalization buckets (Dev/COS/Mixed/Strategy) are NOT "
-            "computed &mdash; those need cc-classify's config rules, which aren't available here.")
+            "1h 2&times;, read 0.1&times; input. Capitalization buckets above default every initiative to "
+            "Dev &mdash; real cc-classify assigns Dev/COS/Mixed/Strategy from config.toml rules not "
+            "available here.")
     if unpriced:
         note += " Skipped unpriced turns: " + ", ".join(f"{m} ({n})" for m, n in unpriced.items()) + "."
     parts.append(f"<p style='color:#888;font-size:11px;margin-top:14px;'>{note}</p>")
@@ -140,7 +151,8 @@ def build_html(label, init_agg, sess_agg, unpriced):
 def main():
     since, until, label = prev_month_window()
     init_agg, sess_agg, unpriced = scan(since, until)
-    html = build_html(label, init_agg, sess_agg, unpriced)
+    summary_text = run_ps_summary(since, until)
+    html = build_html(label, summary_text, init_agg, sess_agg, unpriced)
     tot_cost = sum(v['cost'] for v in init_agg.values())
     subject = f"Claude Cost Report - {label} - ${tot_cost:,.2f}"
     result = send(to=TO, subject=subject, body=html)
