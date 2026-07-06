@@ -34,8 +34,11 @@ Register-ScheduledTask -TaskName "{TASK_NAME}" -Action $action -Trigger $trigger
     subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
                    capture_output=True)
 
-    # Wait up to 15s for result
-    for _ in range(15):
+    # Wait up to 55s for result. The helper task fires at +3s and must launch
+    # Outlook COM, send, and write the result within its 60s ExecutionTimeLimit;
+    # a cold Outlook can take >15s to spin up, so give it the full window
+    # (previously 15s, which timed out on the first unattended send of the day).
+    for _ in range(55):
         time.sleep(1)
         if os.path.exists(RESULT_FILE):
             result = open(RESULT_FILE, encoding='utf-16').read().strip()
