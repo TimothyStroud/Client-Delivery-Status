@@ -25,8 +25,8 @@ State (loadsla_state.json) records per client: last_qid + last_period.
 
 Flags: --status (print, no send), --force (ignore state + period gate).
 """
-import sys, os, json, subprocess
-from datetime import datetime, timedelta
+import sys, os, json, subprocess, re
+from datetime import datetime, timedelta, date
 
 BASE = r'C:\Users\tls2\.claude\projects\H--'
 sys.path.insert(0, BASE)
@@ -70,6 +70,11 @@ OPTUM = {
     'raw_labels': ['RAW1', 'RAW2', 'RAW3'],
     'sql_server': 'TRGETL3', 'sql_db': 'OptumPBMRx',
 }
+# RAW1/2/3 trickle in over several days (RAW1 typically last), so don't report
+# the moment load+snap finish. Wait until all 3 are loaded (-> SUCCESS); only if
+# they're still incomplete this many days after the cycle (first Friday) do we
+# report FAILED SLA. Prevents the premature-FAILED seen on 2026-07-01.
+OPTUM_RAW_SLA_DAYS = 5
 
 GREEN = '#1a7f37'
 RED   = '#c00000'
@@ -154,23 +159,33 @@ def weekly_email(job, run):
     return subj, body, ok
 
 
-def optum_raw_status(cycle_date):
-    """Return ({label: loaded_bool}, tag) for RAW1/2/3 of the cycle (MMDDYYYY),
-    read from OptumPBMRx.etl.Tape on TRGETL3 (successfully-loaded files only)."""
-    tag = cycle_date.strftime('%m%d%Y')
-    found = {lbl: False for lbl in OPTUM['raw_labels']}
+def optum_raw_status():
+    """Return ({label: loaded_bool}, tag) for the LATEST cycle's RAW1/2/3,
+    read from OptumPBMRx.etl.Tape on TRGETL3 (successfully-loaded files only).
+
+    The cycle tag (MMDDYYYY) is derived from the RAW filenames themselves, so it
+    follows the actual data cycle rather than a re-running load job's StartDate
+    (which drifts to later dates as RAW files trickle in over several days)."""
     query = ("SET NOCOUNT ON; SELECT FileName FROM etl.Tape "
              "WHERE FileName LIKE '%RAW[123][_]%' AND FileName NOT LIKE '%RAWLINGS%' "
              "AND ProcessStatus=50 AND FileLoadDate IS NOT NULL;")
     out = subprocess.run(
         ['sqlcmd', '-S', OPTUM['sql_server'], '-d', OPTUM['sql_db'], '-E', '-W', '-h', '-1', '-Q', query],
         capture_output=True, text=True)
+    rx = re.compile(r'(RAW[123])_(\d{8})', re.I)
+    by_cycle = {}   # MMDDYYYY tag -> set of loaded labels
     for line in out.stdout.splitlines():
-        line = line.strip()
-        for lbl in OPTUM['raw_labels']:
-            if (lbl + '_' + tag) in line:
-                found[lbl] = True
-    return found, tag
+        m = rx.search(line)
+        if m:
+            by_cycle.setdefault(m.group(2), set()).add(m.group(1).upper())
+    if not by_cycle:
+        return {lbl: False for lbl in OPTUM['raw_labels']}, '?'
+
+    def _cd(t):
+        return date(int(t[4:8]), int(t[0:2]), int(t[2:4]))
+    tag = max(by_cycle, key=_cd)          # most recent data cycle present
+    present = by_cycle[tag]
+    return {lbl: (lbl in present) for lbl in OPTUM['raw_labels']}, tag
 
 
 def optum_email(load_run, snap_run, raw_found, tag=''):
@@ -258,11 +273,12 @@ def main():
     lrun = runs.get(OPTUM['load_jobid']); srun = runs.get(OPTUM['snap_jobid'])
     if lrun and srun:
         lqid = lrun.get('QueueId'); lend = lrun.get('EndDate'); send_end = srun.get('EndDate')
-        cycle = parse_dt(lrun.get('StartDate'))
-        if cycle:
-            raw_found, tag = optum_raw_status(cycle)
-        else:
-            raw_found, tag = {l: False for l in OPTUM['raw_labels']}, '?'
+        raw_found, tag = optum_raw_status()
+        # Cycle date comes from the RAW tag (fallback: the load run's StartDate).
+        try:
+            cycle = datetime(int(tag[4:8]), int(tag[0:2]), int(tag[2:4]))
+        except (ValueError, IndexError):
+            cycle = parse_dt(lrun.get('StartDate'))
         print(f"[optum_pbm] LoadQ={lqid} LoadEnd={lend} SnapEnd={send_end} tag={tag} RAW={raw_found}")
         complete = bool(lend and send_end)
         pk = period_key('monthly')  # Optum is monthly: report once/month, restart 1st weekday
@@ -276,6 +292,11 @@ def main():
                 print("   load/snap not both complete -- skip")
             elif not force and cell.get('last_qid') == lqid:
                 print("   this completion already reported -- skip")
+            elif (not all(raw_found.values()) and not force and cycle
+                  and datetime.now() < cycle + timedelta(days=OPTUM_RAW_SLA_DAYS)):
+                _missing = [l for l, v in raw_found.items() if not v]
+                print(f"   RAW not all loaded yet ({', '.join(_missing)}); within "
+                      f"{OPTUM_RAW_SLA_DAYS}-day window of cycle {tag} -- waiting, no report")
             else:
                 subj, body, ok = optum_email(lrun, srun, raw_found, tag)
                 res = send(to=TO_ADDR, subject=subj, body=body, from_address=FROM_ADDR)
