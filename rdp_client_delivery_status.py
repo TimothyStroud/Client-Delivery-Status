@@ -1131,6 +1131,7 @@ CLIENT_SUFFIXES = {
     "OscarRx":               "(n)(p)",
     "PremeraMedAdvRx":       "(n)(p)",
     "NCStateRx":             "(n)(p)",
+    "NCState":               "(n)",
     "Wellmark":              "(s)",
     "EmblemFacets":          "(s)",
     "HealthSpring_FWA":      "(s)",
