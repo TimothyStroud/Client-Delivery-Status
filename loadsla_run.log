@@ -339,3 +339,19 @@ State saved.
 [optum_pbm] LoadQ=1391267 LoadEnd=2026-07-01T15:30:23.453 SnapEnd=2026-07-01T15:38:11.453 tag=07012026 RAW={'RAW1': False, 'RAW2': False, 'RAW3': False}
    send -> Sent. | SLA Update - Optum 0110 PBM Load (July 2026) - FAILED SLA
 State saved.
+[caresource] (weekly) QueueId=1390569 Status=Successful End=2026-07-01T02:28:49.377 period=2026-W27
+   already reported this period -- dormant until restart
+[wellmark] (weekly) QueueId=1389766 Status=Successful End=2026-06-29T12:21:00.567 period=2026-W27
+   already reported this period -- dormant until restart
+[healthspring_fwa] (monthly) QueueId=1368201 Status=Successful End=2026-06-02T18:20:42.99 period=2026-07
+   this completion already reported -- skip
+[optum_pbm] LoadQ=1392729 LoadEnd=None SnapEnd=2026-07-01T15:38:11.453 tag=07032026 RAW={'RAW1': False, 'RAW2': True, 'RAW3': False}
+   already reported this month -- dormant until restart
+[caresource] (weekly) QueueId=1390569 Status=Successful End=2026-07-01T02:28:49.377 period=2026-W28
+   this completion already reported -- skip
+[wellmark] (weekly) QueueId=1394479 Status=Successful End=2026-07-06T03:49:22.247 period=2026-W28
+   send -> TIMEOUT | SLA Update - Wellmark 0210 Claims Load - SUCCESS
+[healthspring_fwa] (monthly) QueueId=1368201 Status=Successful End=2026-06-02T18:20:42.99 period=2026-07
+   this completion already reported -- skip
+[optum_pbm] LoadQ=1393097 LoadEnd=2026-07-04T12:45:28.93 SnapEnd=2026-07-04T12:59:17.29 tag=07032026 RAW={'RAW1': False, 'RAW2': True, 'RAW3': True}
+   already reported this month -- dormant until restart

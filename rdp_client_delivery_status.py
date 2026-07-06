@@ -553,6 +553,11 @@ MANUAL_OVERRIDES = {
     # certified on 7/1/26."
     ("Premera",      date(2026, 6, 25)): date(2026, 6, 25),
     ("Premera",      date(2026, 7, 2)):  date(2026, 7, 1),
+    # 2026-07-06: CenteneRx 7/3 (Fri) loaded and certifies today (7/6). The cert
+    # lands on Monday 7/6 — OUTSIDE the 7/3 cell's Mon-Fri window (6/29-7/3) — so
+    # the auto backward-window lookup can't reach it (CenteneRx has no forward
+    # CERT_DIRECTION). Pin the 7/6 cert date on the 7/3 cell. Per user 2026-07-06.
+    ("CenteneRx",    date(2026, 7, 3)):  date(2026, 7, 6),
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -680,10 +685,17 @@ ADDITIONAL_ENTRIES = [
 # the first Tuesday of every month (matching regular CignaRx Tuesday). Marker
 # is auto-detected from cert/load activity in a window straddling the month
 # boundary; override here when the cert is recorded as an exception.
-# Key: (year, month) of the SOM side. Value: a date (cert date) OR a marker
-# string ("✓", "L", "No Data", "Load Failure", "").
+# Key: (year, month) of the SOM side. Value can be:
+#   - a date / marker string ("✓", "L", "No Data", "Load Failure", "") — the
+#     marker; the row stays on its default first-Tuesday placement, and
+#   - a (placement_date, marker) TUPLE — forces BOTH the calendar column the row
+#     lands on AND the marker (used when the EOM/SOM cycle should sit on a
+#     non-Tuesday day, e.g. its data/exception date).
 CIGNARX_EOM_SOM_OVERRIDES = {
-    # ("2026,6": date(2026, 6, ?)),  # populate when the exception cert lands
+    # 2026-07-06: the July EOM/SOM cycle certified 7/2 (StatTimestamp/data date
+    # 7/1, mining rows recorded as "Exception"). Per user, place it on 7/1/26
+    # instead of the default first-Tuesday (7/7). Show 7/1/26 in the cell.
+    (2026, 7): (date(2026, 7, 1), date(2026, 7, 1)),
 }
 
 # Per-client cert window direction (default = backward / same Mon-Fri week).
@@ -1783,6 +1795,58 @@ def fetch_optum_raw_instances(since):
     return list(inst.values())
 
 
+# CVSPBMRx Ad Hoc detection — the giveaway is FileSize (per user 2026-07-06).
+# Regular weekly CVSPBMRx eligibility files run ~0.8–12 GB; a backfill/out-of-
+# cycle file is dramatically larger (e.g. Tape 340, RAW_MEMBR_ELIG_GCP_20260611,
+# ~148 GB). Any CVSPBMRx tape row above this threshold is treated as an Ad Hoc
+# load and broken out onto its own row, NOT attributed to the regular Monday
+# weekly cells. (For reference: the FileName date normally maps to the NEXT
+# Monday's weekly load; an out-of-cycle giant file is Ad Hoc.)
+CVSPBMRX_ADHOC_MIN_FILESIZE = 50_000_000_000   # 50 GB (well above normal ~12 GB)
+
+
+def fetch_cvspbm_adhoc(since):
+    """Return CVSPBMRx Ad Hoc (backfill/out-of-cycle) tape instances.
+
+    Scans TRGETL3 CVSPBMRx.etl.Tape for rows whose FileSize exceeds
+    CVSPBMRX_ADHOC_MIN_FILESIZE — the FileSize is the giveaway that a load is a
+    backfill rather than a normal weekly delivery. Returns a list of dicts:
+    {load_date: datetime|None, loaded: bool, size: int, filename: str}. A row is
+    "loaded" once ProcessStatus == 50 (50 = loaded; 40/42 = staging/loading).
+    """
+    q = (
+        "SET NOCOUNT ON; SELECT FileName, FileSize, ProcessStatus, "
+        "CONVERT(varchar(19), FileLoadDate, 121) "
+        "FROM [etl].[Tape] "
+        f"WHERE FileSize >= {CVSPBMRX_ADHOC_MIN_FILESIZE} "
+        f"AND FileLoadDate >= '{since:%Y-%m-%d}' "
+        "ORDER BY FileLoadDate"
+    )
+    SEP = "\x1f"
+    r = subprocess.run(
+        ["sqlcmd", "-S", "TRGETL3", "-d", "CVSPBMRx", "-E", "-Q", q,
+         "-W", "-s", SEP, "-h", "-1"],
+        capture_output=True, text=True, check=False,
+    )
+    rows = []
+    for line in r.stdout.splitlines():
+        p = line.split(SEP)
+        if len(p) < 4:
+            continue
+        try:
+            size = int(p[1].strip())
+            status = int(p[2].strip())
+        except ValueError:
+            continue
+        rows.append({
+            "filename":  (p[0] or "").strip(),
+            "size":      size,
+            "loaded":    status == 50,
+            "load_date": parse_dt(p[3].strip()),
+        })
+    return rows
+
+
 # Map of client → (database name, snap-index source key).
 # Server defaults to TRGETL3 (see TAPE_LOAD_SERVER for overrides).
 TAPE_LOAD_SOURCES = {
@@ -2684,7 +2748,7 @@ def is_friday_or_later_in_week(today, scheduled_day):
 def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_placements,
                   ramp_jobs, ramp_queue, esipbmrx_tape=None, multi_week_loads=None,
                   aetna_nmsp_loads=None, optumpbmrx_tape=None, evernorth_claims_pending=False,
-                  optum_raw_instances=None):
+                  optum_raw_instances=None, cvspbm_adhoc=None):
     """Return ((sections, weeks)) layout.
 
     sections: dict {kind: dict {date: [(label, marker, alert)] }}
@@ -2694,6 +2758,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     today = date.today()
     weeks = month_weeks(year, month)
     all_days = [d for wk in weeks for d in wk if d is not None]
+
+    # CVSPBMRx Ad Hoc (backfill) state — an oversized/out-of-cycle tape file is
+    # loading through the same 'CVSPBMRx … Load' RAMP job as the regular weekly
+    # feed, so is_loading_today would otherwise stamp "L" on the regular Monday
+    # cell. When an Ad Hoc file is in flight, that L belongs to the backfill, not
+    # the weekly cycle — suppress the regular L (see resolve_marker) and surface
+    # the backfill on its own "CVSPBMRx (Ad Hoc)" row instead. Per user 2026-07-06.
+    cvspbm_adhoc = cvspbm_adhoc or []
+    cvspbm_adhoc_loading = any(not a.get("loaded") for a in cvspbm_adhoc)
 
     daily   = defaultdict(list)
     weekly  = defaultdict(list)
@@ -2888,7 +2961,12 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # retry is more useful than a stale Failed entry). Cert already
         # took priority above, so cert dates aren't displaced.
         if in_current_week:
-            if is_loading_today(client, ramp_queue, ramp_jobs):
+            # CVSPBMRx: while an Ad Hoc backfill is loading, the running
+            # 'CVSPBMRx … Load' job is processing the backfill (not the weekly
+            # cycle) — don't attribute its "L" to the regular Monday cell. The
+            # backfill gets its own "CVSPBMRx (Ad Hoc)" row.
+            suppress_l = client == "CVSPBMRx" and cvspbm_adhoc_loading
+            if not suppress_l and is_loading_today(client, ramp_queue, ramp_jobs):
                 return "L"
             if has_recent_failure(client, ramp_queue, ramp_jobs, today):
                 return "Load Failure"
@@ -3442,9 +3520,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             break
     if cigna_target is not None:
         cig_label = "CignaRx (EOM/SOM)(p)"
+        placement_override = None
         override = CIGNARX_EOM_SOM_OVERRIDES.get((year, month))
         if override is not None:
-            marker = override
+            if isinstance(override, tuple):
+                placement_override, marker = override
+            else:
+                marker = override
         else:
             # Window: from the 1st of the month through 14 days in. Restricted
             # to the current month (was -7 days) so the prior month's regular
@@ -3486,13 +3568,44 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                     marker = "L"
                 else:
                     marker = ""   # blank until the next load
-        # While loading in the current month, place the row on TODAY; otherwise
-        # (blank, or a landed cert) keep it on the first Tuesday.
+        # A tuple override forces the placement day; otherwise, while loading in
+        # the current month place the row on TODAY; else (blank / landed cert)
+        # keep it on the first Tuesday.
         placement = cigna_target
-        if marker == "L" and year == today.year and month == today.month and today in all_days:
+        if placement_override is not None and placement_override in all_days:
+            placement = placement_override
+        elif marker == "L" and year == today.year and month == today.month and today in all_days:
             placement = today
         alert = alert_state("CignaRx", placement, marker)
         weekly[placement].append((cig_label, marker, alert, None))
+
+    # CVSPBMRx Ad Hoc (backfill) row — one per oversized/out-of-cycle tape file
+    # (FileSize giveaway; see fetch_cvspbm_adhoc). While loading → "L" on today;
+    # once loaded → "✓" on its load date (weekend-shifted). Kept separate from
+    # the regular weekly Monday cells (per user 2026-07-06). Emitted only on the
+    # month tab whose rendered days contain the placement day.
+    _cvspbm_ah_seen = set()
+    for a in cvspbm_adhoc:
+        if a.get("loaded"):
+            ld = a.get("load_date")
+            if not ld:
+                continue
+            cell = ld.date()
+            if cell.weekday() == 5:
+                cell -= timedelta(days=1)
+            elif cell.weekday() == 6:
+                cell += timedelta(days=1)
+            mk = "✓"
+        else:
+            cell = today
+            mk = "L"
+        if cell not in all_days:
+            continue
+        key = (cell, mk)
+        if key in _cvspbm_ah_seen:
+            continue
+        _cvspbm_ah_seen.add(key)
+        weekly[cell].append(("CVSPBMRx (Ad Hoc)", mk, False, None))
 
     # One-off (per user 2026-06-11): Kaiser_AmbM runs a SECOND June cycle — it
     # certified 6/11, and a new monthly load lands ~6/18. determine_monthly only
@@ -4674,6 +4787,10 @@ def main():
     optum_raw_instances = fetch_optum_raw_instances(since=date(year, month, 1) - timedelta(days=14))
     print(f"[info]   OptumPBMRx RAW instances: {len(optum_raw_instances)}")
 
+    print("[info] Fetching CVSPBMRx Ad Hoc (oversized/backfill) tape files…")
+    cvspbm_adhoc = fetch_cvspbm_adhoc(since=date(year, month, 1) - timedelta(days=14))
+    print(f"[info]   CVSPBMRx Ad Hoc instances: {len(cvspbm_adhoc)}")
+
     latest_tickets, monthly_placements = build_ticket_index(tickets, jobs)
     print(f"[info] latest tickets indexed for {len(latest_tickets)} clients")
 
@@ -4723,7 +4840,8 @@ def main():
                                         aetna_nmsp_loads=aetna_nmsp_loads,
                                         optumpbmrx_tape=tape_loads.get("optumpbmrx"),
                                         evernorth_claims_pending=evernorth_claims_pending,
-                                        optum_raw_instances=optum_raw_instances)
+                                        optum_raw_instances=optum_raw_instances,
+                                        cvspbm_adhoc=cvspbm_adhoc)
 
         tab_name = f"{_cal_mod.month_name[m]} {year}"
         ws_m = wb.create_sheet(tab_name)
