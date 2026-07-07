@@ -1082,6 +1082,16 @@ CLIENT_PRIMARY_KEY_OVERRIDE = {
     # trick as Medica. _keys_for_client still yields base "ncstate" for the
     # snap-index strict-equality lookups. Per user 2026-07-01.
     "NCState": "ncstate0",
+    # "hmsa" (HMSA Medical's key) is a substring of "hmsarx", so
+    # find_matching_jobs("HMSA") falsely matched HMSA_Rx's jobs — the failed
+    # 'HMSA RX Claims 0110 Load' put a spurious "Load Failure" on HMSA Medical
+    # while HMSA's own 'HMSA Claims 0110 Load' ran fine. Override to
+    # "hmsaclaims", which matches HMSA Medical's own jobs
+    # ('HMSA Claims 0110 Load' → "hmsaclaims0110load") but NOT
+    # "hmsarxclaims0110load" ("hmsa" + "rx" + "claims", not contiguous). Same
+    # trick as Medica/NCState. _keys_for_client still yields base "hmsa" for
+    # DHT cert / snap-index lookups. Per user 2026-07-07.
+    "HMSA": "hmsaclaims",
 }
 
 # NYShip_Rx fires four times per month — on the 1st, 8th, 16th, 24th
