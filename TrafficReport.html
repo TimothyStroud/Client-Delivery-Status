@@ -25,8 +25,9 @@
   .grow { flex: 1; }
   input#search { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; min-width: 200px; }
   button.link { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: 13px; text-decoration: underline; }
-  .wrap { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: auto; }
-  table { border-collapse: collapse; width: 100%; }
+  .wrap { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+          overflow: auto; display: inline-block; max-width: 100%; vertical-align: top; }
+  table { border-collapse: collapse; width: auto; }
   th, td { padding: 4px 10px; white-space: nowrap; text-align: left; }
   thead th { position: sticky; top: 0; background: #fff; z-index: 2; font-weight: 600;
              color: var(--muted); border-bottom: 2px solid var(--border); font-size: 12px; }
@@ -49,7 +50,7 @@
 <body>
 <header>
   <h1>Traffic Report</h1>
-  <div class="meta">Generated 2026-07-07 12:15 &middot; trgutil10 / DHTStats &middot; rebuild of Power BI "Traffic Reports v1"</div>
+  <div class="meta">Generated 2026-07-07 12:18 &middot; trgutil10 / DHTStats &middot; rebuild of Power BI "Traffic Reports v1"</div>
 </header>
 <main>
   <div class="controls">
