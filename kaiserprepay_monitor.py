@@ -5,10 +5,9 @@ Watches RAMP for each new 'Kaiser Pareo Prepay' daily cycle:
   0100 Stage (JobId 10720)  ->  0110 Load (10721)  ->  0120 Snap (10722)
 For every NEW Load (QueueId > watermark) that has finished, once its Snap is
 also terminal (or the Load failed, or the Snap is clearly stuck), posts ONE
-combined Load+Snap Success/Failure message to two Slack Workflow Builder
-webhooks:
-  - RDP Ops Alerts            -> #team-rdp-operations-support  (H:\slack_wf_support.txt)
+combined Load+Snap Success/Failure message to a Slack Workflow Builder webhook:
   - RDP Ops - KaiserPrePay    -> #rps_kaiserprepay_discussion  (H:\slack_wf_kaiserprepay.txt)
+(The #team-rdp-operations-support post was removed 2026-07-07 per user request.)
 The message confirms the MA & SC files were staged and notes any missing one.
 
 State (last-posted Load QueueId) lives at H:\kaiserprepay_monitor_state.json so
@@ -109,7 +108,7 @@ def post(url, text):
 
 
 def post_all(text):
-    for label, path in (("support", SUPPORT_URL_FILE), ("kaiserprepay", PREPAY_URL_FILE)):
+    for label, path in (("kaiserprepay", PREPAY_URL_FILE),):
         url = get_url(path)
         if not url:
             log(f"  SKIP {label}: no webhook at {path}")
