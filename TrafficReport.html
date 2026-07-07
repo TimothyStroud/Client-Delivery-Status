@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Traffic Report</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --border: #d8dee6;
+    --text: #1f2a37;
+    --muted: #5b6776;
+    --accent: #2c5f8a;
+    --accent-dark: #1f3d5c;
+    --green: #1a7f37;
+    --amber: #b7791f;
+    --red: #c0392b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  header {
+    background: var(--accent-dark);
+    color: #39ff14;
+    padding: 16px 24px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header .meta { font-size: 12px; opacity: 0.85; margin-top: 4px; }
+  main { padding: 16px 24px 32px; }
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .kpi {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .kpi .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .kpi .value { font-size: 22px; font-weight: 600; margin-top: 2px; color: var(--accent-dark); }
+  .filters {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: end;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .field select, .field input {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 13px;
+    background: #fff;
+    min-width: 120px;
+  }
+  .field.check { flex-direction: row; align-items: center; gap: 6px; }
+  .field.check input { min-width: 0; }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: 0;
+    border-radius: 4px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+  table {
+    width: auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    border-collapse: separate;
+    border-spacing: 0;
+    overflow: hidden;
+  }
+  thead { background: var(--accent); color: #39ff14; position: sticky; top: 0; z-index: 1; }
+  th {
+    text-align: left;
+    padding: 6px 8px;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  th .arrow { opacity: 0.5; font-size: 10px; margin-left: 3px; }
+  th.sort-asc .arrow, th.sort-desc .arrow { opacity: 1; }
+  td {
+    padding: 4px 8px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:hover td { background: #f8fafc; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .pill.Medical { background: #e3f0fb; color: #14517d; }
+  .pill.Rx { background: #eafbea; color: #1a7f37; }
+  .pill.Both { background: #f3ecfb; color: #6b3fa0; }
+  .days-ok { color: var(--green); }
+  .days-warn { color: var(--amber); font-weight: 600; }
+  .days-bad { color: var(--red); font-weight: 700; }
+  .empty { padding: 24px; text-align: center; color: var(--muted); }
+  .foot { margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; justify-content: flex-end; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Traffic Report</h1>
+  <div class="meta">Generated 2026-07-07 10:51 &middot; trgutil10 / DHTStats &middot; certifications in the last 2 years &middot; 114 clients</div>
+</header>
+<main>
+  <section class="kpis">
+    <div class="kpi"><div class="label">Clients</div><div class="value" id="kpi-clients">&mdash;</div></div>
+    <div class="kpi"><div class="label">Medical</div><div class="value" id="kpi-med">&mdash;</div></div>
+    <div class="kpi"><div class="label">Rx</div><div class="value" id="kpi-rx">&mdash;</div></div>
+    <div class="kpi"><div class="label">Distinct PCNs</div><div class="value" id="kpi-pcns">&mdash;</div></div>
+    <div class="kpi"><div class="label">Total Certs</div><div class="value" id="kpi-certs">&mdash;</div></div>
+    <div class="kpi"><div class="label">Certified %</div><div class="value" id="kpi-pct">&mdash;</div></div>
+    <div class="kpi"><div class="label">Stale &gt; 7d</div><div class="value" id="kpi-stale">&mdash;</div></div>
+  </section>
+
+  <section class="filters">
+    <div class="field">
+      <label for="f-client">Client</label>
+      <input type="text" id="f-client" placeholder="contains&hellip;">
+    </div>
+    <div class="field">
+      <label for="f-type">Type</label>
+      <select id="f-type"><option value="">All</option><option>Medical</option><option>Rx</option><option>Both</option></select>
+    </div>
+    <div class="field">
+      <label for="f-certfrom">Latest Cert From</label>
+      <input type="date" id="f-certfrom">
+    </div>
+    <div class="field">
+      <label for="f-certto">Latest Cert To</label>
+      <input type="date" id="f-certto">
+    </div>
+    <div class="field check">
+      <input type="checkbox" id="f-stale">
+      <label for="f-stale" style="text-transform:none;letter-spacing:0;">Stale only (&gt; 7 days)</label>
+    </div>
+    <button class="secondary" id="btn-reset">Reset</button>
+  </section>
+
+  <table id="grid">
+    <thead>
+      <tr>
+        <th data-key="client">Client<span class="arrow">&#8597;</span></th>
+        <th data-key="type">Type<span class="arrow">&#8597;</span></th>
+        <th data-key="pcns" class="num">PCNs<span class="arrow">&#8597;</span></th>
+        <th data-key="certs" class="num">Certs<span class="arrow">&#8597;</span></th>
+        <th data-key="certd" class="num">Certified<span class="arrow">&#8597;</span></th>
+        <th data-key="certpct" class="num">Cert %<span class="arrow">&#8597;</span></th>
+        <th data-key="mpl">Max PayDate Loaded<span class="arrow">&#8597;</span></th>
+        <th data-key="mpc">Max PayDate Certified<span class="arrow">&#8597;</span></th>
+        <th data-key="maxcert">Latest Cert<span class="arrow">&#8597;</span></th>
+        <th data-key="days" class="num">Days Since Cert<span class="arrow">&#8597;</span></th>
+      </tr>
+    </thead>
+    <tbody id="grid-body"></tbody>
+  </table>
+  <div class="pager">
+    <span id="pager-info"></span>
+    <button class="secondary" id="pg-prev">&laquo; Prev</button>
+    <button class="secondary" id="pg-next">Next &raquo;</button>
+  </div>
+  <div class="foot">
+    "Type" is derived from config.Field (isStandardMedical / isStandardRx). The
+    original pbix's Subro / PI / RX / RX&nbsp;Medical grouping is not flagged in
+    the data and could not be reproduced from the compressed model.
+    Days Since Cert: <span class="days-ok">&le;7</span> &middot;
+    <span class="days-warn">8&ndash;14</span> &middot;
+    <span class="days-bad">&gt;14</span>. Cadence varies by client.
+  </div>
+</main>
+
+<script type="application/json" id="data">[{"client":"AetnaHMO","type":"Medical","category":"","pcns":26,"certs":26,"certd":26,"certpct":100.0,"mpl":"2025-01-01","mpc":"2025-01-01","maxcert":"2025-01-06 08:19:07"},{"client":"AetnaHRP","type":"Medical","category":"","pcns":732,"certs":732,"certd":724,"certpct":98.9,"mpl":"2026-07-03","mpc":"2026-06-27","maxcert":"2026-06-30 14:29:36"},{"client":"AetnaQNXT","type":"Medical","category":"","pcns":924,"certs":924,"certd":924,"certpct":100.0,"mpl":"2026-05-29","mpc":"2026-05-29","maxcert":"2026-06-15 09:52:09"},{"client":"AetnaQNXTRx","type":"Rx","category":"","pcns":41,"certs":41,"certd":41,"certpct":100.0,"mpl":"2026-05-27","mpc":"2026-05-27","maxcert":"2026-06-12 09:08:18"},{"client":"AetnaRCE","type":"Medical","category":"","pcns":653,"certs":653,"certd":651,"certpct":99.7,"mpl":"2026-07-04","mpc":"2026-07-02","maxcert":"2026-07-03 17:29:39"},{"client":"AetnaRx","type":"Rx","category":"","pcns":2526,"certs":2526,"certd":2522,"certpct":99.8,"mpl":"2026-07-06","mpc":"2026-07-02","maxcert":"2026-07-03 17:43:20"},{"client":"BCBSAR","type":"Medical","category":"","pcns":5,"certs":5,"certd":5,"certpct":100.0,"mpl":"2026-06-25","mpc":"2026-06-25","maxcert":"2026-06-29 14:21:59"},{"client":"BCBSARRx","type":"Rx","category":"","pcns":9,"certs":9,"certd":9,"certpct":100.0,"mpl":"2026-06-28","mpc":"2026-06-28","maxcert":"2026-06-29 14:36:30"},{"client":"BCBSFL","type":"Medical","category":"","pcns":441,"certs":441,"certd":437,"certpct":99.1,"mpl":"2026-06-29","mpc":"2026-06-29","maxcert":"2026-07-07 10:25:25"},{"client":"BCBSKS","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"9999-12-31","mpc":"9999-12-31","maxcert":"2026-06-15 10:53:20"},{"client":"BCBSKSMedAdv","type":"Medical","category":"","pcns":104,"certs":104,"certd":101,"certpct":97.1,"mpl":"2026-06-30","mpc":"2026-06-09","maxcert":"2026-06-15 11:00:46"},{"client":"BCBSNC","type":"Medical","category":"","pcns":23,"certs":23,"certd":23,"certpct":100.0,"mpl":"2026-05-31","mpc":"2026-05-31","maxcert":"2026-06-11 08:24:29"},{"client":"BCBSNC Senior Market","type":"Medical","category":"","pcns":19,"certs":19,"certd":19,"certpct":100.0,"mpl":"2025-12-30","mpc":"2025-12-30","maxcert":"2026-01-05 08:22:33"},{"client":"BCBSNC_RX","type":"Rx","category":"","pcns":26,"certs":26,"certd":26,"certpct":100.0,"mpl":"2026-06-16","mpc":"2026-06-16","maxcert":"2026-06-11 09:55:07"},{"client":"BCBSNorthCarolinaFEP","type":"Medical","category":"","pcns":41,"certs":41,"certd":41,"certpct":100.0,"mpl":"2026-06-03","mpc":"2026-06-03","maxcert":"2026-06-10 10:41:10"},{"client":"BCBSPuertoRico","type":"Medical","category":"","pcns":48,"certs":48,"certd":48,"certpct":100.0,"mpl":"2026-05-30","mpc":"2026-05-30","maxcert":"2026-06-11 10:50:17"},{"client":"BCBSSC","type":"Medical","category":"","pcns":26,"certs":26,"certd":26,"certpct":100.0,"mpl":"2026-05-29","mpc":"2026-05-29","maxcert":"2026-06-23 14:21:54"},{"client":"BCBSSCRx","type":"Rx","category":"","pcns":30,"certs":30,"certd":29,"certpct":96.7,"mpl":"2026-05-24","mpc":"2026-04-19","maxcert":"2026-05-21 15:06:31"},{"client":"BCBSVT","type":"Medical","category":"","pcns":36,"certs":36,"certd":36,"certpct":100.0,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-06 13:51:44"},{"client":"BSCA_Facets","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-29","mpc":"2026-05-29","maxcert":"2026-06-08 12:07:24"},{"client":"BSCA_Medicare","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-29","mpc":"2026-05-29","maxcert":"2026-06-08 11:27:15"},{"client":"Cambia","type":"Medical","category":"","pcns":104,"certs":104,"certd":104,"certpct":100.0,"mpl":"2026-06-28","mpc":"2026-06-28","maxcert":"2026-07-06 11:45:08"},{"client":"CareFirstDC","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-04-30","mpc":"2026-04-30","maxcert":"2026-06-15 14:20:15"},{"client":"CareFirstFacets","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-04-28","mpc":"2026-04-28","maxcert":"2026-06-15 14:45:28"},{"client":"CareFirstNasco","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-04-30","mpc":"2026-04-30","maxcert":"2026-06-15 14:38:28"},{"client":"CareFirstRx","type":"Rx","category":"","pcns":25,"certs":25,"certd":25,"certpct":100.0,"mpl":"2026-05-31","mpc":"2026-05-31","maxcert":"2026-07-02 14:16:25"},{"client":"CareSource","type":"Medical","category":"","pcns":907,"certs":907,"certd":906,"certpct":99.9,"mpl":"2026-07-04","mpc":"2026-07-04","maxcert":"2026-07-07 09:40:57"},{"client":"CareSourceRx","type":"Rx","category":"","pcns":2512,"certs":2512,"certd":2502,"certpct":99.6,"mpl":"2026-06-29","mpc":"2026-06-29","maxcert":"2026-07-02 12:08:40"},{"client":"Centene","type":"Medical","category":"","pcns":216,"certs":216,"certd":216,"certpct":100.0,"mpl":"2026-07-06","mpc":"2026-07-06","maxcert":"2026-07-06 11:21:36"},{"client":"CenteneFidelis","type":"Medical","category":"","pcns":102,"certs":102,"certd":102,"certpct":100.0,"mpl":"2026-07-03","mpc":"2026-07-03","maxcert":"2026-07-02 09:50:53"},{"client":"CenteneFidelisRx","type":"Rx","category":"","pcns":118,"certs":118,"certd":117,"certpct":99.2,"mpl":"2026-07-05","mpc":"2026-06-28","maxcert":"2026-06-30 15:02:38"},{"client":"CenteneQualChoice","type":"Medical","category":"","pcns":50,"certs":50,"certd":50,"certpct":100.0,"mpl":"2026-07-07","mpc":"2026-07-07","maxcert":"2026-07-07 10:42:22"},{"client":"CenteneRx","type":"Rx","category":"","pcns":85,"certs":85,"certd":85,"certpct":100.0,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-06 09:31:13"},{"client":"Chickering","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-01 07:43:27"},{"client":"Christus","type":"Medical","category":"","pcns":72,"certs":72,"certd":72,"certpct":100.0,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-01 12:26:29"},{"client":"CignaFacets","type":"Medical","category":"","pcns":105,"certs":105,"certd":105,"certpct":100.0,"mpl":"2026-07-05","mpc":"2026-07-05","maxcert":"2026-07-07 08:19:06"},{"client":"CignaPower","type":"Medical","category":"","pcns":105,"certs":105,"certd":105,"certpct":100.0,"mpl":"2026-07-04","mpc":"2026-07-04","maxcert":"2026-07-06 09:45:40"},{"client":"CignaProClaims","type":"Medical","category":"","pcns":104,"certs":104,"certd":104,"certpct":100.0,"mpl":"2026-07-04","mpc":"2026-07-04","maxcert":"2026-07-06 09:41:17"},{"client":"CignaRx","type":"Rx","category":"","pcns":155,"certs":155,"certd":154,"certpct":99.4,"mpl":"2026-07-05","mpc":"2026-06-28","maxcert":"2026-06-30 14:25:54"},{"client":"CTCARE Medicare Facets","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-29","mpc":"2026-05-29","maxcert":"2026-06-18 10:39:26"},{"client":"EDW_ANE","type":"Medical","category":"","pcns":12,"certs":12,"certd":12,"certpct":100.0,"mpl":"2025-04-30","mpc":"2025-04-30","maxcert":"2025-06-20 11:48:59"},{"client":"EDW_ASE","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-12","mpc":"2026-05-12","maxcert":"2026-06-23 15:04:16"},{"client":"EDW_ASEGNC","type":"Medical","category":"","pcns":8,"certs":8,"certd":8,"certpct":100.0,"mpl":"2025-01-09","mpc":"2025-01-09","maxcert":"2025-02-20 09:48:42"},{"client":"EDW_C_FAC","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-18","mpc":"2026-05-18","maxcert":"2026-06-23 15:04:52"},{"client":"EDW_C_NAS","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-15","mpc":"2026-05-15","maxcert":"2026-06-23 15:05:18"},{"client":"EDW_EMPIRE","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-19","mpc":"2026-05-19","maxcert":"2026-06-23 15:05:41"},{"client":"EDW_WGS","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-06-05","mpc":"2026-06-05","maxcert":"2026-06-23 15:06:13"},{"client":"ElevanceMMMRx","type":"Rx","category":"","pcns":935,"certs":935,"certd":0,"certpct":0.0,"mpl":"2026-07-05","mpc":"","maxcert":""},{"client":"ElixirRx","type":"Rx","category":"","pcns":98,"certs":98,"certd":91,"certpct":92.9,"mpl":"2026-06-11","mpc":"2025-10-03","maxcert":"2025-10-15 09:06:28"},{"client":"Emblem Facets","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-06-08","mpc":"2026-06-08","maxcert":"2026-06-18 10:39:26"},{"client":"EmblemRx","type":"Rx","category":"","pcns":104,"certs":104,"certd":104,"certpct":100.0,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-01 10:57:43"},{"client":"EverNorthRx","type":"Rx","category":"","pcns":36,"certs":36,"certd":36,"certpct":100.0,"mpl":"2026-06-19","mpc":"2026-06-19","maxcert":"2026-06-25 14:32:42"},{"client":"ExcellusRx","type":"Rx","category":"","pcns":232,"certs":232,"certd":67,"certpct":28.9,"mpl":"2026-06-22","mpc":"2026-06-22","maxcert":"2026-06-30 12:57:01"},{"client":"GEHA","type":"Medical","category":"","pcns":88,"certs":88,"certd":88,"certpct":100.0,"mpl":"2026-07-02","mpc":"2026-07-02","maxcert":"2026-07-06 10:31:23"},{"client":"GHI Facets","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-06-09","mpc":"2026-06-09","maxcert":"2026-06-18 10:39:26"},{"client":"HAP_Medical","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-25","mpc":"2026-05-25","maxcert":"2026-06-09 07:27:06"},{"client":"HAPRx","type":"Rx","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-24","mpc":"2026-05-24","maxcert":"2026-06-08 14:56:47"},{"client":"HarvardPilgrim","type":"Medical","category":"","pcns":100,"certs":100,"certd":100,"certpct":100.0,"mpl":"2026-06-23","mpc":"2026-06-23","maxcert":"2026-06-24 12:21:22"},{"client":"HealthNetCA","type":"Medical","category":"","pcns":96,"certs":96,"certd":96,"certpct":100.0,"mpl":"2026-05-07","mpc":"2026-05-07","maxcert":"2026-05-11 11:21:27"},{"client":"HealthNewEngland","type":"Medical","category":"","pcns":98,"certs":98,"certd":98,"certpct":100.0,"mpl":"2026-06-29","mpc":"2026-06-29","maxcert":"2026-07-02 14:31:52"},{"client":"HealthSpring_FWA","type":"Medical","category":"","pcns":23,"certs":23,"certd":23,"certpct":100.0,"mpl":"2026-05-31","mpc":"2026-05-31","maxcert":"2026-06-03 10:36:20"},{"client":"HIP_Montefiore","type":"Medical","category":"","pcns":1,"certs":1,"certd":1,"certpct":100.0,"mpl":"2024-07-22","mpc":"2024-07-22","maxcert":"2024-08-06 11:44:59"},{"client":"HMSA","type":"Medical","category":"","pcns":105,"certs":105,"certd":104,"certpct":99.0,"mpl":"2026-07-02","mpc":"2026-06-26","maxcert":"2026-07-01 07:32:54"},{"client":"HMSA_RX","type":"Rx","category":"","pcns":92,"certs":92,"certd":92,"certpct":100.0,"mpl":"2026-06-24","mpc":"2026-06-24","maxcert":"2026-07-01 09:50:26"},{"client":"JohnsHopkins","type":"Medical","category":"","pcns":107,"certs":107,"certd":107,"certpct":100.0,"mpl":"2026-07-03","mpc":"2026-07-03","maxcert":"2026-07-07 08:15:56"},{"client":"Kaiser_AmbM","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-27","mpc":"2026-05-27","maxcert":"2026-06-18 07:40:56"},{"client":"Kaiser_AmbS","type":"Medical","category":"","pcns":29,"certs":29,"certd":29,"certpct":100.0,"mpl":"2026-05-28","mpc":"2026-05-28","maxcert":"2026-06-18 07:41:13"},{"client":"Kaiser_CO","type":"Medical","category":"","pcns":726,"certs":726,"certd":715,"certpct":98.5,"mpl":"2026-06-29","mpc":"2026-06-21","maxcert":"2026-07-02 07:08:20"},{"client":"Kaiser_GA","type":"Medical","category":"","pcns":715,"certs":715,"certd":705,"certpct":98.6,"mpl":"2026-06-29","mpc":"2026-06-21","maxcert":"2026-07-02 07:11:08"},{"client":"Kaiser_HealthConnect","type":"Medical","category":"","pcns":78,"certs":78,"certd":78,"certpct":100.0,"mpl":"2026-01-17","mpc":"2026-01-17","maxcert":"2026-01-29 07:30:31"},{"client":"Kaiser_HI","type":"Medical","category":"","pcns":723,"certs":723,"certd":715,"certpct":98.9,"mpl":"2026-06-29","mpc":"2026-06-21","maxcert":"2026-07-02 07:09:15"},{"client":"Kaiser_MASTapestry","type":"Medical","category":"","pcns":727,"certs":727,"certd":719,"certpct":98.9,"mpl":"2026-07-01","mpc":"2026-06-23","maxcert":"2026-07-02 07:12:05"},{"client":"Kaiser_NCTapestry","type":"Medical","category":"","pcns":548,"certs":548,"certd":547,"certpct":99.8,"mpl":"2025-03-10","mpc":"2025-03-10","maxcert":"2025-04-03 07:14:47"},{"client":"Kaiser_NW","type":"Medical","category":"","pcns":712,"certs":712,"certd":704,"certpct":98.9,"mpl":"2026-06-29","mpc":"2026-06-21","maxcert":"2026-07-02 07:13:07"},{"client":"Kaiser_SCTapestry","type":"Medical","category":"","pcns":260,"certs":260,"certd":259,"certpct":99.6,"mpl":"2025-03-10","mpc":"2025-03-10","maxcert":"2025-04-29 08:10:03"},{"client":"Kaiser_WA","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-06-05","mpc":"2026-06-05","maxcert":"2026-06-25 11:44:08"},{"client":"Kaiser_WARx","type":"Rx","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-06-08","mpc":"2026-06-08","maxcert":"2026-06-11 11:41:50"},{"client":"KaiserAmbCO","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-29","mpc":"2026-05-29","maxcert":"2026-06-18 07:38:56"},{"client":"KaiserAmbGA","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-28","mpc":"2026-05-28","maxcert":"2026-06-18 07:39:15"},{"client":"KaiserAmbHI","type":"Medical","category":"","pcns":39,"certs":39,"certd":39,"certpct":100.0,"mpl":"2026-05-29","mpc":"2026-05-29","maxcert":"2026-06-18 07:39:41"},{"client":"KaiserAmbN","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-28","mpc":"2026-05-28","maxcert":"2026-06-18 07:40:05"},{"client":"KaiserAmbNW","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-29","mpc":"2026-05-29","maxcert":"2026-06-18 07:40:31"},{"client":"KaiserNCPareo","type":"Medical","category":"","pcns":452,"certs":452,"certd":446,"certpct":98.7,"mpl":"2026-06-26","mpc":"2026-06-20","maxcert":"2026-07-02 07:14:13"},{"client":"KaiserPrePayCOB","type":"Medical","category":"","pcns":283,"certs":283,"certd":283,"certpct":100.0,"mpl":"2026-07-07","mpc":"2026-07-07","maxcert":"2026-07-07 09:52:34"},{"client":"KaiserSCPareo","type":"Medical","category":"","pcns":420,"certs":420,"certd":411,"certpct":97.9,"mpl":"2026-05-26","mpc":"2026-05-19","maxcert":"2026-07-02 07:15:08"},{"client":"Medica","type":"Medical","category":"","pcns":101,"certs":101,"certd":101,"certpct":100.0,"mpl":"2026-06-25","mpc":"2026-06-25","maxcert":"2026-07-02 09:47:18"},{"client":"MedicaDean","type":"Medical","category":"","pcns":108,"certs":108,"certd":108,"certpct":100.0,"mpl":"2026-07-03","mpc":"2026-07-03","maxcert":"2026-07-06 12:23:07"},{"client":"MedicaDeanRx","type":"Rx","category":"","pcns":1,"certs":1,"certd":0,"certpct":0.0,"mpl":"2025-06-15","mpc":"","maxcert":""},{"client":"MedicalMutualMHS","type":"Medical","category":"","pcns":23,"certs":23,"certd":23,"certpct":100.0,"mpl":"2026-02-19","mpc":"2026-02-19","maxcert":"2026-03-02 10:49:02"},{"client":"MedicalMutualOH","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-06 11:04:20"},{"client":"MedStar","type":"Medical","category":"","pcns":21,"certs":21,"certd":21,"certpct":100.0,"mpl":"2026-07-02","mpc":"2026-07-02","maxcert":"2026-07-06 14:20:39"},{"client":"MMOHRx","type":"Rx","category":"","pcns":105,"certs":105,"certd":105,"certpct":100.0,"mpl":"2026-06-12","mpc":"2026-06-12","maxcert":"2026-06-30 14:37:55"},{"client":"NCState","type":"Medical","category":"","pcns":28,"certs":28,"certd":24,"certpct":85.7,"mpl":"2026-06-30","mpc":"2026-03-31","maxcert":"2026-04-06 12:04:29"},{"client":"NCStateAetna","type":"Medical","category":"","pcns":426,"certs":426,"certd":424,"certpct":99.5,"mpl":"2026-07-04","mpc":"2026-07-02","maxcert":"2026-07-03 17:34:49"},{"client":"NCStateRx","type":"Rx","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-01 12:19:04"},{"client":"NYSHIP_RX","type":"Rx","category":"","pcns":96,"certs":96,"certd":95,"certpct":99.0,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-06 09:17:04"},{"client":"Oscar","type":"Medical","category":"","pcns":103,"certs":103,"certd":102,"certpct":99.0,"mpl":"2026-06-21","mpc":"2026-06-21","maxcert":"2026-06-23 14:41:29"},{"client":"OscarRx","type":"Rx","category":"","pcns":104,"certs":104,"certd":104,"certpct":100.0,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-03 17:50:40"},{"client":"Premera","type":"Medical","category":"","pcns":96,"certs":96,"certd":96,"certpct":100.0,"mpl":"2026-06-27","mpc":"2026-06-27","maxcert":"2026-07-01 14:55:12"},{"client":"PremeraMedAdvRx","type":"Rx","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-31","mpc":"2026-05-31","maxcert":"2026-06-10 09:00:19"},{"client":"PremeraMedAdvVIS","type":"Medical","category":"","pcns":24,"certs":24,"certd":24,"certpct":100.0,"mpl":"2026-05-28","mpc":"2026-05-28","maxcert":"2026-06-10 08:07:41"},{"client":"SamaritanHealth","type":"Medical","category":"","pcns":84,"certs":84,"certd":84,"certpct":100.0,"mpl":"2026-05-28","mpc":"2026-05-28","maxcert":"2026-06-10 07:36:21"},{"client":"Tufts_Audit_CIT","type":"Medical","category":"","pcns":103,"certs":103,"certd":103,"certpct":100.0,"mpl":"2026-06-29","mpc":"2026-06-29","maxcert":"2026-06-29 12:00:43"},{"client":"Tufts_PublicPlan","type":"Medical","category":"","pcns":23,"certs":23,"certd":17,"certpct":73.9,"mpl":"2026-04-28","mpc":"2025-10-28","maxcert":"2025-11-12 07:26:08"},{"client":"TuftsMedPref","type":"Medical","category":"","pcns":96,"certs":96,"certd":96,"certpct":100.0,"mpl":"2026-06-27","mpc":"2026-06-27","maxcert":"2026-06-29 10:40:30"},{"client":"TuftsRx","type":"Rx","category":"","pcns":94,"certs":94,"certd":74,"certpct":78.7,"mpl":"2026-06-27","mpc":"2026-02-07","maxcert":"2026-02-10 11:22:26"},{"client":"UnitedCSP","type":"Medical","category":"","pcns":4,"certs":4,"certd":4,"certpct":100.0,"mpl":"2023-12-31","mpc":"2023-12-31","maxcert":"2024-07-17 14:07:09"},{"client":"UnitedRx","type":"Rx","category":"","pcns":42,"certs":42,"certd":0,"certpct":0.0,"mpl":"2026-06-11","mpc":"","maxcert":""},{"client":"UPMC","type":"Medical","category":"","pcns":82,"certs":82,"certd":82,"certpct":100.0,"mpl":"2026-06-26","mpc":"2026-06-26","maxcert":"2026-07-02 10:01:56"},{"client":"WEBTPA","type":"Medical","category":"","pcns":115,"certs":115,"certd":115,"certpct":100.0,"mpl":"2026-07-02","mpc":"2026-07-02","maxcert":"2026-07-03 17:58:57"},{"client":"WellCare","type":"Medical","category":"","pcns":104,"certs":104,"certd":104,"certpct":100.0,"mpl":"2026-06-27","mpc":"2026-06-27","maxcert":"2026-06-30 09:29:37"},{"client":"WellCareRx","type":"Rx","category":"","pcns":135,"certs":135,"certd":134,"certpct":99.3,"mpl":"2026-06-30","mpc":"2026-06-30","maxcert":"2026-07-01 12:14:35"},{"client":"WellMark","type":"Medical","category":"","pcns":105,"certs":105,"certd":105,"certpct":100.0,"mpl":"2026-07-10","mpc":"2026-07-10","maxcert":"2026-07-06 11:32:43"},{"client":"WellpointEdwardRX","type":"Rx","category":"","pcns":201,"certs":201,"certd":189,"certpct":94.0,"mpl":"8888-12-31","mpc":"8888-12-31","maxcert":"2026-07-01 12:30:20"}]</script>
+<script>
+(function() {
+  const ROWS = JSON.parse(document.getElementById('data').textContent);
+  const TODAY = new Date('2026-07-07T00:00:00');
+  const PAGE_SIZE = 100;
+
+  // Precompute days-since-cert per row.
+  for (const r of ROWS) {
+    if (r.maxcert) {
+      const d = new Date(r.maxcert.slice(0, 10) + 'T00:00:00');
+      r.days = Math.round((TODAY - d) / 86400000);
+    } else {
+      r.days = null;
+    }
+  }
+
+  let state = {
+    client: '', type: '', certfrom: '', certto: '', stale: false,
+    sortKey: 'days', sortDir: 'desc', page: 0,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const fmtInt = (v) => (v == null ? '' : v.toLocaleString('en-US'));
+
+  function applyFilters() {
+    const cQ = state.client.trim().toLowerCase();
+    return ROWS.filter(r => {
+      if (cQ && r.client.toLowerCase().indexOf(cQ) === -1) return false;
+      if (state.type && r.type !== state.type) return false;
+      const mc = r.maxcert ? r.maxcert.slice(0, 10) : '';
+      if (state.certfrom && (!mc || mc < state.certfrom)) return false;
+      if (state.certto && (!mc || mc > state.certto)) return false;
+      if (state.stale && !(r.days != null && r.days > 7)) return false;
+      return true;
+    });
+  }
+
+  function sortRows(rows) {
+    const k = state.sortKey;
+    const dir = state.sortDir === 'asc' ? 1 : -1;
+    const numeric = (k === 'pcns' || k === 'certs' || k === 'certd' || k === 'certpct' || k === 'days');
+    return rows.slice().sort((a, b) => {
+      let av = a[k], bv = b[k];
+      if (numeric) { av = av == null ? -Infinity : Number(av); bv = bv == null ? -Infinity : Number(bv); }
+      else { av = av == null ? '' : av; bv = bv == null ? '' : bv; }
+      if (av < bv) return -1 * dir;
+      if (av > bv) return  1 * dir;
+      return 0;
+    });
+  }
+
+  function daysCell(days) {
+    if (days == null) return '<td class="num">&mdash;</td>';
+    const cls = days > 14 ? 'days-bad' : days > 7 ? 'days-warn' : 'days-ok';
+    return '<td class="num ' + cls + '">' + days.toLocaleString() + '</td>';
+  }
+
+  function render() {
+    const filtered = applyFilters();
+    const sorted = sortRows(filtered);
+
+    let pcns = 0, certs = 0, certd = 0, med = 0, rx = 0, stale = 0;
+    for (const r of filtered) {
+      pcns += r.pcns; certs += r.certs; certd += r.certd;
+      if (r.type === 'Medical' || r.type === 'Both') med++;
+      if (r.type === 'Rx' || r.type === 'Both') rx++;
+      if (r.days != null && r.days > 7) stale++;
+    }
+    $('kpi-clients').textContent = filtered.length.toLocaleString();
+    $('kpi-med').textContent = med.toLocaleString();
+    $('kpi-rx').textContent = rx.toLocaleString();
+    $('kpi-pcns').textContent = pcns.toLocaleString();
+    $('kpi-certs').textContent = certs.toLocaleString();
+    $('kpi-pct').textContent = certs ? (100 * certd / certs).toFixed(1) + '%' : '—';
+    $('kpi-stale').textContent = stale.toLocaleString();
+
+    const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+    if (state.page >= pageCount) state.page = pageCount - 1;
+    if (state.page < 0) state.page = 0;
+    const start = state.page * PAGE_SIZE;
+    const slice = sorted.slice(start, start + PAGE_SIZE);
+
+    const body = $('grid-body');
+    body.innerHTML = '';
+    if (slice.length === 0) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="10" class="empty">No clients match the current filters.</td>';
+      body.appendChild(tr);
+    } else {
+      const esc = (s) => (s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+      for (const r of slice) {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + esc(r.client) + '</td>' +
+          '<td><span class="pill ' + esc(r.type) + '">' + esc(r.type) + '</span></td>' +
+          '<td class="num">' + fmtInt(r.pcns) + '</td>' +
+          '<td class="num">' + fmtInt(r.certs) + '</td>' +
+          '<td class="num">' + fmtInt(r.certd) + '</td>' +
+          '<td class="num">' + (r.certpct != null ? r.certpct.toFixed(1) + '%' : '') + '</td>' +
+          '<td>' + esc(r.mpl) + '</td>' +
+          '<td>' + esc(r.mpc) + '</td>' +
+          '<td>' + esc(r.maxcert ? r.maxcert.slice(0, 10) : '') + '</td>' +
+          daysCell(r.days);
+        body.appendChild(tr);
+      }
+    }
+
+    for (const th of document.querySelectorAll('th[data-key]')) {
+      th.classList.remove('sort-asc', 'sort-desc');
+      const arrow = th.querySelector('.arrow');
+      if (th.dataset.key === state.sortKey) {
+        th.classList.add('sort-' + state.sortDir);
+        arrow.textContent = state.sortDir === 'asc' ? '▲' : '▼';
+      } else {
+        arrow.textContent = '↕';
+      }
+    }
+
+    $('pager-info').textContent = sorted.length === 0
+      ? '0 clients'
+      : (start + 1).toLocaleString() + '–' + (start + slice.length).toLocaleString() + ' of ' + sorted.length.toLocaleString();
+  }
+
+  function bindFilters() {
+    const map = [['f-client', 'client'], ['f-type', 'type'], ['f-certfrom', 'certfrom'], ['f-certto', 'certto']];
+    map.forEach(([id, key]) => {
+      $(id).addEventListener('input', () => { state[key] = $(id).value; state.page = 0; render(); });
+    });
+    $('f-stale').addEventListener('change', () => { state.stale = $('f-stale').checked; state.page = 0; render(); });
+    $('btn-reset').addEventListener('click', () => {
+      ['f-client', 'f-type', 'f-certfrom', 'f-certto'].forEach(id => $(id).value = '');
+      $('f-stale').checked = false;
+      Object.assign(state, { client: '', type: '', certfrom: '', certto: '', stale: false, page: 0 });
+      render();
+    });
+    document.querySelectorAll('th[data-key]').forEach(th => {
+      th.addEventListener('click', () => {
+        const k = th.dataset.key;
+        if (state.sortKey === k) {
+          state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sortKey = k;
+          state.sortDir = (k === 'client' || k === 'type') ? 'asc' : 'desc';
+        }
+        render();
+      });
+    });
+    $('pg-prev').addEventListener('click', () => { state.page--; render(); });
+    $('pg-next').addEventListener('click', () => { state.page++; render(); });
+  }
+
+  bindFilters();
+  render();
+})();
+</script>
+</body>
+</html>
