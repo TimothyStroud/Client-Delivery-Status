@@ -558,14 +558,19 @@ MANUAL_OVERRIDES = {
     # the auto backward-window lookup can't reach it (CenteneRx has no forward
     # CERT_DIRECTION). Pin the 7/6 cert date on the 7/3 cell. Per user 2026-07-06.
     ("CenteneRx",    date(2026, 7, 3)):  date(2026, 7, 6),
-    # 2026-07-07: Aetna RCE 310 ETL Load (JobId 2257) Failed at 00:59 and the
-    # queue card was marked "Resolved" at 09:33 — which the auto-logic counts as
-    # a successful recovery (✓). Per user the actual load failed (bad ETL/Chimera
-    # build), so pin "Load Failure" on today's daily cells for both the RCE feed
-    # and NCStateAetna (which loads through the same Aetna RCE ETL). Remove once
-    # the next clean load completes. Per user 2026-07-07.
-    ("AetnaRCE",     date(2026, 7, 7)):  "Load Failure",
-    ("NCStateAetna", date(2026, 7, 7)):  "Load Failure",
+    # 2026-07-07: Aetna RCE 310 ETL Load (JobId 2257) Failed at 00:59; pinned
+    # "Load Failure" on the 7/7 daily cells for AetnaRCE + NCStateAetna (same
+    # Aetna RCE ETL). 2026-07-08: per user the 7/7 load has since completed and
+    # Snapped, so the overrides were removed — the 7/7 cells now resolve to ✓
+    # via auto snap detection.
+    # 2026-07-08: HarvardPilgrim (weekly Wed) — the current load processed the
+    # 6/30 data file, which is the 7/1 delivery running late (NOT a 7/8 one).
+    # Per user: "the HarvardPilgrim load was for file 6/30, which will be the 7/1
+    # load." Pin "L" on 7/1 (loaded, awaiting cert) to clear the pink "!", and
+    # blank the phantom current-week L on 7/8 (one weekly delivery, not two).
+    # Replace 7/1 with the cert date once it certifies.
+    ("HarvardPilgrim", date(2026, 7, 1)): "L",
+    ("HarvardPilgrim", date(2026, 7, 8)): "",
 }
 
 # --- Sticky certifications --------------------------------------------------
