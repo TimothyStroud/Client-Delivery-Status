@@ -169,51 +169,95 @@ def weekly_email(job, run):
     return subj, body, ok
 
 
-def optum_raw_status():
-    """Return ({label: loaded_bool}, tag) for the LATEST cycle's RAW1/2/3,
-    read from OptumPBMRx.etl.Tape on TRGETL3 (successfully-loaded files only).
+# ProcessStatus -> human label (OptumPBMRx.etl.Tape). 50 = fully loaded.
+OPTUM_PS_LABEL = {50: 'Loaded', 42: 'Loading', 32: 'Staging'}
 
-    The cycle tag (MMDDYYYY) is derived from the RAW filenames themselves, so it
-    follows the actual data cycle rather than a re-running load job's StartDate
-    (which drifts to later dates as RAW files trickle in over several days)."""
-    query = ("SET NOCOUNT ON; SELECT FileName FROM etl.Tape "
-             "WHERE FileName LIKE '%RAW[123][_]%' AND FileName NOT LIKE '%RAWLINGS%' "
-             "AND ProcessStatus=50 AND FileLoadDate IS NOT NULL;")
+
+def _ps_label(ps):
+    return OPTUM_PS_LABEL.get(ps, f'ProcessStatus {ps}')
+
+
+def _blank_raw():
+    return {'loaded': False, 'status': 'MISSING', 'started': None, 'completed': None}
+
+
+def optum_raw_status():
+    """Return ({label: detail}, tag) for the LATEST cycle's RAW1/2/3, read from
+    OptumPBMRx.etl.Tape on TRGETL3. `detail` = {'loaded': bool, 'status': str,
+    'started': dt|None, 'completed': dt|None} where started=FileCreateDate,
+    completed=FileLoadDate, loaded = ProcessStatus 50 with a non-null FileLoadDate.
+
+    Rows at ANY ProcessStatus are read (not just loaded), so a RAW still in flight
+    shows its current status/timestamps. The cycle tag (MMDDYYYY) is derived from
+    the RAW filenames themselves, so it follows the actual data cycle rather than a
+    re-running load job's StartDate (which drifts as RAW files trickle in)."""
+    query = ("SET NOCOUNT ON; SELECT ProcessStatus, "
+             "CONVERT(varchar(19), FileCreateDate, 120), "
+             "CONVERT(varchar(19), FileLoadDate, 120), FileName FROM etl.Tape "
+             "WHERE FileName LIKE '%RAW[123][_]%' AND FileName NOT LIKE '%RAWLINGS%';")
     out = subprocess.run(
-        ['sqlcmd', '-S', OPTUM['sql_server'], '-d', OPTUM['sql_db'], '-E', '-W', '-h', '-1', '-Q', query],
+        ['sqlcmd', '-S', OPTUM['sql_server'], '-d', OPTUM['sql_db'], '-E', '-W',
+         '-h', '-1', '-s', '\t', '-Q', query],
         capture_output=True, text=True)
     rx = re.compile(r'(RAW[123])_(\d{8})', re.I)
-    by_cycle = {}   # MMDDYYYY tag -> set of loaded labels
+    by_cycle = {}   # MMDDYYYY tag -> {label: (ps, started, completed)}
     for line in out.stdout.splitlines():
-        m = rx.search(line)
-        if m:
-            by_cycle.setdefault(m.group(2), set()).add(m.group(1).upper())
+        parts = line.split('\t')
+        if len(parts) < 4:
+            continue
+        ps_s, cre, ld, fname = (p.strip() for p in parts[:4])
+        m = rx.search(fname)
+        if not m:
+            continue
+        try:
+            ps = int(ps_s)
+        except ValueError:
+            continue
+        started = parse_dt(cre.replace(' ', 'T')) if cre and cre != 'NULL' else None
+        completed = parse_dt(ld.replace(' ', 'T')) if ld and ld != 'NULL' else None
+        by_cycle.setdefault(m.group(2), {})[m.group(1).upper()] = (ps, started, completed)
     if not by_cycle:
-        return {lbl: False for lbl in OPTUM['raw_labels']}, '?'
+        return {lbl: _blank_raw() for lbl in OPTUM['raw_labels']}, '?'
 
     def _cd(t):
         return date(int(t[4:8]), int(t[0:2]), int(t[2:4]))
     tag = max(by_cycle, key=_cd)          # most recent data cycle present
-    present = by_cycle[tag]
-    return {lbl: (lbl in present) for lbl in OPTUM['raw_labels']}, tag
+    rows = by_cycle[tag]
+    detail = {}
+    for lbl in OPTUM['raw_labels']:
+        if lbl in rows:
+            ps, started, completed = rows[lbl]
+            detail[lbl] = {'loaded': (ps == 50 and completed is not None),
+                           'status': _ps_label(ps), 'started': started, 'completed': completed}
+        else:
+            detail[lbl] = _blank_raw()
+    return detail, tag
 
 
 def optum_email(load_run, snap_run, raw_found, tag=''):
     ls, le = parse_dt(load_run.get('StartDate')), parse_dt(load_run.get('EndDate'))
     ss, se = parse_dt(snap_run.get('StartDate')), parse_dt(snap_run.get('EndDate'))
     lstatus = load_run.get('Status', ''); sstatus = snap_run.get('Status', '')
-    all_raw = all(raw_found.values())
+    all_raw = all(d['loaded'] for d in raw_found.values())
     ok = _ok_status(lstatus) and _ok_status(sstatus) and all_raw
     color = GREEN if ok else RED
     verdict = 'SUCCESS - Within SLA' if ok else 'FAILED SLA'
 
+    # SLA window: RAW1/2/3 due within OPTUM_RAW_SLA_DAYS of the cycle date (first Friday).
+    try:
+        cyc = datetime(int(tag[4:8]), int(tag[0:2]), int(tag[2:4]))
+        sla_range = (f"{cyc:%m/%d/%Y} &ndash; {cyc + timedelta(days=OPTUM_RAW_SLA_DAYS):%m/%d/%Y}")
+    except (ValueError, IndexError):
+        sla_range = 'n/a'
+
     raw_rows = ""
     for lbl in OPTUM['raw_labels']:
-        present = raw_found[lbl]
-        c = GREEN if present else RED
+        d = raw_found[lbl]
+        c = GREEN if d['loaded'] else RED
         raw_rows += (f'<tr><td style="padding:5px 10px;border:1px solid #ddd">{lbl}</td>'
-                     f'<td style="padding:5px 10px;border:1px solid #ddd;color:{c};font-weight:bold">'
-                     f'{"Present" if present else "MISSING"}</td></tr>')
+                     f'<td style="padding:5px 10px;border:1px solid #ddd;color:{c};font-weight:bold">{d["status"]}</td>'
+                     f'<td style="padding:5px 10px;border:1px solid #ddd">{fmt(d["started"])}</td>'
+                     f'<td style="padding:5px 10px;border:1px solid #ddd">{fmt(d["completed"])}</td></tr>')
 
     def jrow(label, status, s, e):
         c = GREEN if _ok_status(status) else RED
@@ -228,9 +272,11 @@ Monthly client (first Friday) &middot; Success = RAW1/2/3 loaded + Snap complete
 
 <p style="color:{color};font-weight:bold;font-size:16px">{verdict}</p>
 
+<p style="margin:0 0 12px"><b>SLA window (cycle {tag}):</b> {sla_range} &middot; RAW1/2/3 due within {OPTUM_RAW_SLA_DAYS} days of the cycle date (first Friday).</p>
+
 <p style="font-weight:bold;margin-bottom:4px">RAW files (cycle {tag}, via OptumPBMRx.etl.Tape)</p>
 <table style="border-collapse:collapse;font-size:13px">
-<tr style="background:#f0f0f0"><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Raw</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Status</th></tr>
+<tr style="background:#f0f0f0"><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Raw</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Status</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Started</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Completed</th></tr>
 {raw_rows}
 </table>
 
@@ -289,7 +335,8 @@ def main():
             cycle = datetime(int(tag[4:8]), int(tag[0:2]), int(tag[2:4]))
         except (ValueError, IndexError):
             cycle = parse_dt(lrun.get('StartDate'))
-        print(f"[optum_pbm] LoadQ={lqid} LoadEnd={lend} SnapEnd={send_end} tag={tag} RAW={raw_found}")
+        raw_loaded = {l: d['loaded'] for l, d in raw_found.items()}
+        print(f"[optum_pbm] LoadQ={lqid} LoadEnd={lend} SnapEnd={send_end} tag={tag} RAW={raw_loaded}")
         complete = bool(lend and send_end)
         pk = period_key('monthly')  # Optum is monthly: report once/month, restart 1st weekday
         cell = state.get(OPTUM['key'], {})
@@ -302,9 +349,9 @@ def main():
                 print("   load/snap not both complete -- skip")
             elif not force and cell.get('last_qid') == lqid:
                 print("   this completion already reported -- skip")
-            elif (not all(raw_found.values()) and not force and cycle
+            elif (not all(raw_loaded.values()) and not force and cycle
                   and datetime.now() < cycle + timedelta(days=OPTUM_RAW_SLA_DAYS)):
-                _missing = [l for l, v in raw_found.items() if not v]
+                _missing = [l for l, v in raw_loaded.items() if not v]
                 print(f"   RAW not all loaded yet ({', '.join(_missing)}); within "
                       f"{OPTUM_RAW_SLA_DAYS}-day window of cycle {tag} -- waiting, no report")
             else:
