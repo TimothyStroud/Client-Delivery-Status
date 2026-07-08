@@ -2815,8 +2815,12 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # in pink." The Kaiser-feed branch below previously short-circuited
         # before this check, hiding the Load Failure shade for Kaiser feeds.
         # "Snap" added for snap-disabled clients (e.g. Kaiser_AmbM).
-        if marker in ("Load Failure", "Inactive", "Failed", "Deployment", "Snap", "Empty"):
+        if marker in ("Load Failure", "Inactive", "Failed", "Deployment", "Snap"):
             return True
+        # "Empty" = a delivered-but-empty file (happens occasionally). Per user
+        # 2026-07-08 it is NOT a problem state -> show the label, never pink.
+        if marker == "Empty":
+            return False
         # Implementation phase — never pink (new client; lack of jobs/data
         # would otherwise trip has_inactive_jobs).
         if marker == "Implementation":
