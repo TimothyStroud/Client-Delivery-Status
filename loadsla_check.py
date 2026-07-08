@@ -236,53 +236,97 @@ def optum_raw_status():
     return detail, tag
 
 
+def optum_snap_runs(days=15):
+    """Recent runs of the Optum snap job (JobId 1950) from the RAMP Queue SQL
+    table (TRGUTIL10.RAMP.ramp.Queue) -- full history, since the REST endpoint
+    rotates old runs out within hours. Returns [{'status','start','end'}] sorted
+    by StartDate. Each RAW load is followed by its own snap, so we attribute a
+    per-RAW snap = the first run that STARTS at/after that RAW's load completion."""
+    q = ("SET NOCOUNT ON; SELECT q.Status, "
+         "CONVERT(varchar(19),q.StartDate,120), CONVERT(varchar(19),q.EndDate,120) "
+         "FROM [RAMP].[ramp].[Queue] q "
+         f"WHERE q.JobId={OPTUM['snap_jobid']} "
+         f"AND q.CreateDate >= DATEADD(day,-{days},GETDATE()) ORDER BY q.StartDate;")
+    out = subprocess.run(
+        ['sqlcmd', '-S', 'TRGUTIL10', '-d', 'RAMP', '-E', '-W', '-h', '-1', '-s', '\t', '-Q', q],
+        capture_output=True, text=True)
+    runs = []
+    for line in out.stdout.splitlines():
+        parts = line.split('\t')
+        if len(parts) < 3:
+            continue
+        status, st, en = (p.strip() for p in parts[:3])
+        if not st or st == 'NULL':
+            continue
+        runs.append({'status': status,
+                     'start': parse_dt(st.replace(' ', 'T')),
+                     'end': parse_dt(en.replace(' ', 'T')) if en and en != 'NULL' else None})
+    runs.sort(key=lambda r: r['start'])
+    return runs
+
+
 def optum_email(load_run, snap_run, raw_found, tag=''):
-    ls, le = parse_dt(load_run.get('StartDate')), parse_dt(load_run.get('EndDate'))
-    ss, se = parse_dt(snap_run.get('StartDate')), parse_dt(snap_run.get('EndDate'))
-    lstatus = load_run.get('Status', ''); sstatus = snap_run.get('Status', '')
-    all_raw = all(d['loaded'] for d in raw_found.values())
-    ok = _ok_status(lstatus) and _ok_status(sstatus) and all_raw
-    color = GREEN if ok else RED
-    verdict = 'SUCCESS - Within SLA' if ok else 'FAILED SLA'
+    le = parse_dt(load_run.get('EndDate'))
 
     # SLA window: RAW1/2/3 due within OPTUM_RAW_SLA_DAYS of the cycle date (first Friday).
     try:
         cyc = datetime(int(tag[4:8]), int(tag[0:2]), int(tag[2:4]))
-        sla_range = (f"{cyc:%m/%d/%Y} &ndash; {cyc + timedelta(days=OPTUM_RAW_SLA_DAYS):%m/%d/%Y}")
+        sla_deadline = cyc + timedelta(days=OPTUM_RAW_SLA_DAYS)
+        sla_range = f"{cyc:%m/%d/%Y} &ndash; {sla_deadline:%m/%d/%Y}"
     except (ValueError, IndexError):
-        sla_range = 'n/a'
+        cyc, sla_deadline, sla_range = None, None, 'n/a'
 
-    # One merged row per RAW file: Job | RAW File | Load Start | Load Completion | Snap Date | Status.
-    # Snap Date is the cycle's snap completion (colored by snap health); Status is the RAW load status.
-    snap_col = GREEN if _ok_status(sstatus) else RED
+    # Each RAW load is followed by its own snap -> attribute per-RAW snap = the
+    # first snap run starting at/after that RAW's load completion.
+    snap_runs = optum_snap_runs()
+
+    def snap_for(completed):
+        if not completed:
+            return None
+        for r in snap_runs:
+            if r['start'] and r['start'] >= completed:
+                return r
+        return None
+
+    # One merged row per RAW file: Job | RAW File | Load Start | Load Completion | Snap Date | SLA Status.
     td = 'padding:5px 10px;border:1px solid #ddd'
     merged_rows = ""
+    row_oks = []
     for lbl in OPTUM['raw_labels']:
         d = raw_found[lbl]
-        c = GREEN if d['loaded'] else RED
+        snap = snap_for(d['completed'])
+        snap_end = snap['end'] if snap else None
+        snap_ok = _ok_status(snap['status']) if snap else False
+        within = bool(d['completed'] and sla_deadline and d['completed'] <= sla_deadline)
+        row_ok = d['loaded'] and snap_ok and within
+        row_oks.append(row_ok)
+        sc = GREEN if row_ok else RED
         merged_rows += (
             f'<tr><td style="{td}">{OPTUM["load_name"]}</td>'
             f'<td style="{td}">{d["file"] or lbl}</td>'
             f'<td style="{td}">{fmt(d["started"])}</td>'
             f'<td style="{td}">{fmt(d["completed"])}</td>'
-            f'<td style="{td};color:{snap_col}">{fmt(se)}</td>'
-            f'<td style="{td};color:{c};font-weight:bold">{d["status"]}</td></tr>')
+            f'<td style="{td}">{fmt(snap_end)}</td>'
+            f'<td style="{td};color:{sc};font-weight:bold">{"Success" if row_ok else "Failed SLA"}</td></tr>')
+
+    ok = bool(row_oks) and all(row_oks)
+    color = GREEN if ok else RED
+    verdict = 'SUCCESS - Within SLA' if ok else 'FAILED SLA'
 
     th = 'padding:5px 10px;border:1px solid #ddd;text-align:left'
     body = f"""<html><body style="font-family:Calibri,Arial,sans-serif;font-size:14px;color:#222">
 <p><b>SLA Update &ndash; {OPTUM['load_name']}</b><br>
-Monthly client (first Friday) &middot; Success = RAW1/2/3 loaded + Snap complete &middot; Source: RAMP Dashboard</p>
+Monthly client (first Friday) &middot; Success = each RAW loaded + snapped within SLA &middot; Source: RAMP Dashboard</p>
 
 <p style="color:{color};font-weight:bold;font-size:16px">{verdict}</p>
 
 <p style="margin:0 0 12px"><b>SLA window (cycle {tag}):</b> {sla_range} &middot; RAW1/2/3 due within {OPTUM_RAW_SLA_DAYS} days of the cycle date (first Friday).</p>
 
 <table style="border-collapse:collapse;font-size:13px">
-<tr style="background:#f0f0f0"><th style="{th}">Job</th><th style="{th}">RAW File</th><th style="{th}">Load Start</th><th style="{th}">Load Completion</th><th style="{th}">Snap Date</th><th style="{th}">Status</th></tr>
+<tr style="background:#f0f0f0"><th style="{th}">Job</th><th style="{th}">RAW File</th><th style="{th}">Load Start</th><th style="{th}">Load Completion</th><th style="{th}">Snap Date</th><th style="{th}">SLA Status</th></tr>
 {merged_rows}
 </table>
-<p style="margin:8px 0 0"><b>Snap:</b> {OPTUM['snap_name']} &middot; status <span style="color:{snap_col};font-weight:bold">{sstatus or '&mdash;'}</span> &middot; completed {fmt(se)}</p>
-<p style="color:#999;font-size:11px">Automated load-completion SLA update generated from RAMP. RAW load dates via OptumPBMRx.etl.Tape (Started = FileCreateDate, Load Completion = FileLoadDate).</p>
+<p style="color:#999;font-size:11px">Automated load-completion SLA update generated from RAMP. RAW load dates via OptumPBMRx.etl.Tape (Load Start = FileCreateDate, Load Completion = FileLoadDate); Snap Date = the {OPTUM['snap_name']} run following each load.</p>
 </body></html>"""
     subj = f"SLA Update - {OPTUM['load_name']} ({le.strftime('%B %Y') if le else ''}) - {'SUCCESS' if ok else 'FAILED SLA'}"
     return subj, body, ok
