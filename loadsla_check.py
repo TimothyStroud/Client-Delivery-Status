@@ -178,7 +178,7 @@ def _ps_label(ps):
 
 
 def _blank_raw():
-    return {'loaded': False, 'status': 'MISSING', 'started': None, 'completed': None}
+    return {'loaded': False, 'status': 'MISSING', 'started': None, 'completed': None, 'file': None}
 
 
 def optum_raw_status():
@@ -215,7 +215,8 @@ def optum_raw_status():
             continue
         started = parse_dt(cre.replace(' ', 'T')) if cre and cre != 'NULL' else None
         completed = parse_dt(ld.replace(' ', 'T')) if ld and ld != 'NULL' else None
-        by_cycle.setdefault(m.group(2), {})[m.group(1).upper()] = (ps, started, completed)
+        base = fname.replace('/', '\\').split('\\')[-1]
+        by_cycle.setdefault(m.group(2), {})[m.group(1).upper()] = (ps, started, completed, base)
     if not by_cycle:
         return {lbl: _blank_raw() for lbl in OPTUM['raw_labels']}, '?'
 
@@ -226,9 +227,10 @@ def optum_raw_status():
     detail = {}
     for lbl in OPTUM['raw_labels']:
         if lbl in rows:
-            ps, started, completed = rows[lbl]
+            ps, started, completed, base = rows[lbl]
             detail[lbl] = {'loaded': (ps == 50 and completed is not None),
-                           'status': _ps_label(ps), 'started': started, 'completed': completed}
+                           'status': _ps_label(ps), 'started': started,
+                           'completed': completed, 'file': base}
         else:
             detail[lbl] = _blank_raw()
     return detail, tag
@@ -250,22 +252,23 @@ def optum_email(load_run, snap_run, raw_found, tag=''):
     except (ValueError, IndexError):
         sla_range = 'n/a'
 
-    raw_rows = ""
+    # One merged row per RAW file: Job | RAW File | Load Start | Load Completion | Snap Date | Status.
+    # Snap Date is the cycle's snap completion (colored by snap health); Status is the RAW load status.
+    snap_col = GREEN if _ok_status(sstatus) else RED
+    td = 'padding:5px 10px;border:1px solid #ddd'
+    merged_rows = ""
     for lbl in OPTUM['raw_labels']:
         d = raw_found[lbl]
         c = GREEN if d['loaded'] else RED
-        raw_rows += (f'<tr><td style="padding:5px 10px;border:1px solid #ddd">{lbl}</td>'
-                     f'<td style="padding:5px 10px;border:1px solid #ddd;color:{c};font-weight:bold">{d["status"]}</td>'
-                     f'<td style="padding:5px 10px;border:1px solid #ddd">{fmt(d["started"])}</td>'
-                     f'<td style="padding:5px 10px;border:1px solid #ddd">{fmt(d["completed"])}</td></tr>')
+        merged_rows += (
+            f'<tr><td style="{td}">{OPTUM["load_name"]}</td>'
+            f'<td style="{td}">{d["file"] or lbl}</td>'
+            f'<td style="{td}">{fmt(d["started"])}</td>'
+            f'<td style="{td}">{fmt(d["completed"])}</td>'
+            f'<td style="{td};color:{snap_col}">{fmt(se)}</td>'
+            f'<td style="{td};color:{c};font-weight:bold">{d["status"]}</td></tr>')
 
-    def jrow(label, status, s, e):
-        c = GREEN if _ok_status(status) else RED
-        return (f'<tr><td style="padding:5px 10px;border:1px solid #ddd">{label}</td>'
-                f'<td style="padding:5px 10px;border:1px solid #ddd;color:{c};font-weight:bold">{status}</td>'
-                f'<td style="padding:5px 10px;border:1px solid #ddd">{fmt(s)}</td>'
-                f'<td style="padding:5px 10px;border:1px solid #ddd">{fmt(e)}</td></tr>')
-
+    th = 'padding:5px 10px;border:1px solid #ddd;text-align:left'
     body = f"""<html><body style="font-family:Calibri,Arial,sans-serif;font-size:14px;color:#222">
 <p><b>SLA Update &ndash; {OPTUM['load_name']}</b><br>
 Monthly client (first Friday) &middot; Success = RAW1/2/3 loaded + Snap complete &middot; Source: RAMP Dashboard</p>
@@ -274,19 +277,12 @@ Monthly client (first Friday) &middot; Success = RAW1/2/3 loaded + Snap complete
 
 <p style="margin:0 0 12px"><b>SLA window (cycle {tag}):</b> {sla_range} &middot; RAW1/2/3 due within {OPTUM_RAW_SLA_DAYS} days of the cycle date (first Friday).</p>
 
-<p style="font-weight:bold;margin-bottom:4px">RAW files (cycle {tag}, via OptumPBMRx.etl.Tape)</p>
 <table style="border-collapse:collapse;font-size:13px">
-<tr style="background:#f0f0f0"><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Raw</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Status</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Started</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Completed</th></tr>
-{raw_rows}
+<tr style="background:#f0f0f0"><th style="{th}">Job</th><th style="{th}">RAW File</th><th style="{th}">Load Start</th><th style="{th}">Load Completion</th><th style="{th}">Snap Date</th><th style="{th}">Status</th></tr>
+{merged_rows}
 </table>
-
-<p style="font-weight:bold;margin:12px 0 4px">Load &amp; Snap</p>
-<table style="border-collapse:collapse;font-size:13px">
-<tr style="background:#f0f0f0"><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Job</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Status</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Started</th><th style="padding:5px 10px;border:1px solid #ddd;text-align:left">Completed</th></tr>
-{jrow(OPTUM['load_name'], lstatus, ls, le)}
-{jrow(OPTUM['snap_name'], sstatus, ss, se)}
-</table>
-<p style="color:#999;font-size:11px">Automated load-completion SLA update generated from RAMP.</p>
+<p style="margin:8px 0 0"><b>Snap:</b> {OPTUM['snap_name']} &middot; status <span style="color:{snap_col};font-weight:bold">{sstatus or '&mdash;'}</span> &middot; completed {fmt(se)}</p>
+<p style="color:#999;font-size:11px">Automated load-completion SLA update generated from RAMP. RAW load dates via OptumPBMRx.etl.Tape (Started = FileCreateDate, Load Completion = FileLoadDate).</p>
 </body></html>"""
     subj = f"SLA Update - {OPTUM['load_name']} ({le.strftime('%B %Y') if le else ''}) - {'SUCCESS' if ok else 'FAILED SLA'}"
     return subj, body, ok
