@@ -79,6 +79,16 @@ OPTUM_RAW_SLA_DAYS = 5
 GREEN = '#1a7f37'
 RED   = '#c00000'
 
+# Statuses that count as a successful completion. Mirrors the Client Delivery
+# Status report's acceptance: RAMP marks a run 'Resolved' (or a 'Success/*'
+# variant) when it hit an issue that was manually fixed -- still a delivery.
+SUCCESS_STATES = {'Successful', 'Success', 'Success/ManualFix',
+                  'Success/NoWork', 'Resolved'}
+
+
+def _ok_status(s):
+    return (s or '').strip() in SUCCESS_STATES
+
 
 def load_jobruns():
     """Return {jobid: LatestJobRun dict} from RAMP Job/List."""
@@ -129,12 +139,12 @@ def weekly_email(job, run):
     status = run.get('Status', '')
     sla = timedelta(days=job['sla_days'])
     within = (end - start) <= sla if (start and end) else False
-    ok = (status == 'Successful') and within
+    ok = _ok_status(status) and within
     color = GREEN if ok else RED
     verdict = 'SUCCESS - Within SLA' if ok else 'FAILED SLA'
     reason = ''
     if not ok:
-        if status != 'Successful':
+        if not _ok_status(status):
             reason = f' (load status: {status})'
         elif not within:
             reason = f' (exceeded {job["sla_days"]}-day SLA)'
@@ -193,7 +203,7 @@ def optum_email(load_run, snap_run, raw_found, tag=''):
     ss, se = parse_dt(snap_run.get('StartDate')), parse_dt(snap_run.get('EndDate'))
     lstatus = load_run.get('Status', ''); sstatus = snap_run.get('Status', '')
     all_raw = all(raw_found.values())
-    ok = (lstatus == 'Successful') and (sstatus == 'Successful') and all_raw
+    ok = _ok_status(lstatus) and _ok_status(sstatus) and all_raw
     color = GREEN if ok else RED
     verdict = 'SUCCESS - Within SLA' if ok else 'FAILED SLA'
 
@@ -206,7 +216,7 @@ def optum_email(load_run, snap_run, raw_found, tag=''):
                      f'{"Present" if present else "MISSING"}</td></tr>')
 
     def jrow(label, status, s, e):
-        c = GREEN if status == 'Successful' else RED
+        c = GREEN if _ok_status(status) else RED
         return (f'<tr><td style="padding:5px 10px;border:1px solid #ddd">{label}</td>'
                 f'<td style="padding:5px 10px;border:1px solid #ddd;color:{c};font-weight:bold">{status}</td>'
                 f'<td style="padding:5px 10px;border:1px solid #ddd">{fmt(s)}</td>'
