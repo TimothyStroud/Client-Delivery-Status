@@ -571,6 +571,10 @@ MANUAL_OVERRIDES = {
     # Replace 7/1 with the cert date once it certifies.
     ("HarvardPilgrim", date(2026, 7, 1)): "L",
     ("HarvardPilgrim", date(2026, 7, 8)): "",
+    # 2026-07-08: HMSA_Rx (weekly Tue) received an EMPTY file this week — a known
+    # occasional occurrence per user. Mark the 7/7 Tuesday cell "Empty" (pink,
+    # matching the team's ALL_CLIENTS_ALERT_MARKERS convention). Remove next week.
+    ("HMSA_Rx",       date(2026, 7, 7)): "Empty",
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -2811,7 +2815,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # in pink." The Kaiser-feed branch below previously short-circuited
         # before this check, hiding the Load Failure shade for Kaiser feeds.
         # "Snap" added for snap-disabled clients (e.g. Kaiser_AmbM).
-        if marker in ("Load Failure", "Inactive", "Failed", "Deployment", "Snap"):
+        if marker in ("Load Failure", "Inactive", "Failed", "Deployment", "Snap", "Empty"):
             return True
         # Implementation phase — never pink (new client; lack of jobs/data
         # would otherwise trip has_inactive_jobs).
