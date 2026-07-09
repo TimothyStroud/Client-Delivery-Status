@@ -1875,30 +1875,78 @@ def fetch_cvspbm_adhoc(since):
     return rows
 
 
+# JHHC Passfile: the four monthly passfiles (Trauma/Subro × Active/Closed) all
+# carry TableID = 5000 in TRGETL4.JohnsHopkins.etl.Tape. FileName looks like
+# …\RawlingsGroup_PassFile_TraumaClosed_SSA_20260604.txt — capture the file
+# type (TraumaClosed/…) and the 8-digit data date.
+JHHC_PASSFILE_RE = re.compile(r"PassFile_([A-Za-z]+)_SSA_(\d{8})", re.I)
+
+
+def fetch_jhhc_passfile_loads(since):
+    """JHHC Passfile monthly load instances from TRGETL4.JohnsHopkins.etl.Tape.
+
+    The four monthly passfiles (TraumaActive / TraumaClosed / SubroActive /
+    SubroClosed) all carry TableID = 5000. A cycle is COMPLETE once all four
+    load (ProcessStatus = 50). Returns a list of dicts:
+    {filetype, data_date, load_date: datetime|None, loaded: bool}.
+
+    Per user 2026-07-09: after the 'JHHC Passfile Email' RAMP job finishes the
+    cell shows "TBL" (to be loaded); on each refresh we check here and, once all
+    four files have loaded, the cell becomes ✓ on the FileLoadDate. Replaces the
+    old TRGINTP3.JohnsHopkins  FileName LIKE '%PassFile%' tape source (the load
+    now lands on TRGETL4).
+    """
+    q = (
+        "SET NOCOUNT ON; SELECT FileName, ProcessStatus, "
+        "CONVERT(varchar(19), FileLoadDate, 121) FROM [etl].[Tape] "
+        f"WHERE TableID = 5000 AND FileLoadDate >= '{since:%Y-%m-%d}' "
+        "ORDER BY FileLoadDate"
+    )
+    SEP = "\x1f"
+    r = subprocess.run(
+        ["sqlcmd", "-S", "TRGETL4", "-d", "JohnsHopkins", "-E", "-Q", q,
+         "-W", "-s", SEP, "-h", "-1"],
+        capture_output=True, text=True, check=False,
+    )
+    rows = []
+    for line in r.stdout.splitlines():
+        p = line.split(SEP)
+        if len(p) < 3:
+            continue
+        m = JHHC_PASSFILE_RE.search(p[0] or "")
+        if not m:
+            continue
+        try:
+            status = int(p[1].strip())
+        except ValueError:
+            continue
+        rows.append({
+            "filetype":  m.group(1),
+            "data_date": m.group(2),
+            "loaded":    status == 50,
+            "load_date": parse_dt(p[2].strip()),
+        })
+    return rows
+
+
 # Map of client → (database name, snap-index source key).
 # Server defaults to TRGETL3 (see TAPE_LOAD_SERVER for overrides).
 TAPE_LOAD_SOURCES = {
     "OptumPBMRx":      ("OptumPBMRx",      "optumpbmrx"),
     "ESIPBMRx":        ("ESIPBMRx",        "esipbmrx"),
     "MedImpactPBMRx":  ("MedImpactPBMRx",  "medimpactpbmrx"),
-    # JHHC Passfile loads to TRGINTP3.JohnsHopkins.etl.Tape (NOT TRGETL3, and the
-    # JohnsHopkins DB also holds the main JHHC Medical feed — so filter to
-    # PassFile filenames). Added 2026-06-16 per user: the 6/12 passfile reload
-    # wasn't captured by the fragile 'JHHC Passfile Email' RAMP job; the tape is
-    # authoritative. Placement lands ✓ on the latest load date (single cell).
-    "JHHCPassfile":    ("JohnsHopkins",    "jhhcpassfile"),
+    # JHHCPassfile is NO LONGER a generic tape source — it has its own
+    # TableID=5000 / TRGETL4 lookup (fetch_jhhc_passfile_loads) and a dedicated
+    # determine_monthly branch that gates ✓ on all four files loading. Keeping
+    # it here would feed a premature ✓ into snap_idx from a single loaded file.
 }
 
 # Per-client SQL server override for TAPE_LOAD_SOURCES (default TRGETL3).
-TAPE_LOAD_SERVER = {
-    "JHHCPassfile": "TRGINTP3",
-}
+TAPE_LOAD_SERVER = {}
 
 # Per-client FileName LIKE filter for TAPE_LOAD_SOURCES — restricts a shared
 # client DB to just the intended feed's rows.
-TAPE_LOAD_NAME_FILTER = {
-    "JHHCPassfile": "PassFile",
-}
+TAPE_LOAD_NAME_FILTER = {}
 
 # Regex for state codes inside ESIPBMRx tape filenames (e.g. Rawlings_FL_, Rawlings_GA_)
 ESIPBMRX_STATE_RE = re.compile(r"Rawlings_([A-Z]{2})_", re.I)
@@ -2776,7 +2824,7 @@ def is_friday_or_later_in_week(today, scheduled_day):
 def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_placements,
                   ramp_jobs, ramp_queue, esipbmrx_tape=None, multi_week_loads=None,
                   aetna_nmsp_loads=None, optumpbmrx_tape=None, evernorth_claims_pending=False,
-                  optum_raw_instances=None, cvspbm_adhoc=None):
+                  optum_raw_instances=None, cvspbm_adhoc=None, jhhc_passfile_loads=None):
     """Return ((sections, weeks)) layout.
 
     sections: dict {kind: dict {date: [(label, marker, alert)] }}
@@ -3126,6 +3174,62 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # current week (per user 2026-05-26: BCBSFL Elig was missing from June
         # because is_loading_today returned today=5/26 and the row got dropped).
         today_in_month = (today.year == year and today.month == month)
+
+        # JHHC Passfile (per user 2026-07-09): the 'JHHC Passfile Email' RAMP
+        # job delivers four files (Trauma/Subro × Active/Closed) that then load
+        # into TRGETL4.JohnsHopkins.etl.Tape (TableID = 5000). Lifecycle:
+        #   email job finished           → "TBL" (to be loaded)
+        #   all four files loaded (PS=50) → ✓ on the latest FileLoadDate
+        # The load is checked live on every refresh via fetch_jhhc_passfile_loads.
+        if client == "JHHCPassfile":
+            month_loads = [r for r in (jhhc_passfile_loads or [])
+                           if r.get("loaded") and r.get("load_date")
+                           and r["load_date"].year == year
+                           and r["load_date"].month == month]
+            if month_loads:
+                # Group by data date; a cycle is complete once all four
+                # distinct file types have loaded.
+                types_by_dd = defaultdict(set)
+                latest_by_dd = {}
+                for r in month_loads:
+                    dd = r["data_date"]
+                    types_by_dd[dd].add(r["filetype"].lower())
+                    if dd not in latest_by_dd or r["load_date"] > latest_by_dd[dd]:
+                        latest_by_dd[dd] = r["load_date"]
+                complete = [dd for dd, t in types_by_dd.items() if len(t) >= 4]
+                if complete:
+                    d = max(latest_by_dd[dd] for dd in complete).date()
+                    if d.weekday() >= 5:
+                        d = next_monday_if_weekend(d)
+                    return d, "✓"
+                # Some files loaded but not all four yet → still to-be-loaded.
+                d = max(latest_by_dd.values()).date()
+                if d.weekday() >= 5:
+                    d = next_monday_if_weekend(d)
+                return d, "TBL"
+            # No load rows yet this month. If the 'JHHC Passfile Email' job has
+            # finished (Successful/Resolved) this month, the files are delivered
+            # and awaiting load → "TBL".
+            email_dt = None
+            for d_, entries in snap_idx.items():
+                if d_.year != year or d_.month != month:
+                    continue
+                for e in entries:
+                    if e and e[0] == "jhhcpassfileemail":
+                        if email_dt is None or e[1] > email_dt:
+                            email_dt = e[1]
+            if email_dt:
+                d = email_dt.date()
+                if d.weekday() >= 5:
+                    d = next_monday_if_weekend(d)
+                return d, "TBL"
+            # Email still running → L; recent failure → Load Failure; else No Data.
+            if today_in_month and is_loading_today(client, ramp_queue, ramp_jobs):
+                return today, "L"
+            if today_in_month and has_recent_failure(client, ramp_queue, ramp_jobs, today):
+                return today, "Load Failure"
+            return expected_date, "No Data"
+
         # Cert-only clients (BCBSKS/BCBSKSMedAdv/BCBSSCRx) stay on expected
         # day until DHT cert lands.
         if client in MONTHLY_CERT_ONLY_CLIENTS:
@@ -4823,6 +4927,14 @@ def main():
     cvspbm_adhoc = fetch_cvspbm_adhoc(since=date(year, month, 1) - timedelta(days=14))
     print(f"[info]   CVSPBMRx Ad Hoc instances: {len(cvspbm_adhoc)}")
 
+    print("[info] Fetching JHHC Passfile loads (TRGETL4 TableID=5000)…")
+    # Widest window: the report renders every month of the year in one run, and
+    # the JHHCPassfile ✓ for a past month (e.g. June) is anchored to that
+    # month's FileLoadDate — so fetch the whole year, not just a 2-week window.
+    jhhc_passfile_loads = fetch_jhhc_passfile_loads(since=date(year, 1, 1))
+    print(f"[info]   JHHC Passfile tape rows: {len(jhhc_passfile_loads)} "
+          f"(loaded={sum(1 for r in jhhc_passfile_loads if r['loaded'])})")
+
     latest_tickets, monthly_placements = build_ticket_index(tickets, jobs)
     print(f"[info] latest tickets indexed for {len(latest_tickets)} clients")
 
@@ -4873,7 +4985,8 @@ def main():
                                         optumpbmrx_tape=tape_loads.get("optumpbmrx"),
                                         evernorth_claims_pending=evernorth_claims_pending,
                                         optum_raw_instances=optum_raw_instances,
-                                        cvspbm_adhoc=cvspbm_adhoc)
+                                        cvspbm_adhoc=cvspbm_adhoc,
+                                        jhhc_passfile_loads=jhhc_passfile_loads)
 
         tab_name = f"{_cal_mod.month_name[m]} {year}"
         ws_m = wb.create_sheet(tab_name)
