@@ -355,7 +355,9 @@ WEEKLY_CLIENTS = {
 # Kaiser_AmbM removed 2026-05-19 (no longer inactive). Snap re-enabled
 # 2026-06-08 — now treated as a normal monthly Kaiser_Amb cert feed (see
 # MONTHLY_CERT_ONLY_CLIENTS / SNAP_KIND_ONLY_CLIENTS).
-FORCED_INACTIVE = {"Tufts_PublicPlan", "TuftsRx", "HealthNetCA"}
+# Oscar (weekly Wed) added 2026-07-09 per user: Inactive from 7/1 forward. Past
+# 7/1 & 7/8 cells pinned via MANUAL_OVERRIDES; FORCED_INACTIVE covers today+future.
+FORCED_INACTIVE = {"Tufts_PublicPlan", "TuftsRx", "HealthNetCA", "Oscar"}
 
 # Clients whose load is running but snap step is disabled in RAMP — show
 # marker "Snap" with pink shading on the expected delivery day. Mechanism kept
@@ -577,18 +579,20 @@ MANUAL_OVERRIDES = {
     # occasional occurrence per user. Mark the 7/7 Tuesday cell "Empty" (pink,
     # matching the team's ALL_CLIENTS_ALERT_MARKERS convention). Remove next week.
     ("HMSA_Rx",       date(2026, 7, 7)): "Empty",
-    # 2026-07-09: Oscar (weekly Wed) was showing "L" on its 7/8 cell, but per
-    # user that running job was NOT a full Load job — clear the L. Remove after
-    # the week.
-    ("Oscar",         date(2026, 7, 8)): "",
+    # 2026-07-09: Oscar (weekly Wed) — mark Inactive from 7/1 forward (per user).
+    # 7/1 and 7/8 are past Wednesday cells so they need explicit overrides;
+    # today+future Wednesdays are handled by adding "Oscar" to FORCED_INACTIVE.
+    ("Oscar",         date(2026, 7, 1)): "Inactive",
+    ("Oscar",         date(2026, 7, 8)): "Inactive",
     # 2026-07-09: AetnaHRP (daily) is in a Load Failure state — the 7/5, 7/6,
-    # 7/7 and 7/8 data still have not loaded, and the 7/8 certification did NOT
-    # include those files. Pin "Load Failure" (pink) on the current-week daily
-    # cells (Mon 7/6 covers the 7/5 Sun data, Tue 7/7, Wed 7/8, Thu 7/9). Per
-    # user. Remove/replace with cert dates once the backlog loads and certifies.
+    # 7/7 data still have not loaded, and the 7/8 certification did NOT include
+    # those files. Pin "Load Failure" (pink) on Mon 7/6 (covers the 7/5 Sun
+    # data), Tue 7/7 and Thu 7/9. The 7/8 cell shows the 7/8 cert date (per user
+    # 2026-07-09: re-add the HRP cert for 7/8, rest remain Load Failure).
+    # Remove/replace once the backlog loads and certifies.
     ("AetnaHRP",      date(2026, 7, 6)): "Load Failure",
     ("AetnaHRP",      date(2026, 7, 7)): "Load Failure",
-    ("AetnaHRP",      date(2026, 7, 8)): "Load Failure",
+    ("AetnaHRP",      date(2026, 7, 8)): date(2026, 7, 8),
     ("AetnaHRP",      date(2026, 7, 9)): "Load Failure",
 }
 
@@ -3985,6 +3989,7 @@ def write_weekly_stacked(ws, year, month, sections, weeks, today):
         ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=10)
         kc = ws.cell(row=cur_row, column=1,
                      value="Key:  Date = Certified  |  ✓ = Loaded/Snapped  |  L = Loading"
+                           "  |  TBL = To Be Loaded"
                            "  |  pink = Failure/Inactive  |  (s) SLA  |  (p) Rx Post Snap"
                            "  |  (n) Not Delivered  |  -  = No load that day")
         kc.font = Font(name="Segoe UI", italic=True, size=9, color="555555")
@@ -4069,6 +4074,7 @@ def write_month_sheet(ws, year, month, sections, weeks, today):
         ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=5)
         kc = ws.cell(row=cur_row, column=1,
                      value="Key:  Date = Certified  |  ✓ = Loaded/Snapped  |  L = Loading"
+                           "  |  TBL = To Be Loaded"
                            "  |  pink Date = Failure/Inactive  |  (s) SLA  |  (p) Rx Post Snap"
                            "  |  (n) Not Delivered  |  -  = No load that day")
         kc.font = Font(name="Segoe UI", italic=True, size=9, color="555555")
@@ -4609,6 +4615,7 @@ def _render_week_card_html(wk, week_no, sections, today, holidays):
             )
 
     key_line = ("Key:  Date = Certified  |  ✓ = Loaded/Snapped  |  L = Loading"
+                "  |  TBL = To Be Loaded"
                 "  |  pink = Failure/Inactive  |  (s) SLA  |  (p) Rx Post Snap"
                 "  |  (n) Not Delivered  |  -  = No load that day")
 
