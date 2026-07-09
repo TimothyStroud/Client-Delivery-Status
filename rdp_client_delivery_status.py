@@ -569,12 +569,27 @@ MANUAL_OVERRIDES = {
     # load." Pin "L" on 7/1 (loaded, awaiting cert) to clear the pink "!", and
     # blank the phantom current-week L on 7/8 (one weekly delivery, not two).
     # Replace 7/1 with the cert date once it certifies.
+    # 2026-07-09: 'HarvardPilgrim Claims 0110 Load' is now running for the 7/8
+    # weekly delivery — flip the 7/8 cell from blank to "L". Per user.
     ("HarvardPilgrim", date(2026, 7, 1)): "L",
-    ("HarvardPilgrim", date(2026, 7, 8)): "",
+    ("HarvardPilgrim", date(2026, 7, 8)): "L",
     # 2026-07-08: HMSA_Rx (weekly Tue) received an EMPTY file this week — a known
     # occasional occurrence per user. Mark the 7/7 Tuesday cell "Empty" (pink,
     # matching the team's ALL_CLIENTS_ALERT_MARKERS convention). Remove next week.
     ("HMSA_Rx",       date(2026, 7, 7)): "Empty",
+    # 2026-07-09: Oscar (weekly Wed) was showing "L" on its 7/8 cell, but per
+    # user that running job was NOT a full Load job — clear the L. Remove after
+    # the week.
+    ("Oscar",         date(2026, 7, 8)): "",
+    # 2026-07-09: AetnaHRP (daily) is in a Load Failure state — the 7/5, 7/6,
+    # 7/7 and 7/8 data still have not loaded, and the 7/8 certification did NOT
+    # include those files. Pin "Load Failure" (pink) on the current-week daily
+    # cells (Mon 7/6 covers the 7/5 Sun data, Tue 7/7, Wed 7/8, Thu 7/9). Per
+    # user. Remove/replace with cert dates once the backlog loads and certifies.
+    ("AetnaHRP",      date(2026, 7, 6)): "Load Failure",
+    ("AetnaHRP",      date(2026, 7, 7)): "Load Failure",
+    ("AetnaHRP",      date(2026, 7, 8)): "Load Failure",
+    ("AetnaHRP",      date(2026, 7, 9)): "Load Failure",
 }
 
 # --- Sticky certifications --------------------------------------------------
