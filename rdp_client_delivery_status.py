@@ -573,8 +573,14 @@ MANUAL_OVERRIDES = {
     # Replace 7/1 with the cert date once it certifies.
     # 2026-07-09: 'HarvardPilgrim Claims 0110 Load' is now running for the 7/8
     # weekly delivery — flip the 7/8 cell from blank to "L". Per user.
-    ("HarvardPilgrim", date(2026, 7, 1)): "L",
-    ("HarvardPilgrim", date(2026, 7, 8)): "L",
+    # 2026-07-10: both deliveries loaded AND certified (per user). Two Claims
+    # 0110 Loads ran: Load A 7/7 13:35->7/8 00:02 (the late 6/30 file = 7/1
+    # delivery) certified 7/8 10:46 (StatTimestamp 7/7); Load B 7/9->7/9 18:45
+    # (the 7/8 weekly delivery) certified 7/10 09:03 (StatTimestamp 7/9). Both
+    # StatTimestamps fall in the 7/6 week so CERT_WEEK_IDX collapses them onto
+    # one cell — pin each cert date explicitly to keep the two deliveries split.
+    ("HarvardPilgrim", date(2026, 7, 1)): date(2026, 7, 8),
+    ("HarvardPilgrim", date(2026, 7, 8)): date(2026, 7, 10),
     # 2026-07-08: HMSA_Rx (weekly Tue) received an EMPTY file this week — a known
     # occasional occurrence per user. Mark the 7/7 Tuesday cell "Empty" (pink,
     # matching the team's ALL_CLIENTS_ALERT_MARKERS convention). Remove next week.
