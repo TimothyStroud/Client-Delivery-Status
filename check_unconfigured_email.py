@@ -2,7 +2,7 @@ import json, subprocess, sys
 from datetime import datetime
 
 STATE_FILE = r'C:\Users\tls2\.claude\projects\H--\known_unconfigured.json'
-TO_ADDRESS   = 'RDPOperations@machinify.com'
+TO_ADDRESS   = 'DataOperations@machinify.com'
 FROM_ADDRESS = 'DataOperations@machinify.com'
 
 # Fetch current unconfigured files

@@ -9,7 +9,7 @@ files must be uploaded within 3 days of that start. This script:
   1. Finds the most recent 'Emblem Facets 0110 Load' start (the SLA anchor).
   2. Checks the upload archive for the 5 current-cycle RESP_ files.
   3. ONLY when all 5 are present, emails the final SLA report
-     (from DataOperations@machinify.com to RDPOperations@machinify.com),
+     (from DataOperations@machinify.com to DataOperations@machinify.com),
      coloring in RED any file uploaded after anchor + 3 days.
   4. Records the cycle in a state file so it sends exactly once per cycle.
 
@@ -27,7 +27,7 @@ ARCHIVE = r'\\trgllc\Shares\RawlingsOutbound\DIG\EmblemFacets\Archive'
 STATE_FILE = os.path.join(BASE, 'emblem_sla_state.json')
 
 FROM_ADDR = 'DataOperations@machinify.com'
-TO_ADDR   = 'RDPOperations@machinify.com'
+TO_ADDR   = 'DataOperations@machinify.com'
 
 SLA_DAYS = 3
 LOAD_JOB_NAME = 'Emblem Facets 0110 Load'

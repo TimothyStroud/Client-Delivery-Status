@@ -34,7 +34,7 @@ from send_via_outlook import send
 
 STATE_FILE = os.path.join(BASE, 'loadsla_state.json')
 FROM_ADDR = 'DataOperations@machinify.com'
-TO_ADDR   = 'RDPOperations@machinify.com'
+TO_ADDR   = 'DataOperations@machinify.com'
 
 # 5-day-SLA jobs (duration = EndDate-StartDate). `cadence` drives the
 # report-once-per-period gating (added 2026-06-26 per user): once a job's
