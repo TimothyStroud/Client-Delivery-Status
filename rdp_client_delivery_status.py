@@ -608,10 +608,12 @@ MANUAL_OVERRIDES = {
     ("TuftsMedPref",  date(2026, 7, 6)):  "No Data",
     # 2026-07-13: BCBSAR (Medical, weekly Tue) — today's cert (7/13) covers BOTH
     # last week AND this week. Per user, mark last week's Tue 7/7 and this week's
-    # Tue 7/14 cells with the 7/13 cert date. (BCBSARRx will be the same once its
-    # load finishes — add the matching 7/7 + 7/14 -> 7/13 pins then.)
+    # Tue 7/14 cells with the 7/13 cert date.
     ("BCBSAR",        date(2026, 7, 7)):  date(2026, 7, 13),
     ("BCBSAR",        date(2026, 7, 14)): date(2026, 7, 13),
+    # 2026-07-13: BCBSARRx (weekly Tue) — certified today (7/13). Per user, pin
+    # last week's Tue 7/7 cell with the 7/13 cert date.
+    ("BCBSARRx",      date(2026, 7, 7)):  date(2026, 7, 13),
 }
 
 # --- Sticky certifications --------------------------------------------------
