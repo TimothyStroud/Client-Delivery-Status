@@ -600,6 +600,18 @@ MANUAL_OVERRIDES = {
     ("AetnaHRP",      date(2026, 7, 7)): "Load Failure",
     ("AetnaHRP",      date(2026, 7, 8)): date(2026, 7, 8),
     ("AetnaHRP",      date(2026, 7, 9)): "Load Failure",
+    # 2026-07-13: TuftsMedPref (weekly Mon) — today's cert (7/13) is for THIS
+    # week's data. Last week's data is still MISSING. Pin the 7/13 cert on this
+    # week's Mon 7/13 cell and flag last week's Mon 7/6 cell "No Data" (pink).
+    # Remove/replace 7/6 once last week's data loads + certifies.
+    ("TuftsMedPref",  date(2026, 7, 13)): date(2026, 7, 13),
+    ("TuftsMedPref",  date(2026, 7, 6)):  "No Data",
+    # 2026-07-13: BCBSAR (Medical, weekly Tue) — today's cert (7/13) covers BOTH
+    # last week AND this week. Per user, mark last week's Tue 7/7 and this week's
+    # Tue 7/14 cells with the 7/13 cert date. (BCBSARRx will be the same once its
+    # load finishes — add the matching 7/7 + 7/14 -> 7/13 pins then.)
+    ("BCBSAR",        date(2026, 7, 7)):  date(2026, 7, 13),
+    ("BCBSAR",        date(2026, 7, 14)): date(2026, 7, 13),
 }
 
 # --- Sticky certifications --------------------------------------------------
