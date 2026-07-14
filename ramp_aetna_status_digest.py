@@ -17,6 +17,7 @@ import json, os, re, subprocess, sys
 from datetime import datetime, timedelta
 
 RCE_JOBID = 2257
+SNAP_JOBID = 10053     # RAMP 'Aetna RCE 400 Daily Snap' (added 2026-07-14 per user)
 CHANNEL = 'C09EPLQL2D9'
 
 # ---- Cross-session dedupe guard (added 2026-06-26) ----------------------------
@@ -78,24 +79,42 @@ def fmt(iso):
             return iso or '?'
 
 
-def rce_run():
-    """Return the LatestJobRun dict for RAMP 'Aetna RCE 310 ETL Load' (2257)."""
+_JOBS_CACHE = None
+
+
+def _all_jobs():
+    """Fetch RAMP /Job/List once per process and cache it (the digest queries
+    several job ids)."""
+    global _JOBS_CACHE
+    if _JOBS_CACHE is not None:
+        return _JOBS_CACHE
     out = subprocess.run(['curl', '-s', '--ntlm', '-u', ':',
                           'http://ramp/api/Ramp/Job/List'],
                          capture_output=True, text=True, timeout=180)
     try:
         d = json.loads(out.stdout)['Data']
+        _JOBS_CACHE = d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else d
     except Exception:
-        return {}
-    jobs = d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else d
-    for j in jobs:
-        if j.get('JobId') == RCE_JOBID:
+        _JOBS_CACHE = []
+    return _JOBS_CACHE
+
+
+def job_run(jobid):
+    """Return the LatestJobRun dict for a RAMP job id (or {} if not found)."""
+    for j in _all_jobs():
+        if j.get('JobId') == jobid:
             return j.get('LatestJobRun') or {}
     return {}
 
 
-def rce_status():
-    lr = rce_run()
+def rce_run():
+    """LatestJobRun for RAMP 'Aetna RCE 310 ETL Load' (2257)."""
+    return job_run(RCE_JOBID)
+
+
+def ramp_status(jobid):
+    """One '- Status: ...' line for a RAMP job's LatestJobRun."""
+    lr = job_run(jobid)
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
     # Per user: green check for Successful (red X for Failed) instead of the
@@ -205,9 +224,9 @@ def sql_job(server, name):
     return f"*{st}* | last run {oc} ({fmt_dt(row[-13], row[-12])})"
 
 
-def rce_succeeded_today():
-    """True if RAMP 'Aetna RCE 310 ETL Load' (2257) completed Successful today."""
-    lr = rce_run()
+def _ramp_succeeded_today(jobid):
+    """True if a RAMP job completed Successful today."""
+    lr = job_run(jobid)
     end = lr.get('EndDate')
     if lr.get('Status') == 'Successful' and end:
         try:
@@ -215,6 +234,16 @@ def rce_succeeded_today():
         except Exception:
             return False
     return False
+
+
+def rce_succeeded_today():
+    """True if RAMP 'Aetna RCE 310 ETL Load' (2257) completed Successful today."""
+    return _ramp_succeeded_today(RCE_JOBID)
+
+
+def snap_succeeded_today():
+    """True if RAMP 'Aetna RCE 400 Daily Snap' (10053) completed Successful today."""
+    return _ramp_succeeded_today(SNAP_JOBID)
 
 
 def job_succeeded_today(server, name):
@@ -251,13 +280,17 @@ def main():
     # -> emit no SLACK line so the cron/task posts nothing. (If either is still
     # running, failed, or hasn't run, the digest still posts.)
     if (rce_succeeded_today()
+            and snap_succeeded_today()
             and job_succeeded_today('TRGETL4', 'ETL NCStateAetna MasterLoad')):
-        print('NO_POST: RCE + NCStateAetna both Succeeded today')
+        print('NO_POST: RCE + Snap + NCStateAetna all Succeeded today')
         return
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
     lines = [f"<!here> :bar_chart: *Aetna RCE 310 - Status Update*  ({now})", ""]
     lines.append("*RAMP - Aetna RCE 310 ETL Load*")
-    lines.append(rce_status())
+    lines.append(ramp_status(RCE_JOBID))
+    lines.append("")
+    lines.append("*RAMP - Aetna RCE 400 Daily Snap*")
+    lines.append(ramp_status(SNAP_JOBID))
     lines.append("")
     lines.append("*SQL Job Activity Monitor*")
     for server, name, label in SQL_JOBS:
