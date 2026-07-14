@@ -13,29 +13,20 @@ HRP load has already succeeded today (both RAMP + SQL job) -> then emits nothing
 Note: msdb.dbo.agent_datetime is permission-blocked here, so run_date/run_time
 are converted to a datetime manually.
 """
-import base64, json, os, re, subprocess, sys
+import json, os, re, subprocess, sys
 from datetime import datetime, timedelta
 
 HRP_JOBID = 1246
 SNAP_JOBID = 1247      # RAMP 'Aetna 0120 HRP Snap' (added 2026-07-14 per user)
+STAGE_JOBID = 1243     # RAMP 'Aetna 0100 HRP Stage'
 CHANNEL = 'C09EPLQL2D9'
 
-# Claim files staged by RAMP 'Aetna 0100 HRP Stage' (added 2026-07-14 per user).
-# This Windows python can't reach \\etl2 directly (see cb_scan.py) but PowerShell
-# can, so the file list is gathered via a powershell -EncodedCommand shell-out.
-# Files pending load sit in the Claim root/Load/ToLoad; loaded files -> Loaded.
-CLAIM_BASE = r'\\etl2\CLIENTS\AetnaHRP\Data\Claim'
-PS_CLAIM = r"""
-$b='\\etl2\CLIENTS\AetnaHRP\Data\Claim'
-$dirs = @{ ''='pending'; 'Load'='pending'; 'ToLoad'='pending'; 'Loaded'='loaded' }
-foreach($k in $dirs.Keys){
-  $p = if($k){ Join-Path $b $k } else { $b }
-  if(Test-Path -LiteralPath $p){
-    Get-ChildItem -LiteralPath $p -Filter 'VENDOR.CB-CLAIMS-EXTRACT*.csv' -File -ErrorAction SilentlyContinue |
-      ForEach-Object { "$($dirs[$k])|$($_.Name)" }
-  }
-}
-"""
+# Claim files are sourced from RAMP's [ramp].[FileLog] on TRGUTIL10 keyed by the
+# last Stage's QueueId (reworked 2026-07-14 per user: show the whole batch the
+# LAST 'Aetna 0100 HRP Stage' staged, not whatever happens to be on the file
+# share). This drops stale stragglers (e.g. an old file still sitting in Loaded)
+# and matches exactly what the stage picked up.
+RAMP_SQL_SERVER = 'TRGUTIL10'
 
 # ---- Cross-run dedupe guard (mirrors the RCE digest) --------------------------
 # A near-simultaneous second run (task jitter) within DEDUPE_MINUTES prints a
@@ -311,49 +302,80 @@ def _parse_extract_dt(name):
         return None
 
 
-def claim_files(limit=6):
-    """CB-CLAIMS-EXTRACT files staged by 'Aetna 0100 HRP Stage', via a PowerShell
-    shell-out (this python can't reach \\etl2, PowerShell can). Returns
-    [(name, state, dt), ...] newest-first, capped. 'pending' = still to load,
-    'loaded' = moved to the Loaded dir."""
+def _ramp_sql(query):
+    """Run a query against the RAMP db on TRGUTIL10; return rows as lists of
+    stripped string fields (headers suppressed with -h -1). Returns [] on error."""
     try:
-        enc = base64.b64encode(PS_CLAIM.encode('utf-16-le')).decode('ascii')
-        out = subprocess.run(['powershell', '-NoProfile', '-NonInteractive',
-                              '-EncodedCommand', enc],
-                             capture_output=True, text=True, timeout=90)
+        out = subprocess.run(
+            ['sqlcmd', '-S', RAMP_SQL_SERVER, '-d', 'RAMP', '-E', '-W',
+             '-h', '-1', '-s', '|', '-Q', 'SET NOCOUNT ON; ' + query],
+            capture_output=True, text=True, timeout=120)
     except Exception:
-        return None
-    if out.returncode != 0 and not out.stdout.strip():
-        return None
-    seen = {}
+        return []
+    rows = []
     for line in out.stdout.splitlines():
-        line = line.strip()
-        if '|' not in line:
+        line = line.rstrip()
+        if not line or set(line) <= set('-|') or 'rows affected' in line:
             continue
-        state, name = line.split('|', 1)
-        name = name.strip()
-        if not name:
-            continue
-        if name not in seen or state == 'loaded':   # a name lives in one dir; 'loaded' wins
-            seen[name] = state
-    rows = [(n, s, _parse_extract_dt(n)) for n, s in seen.items()]
-    rows.sort(key=lambda r: (r[2] or datetime.min), reverse=True)
-    return rows[:limit]
+        rows.append([c.strip() for c in line.split('|')])
+    return rows
 
 
-def claim_file_lines():
-    """Slack lines for the claim-files section (checkmark when loaded)."""
-    rows = claim_files()
-    if rows is None:
-        return ["- (file share unavailable)"]
-    if not rows:
-        return ["- (no CB-CLAIMS-EXTRACT files found)"]
+def last_stage_batch():
+    """The claim files the LAST 'Aetna 0100 HRP Stage' staged, from FileLog.
+    Returns (stage_qid, stage_end_datetime, [(filename, data_dt), ...] oldest-first),
+    or (None, None, []) if unavailable. The stage QueueId is the newest one whose
+    FileLog actually holds CB-CLAIMS-EXTRACT files (a stage job also logs a
+    fileless 'Resolved' phase we must skip)."""
+    qrows = _ramp_sql(
+        "SELECT TOP 1 fl.QueueId FROM [ramp].[FileLog] fl "
+        "JOIN [ramp].[Queue] q ON q.QueueId = fl.QueueId "
+        f"WHERE q.JobId = {STAGE_JOBID} "
+        "AND fl.FileName LIKE 'VENDOR.CB-CLAIMS-EXTRACT%' ORDER BY fl.QueueId DESC")
+    if not qrows:
+        return None, None, []
+    qid = qrows[0][0]
+    erows = _ramp_sql(
+        f"SELECT CONVERT(varchar(19), EndDate, 121) FROM [ramp].[Queue] WHERE QueueId = {qid}")
+    stage_end = _to_dt(erows[0][0]) if erows and erows[0] else None
+    frows = _ramp_sql(
+        "SELECT FileName FROM [ramp].[FileLog] "
+        f"WHERE QueueId = {qid} AND FileName LIKE 'VENDOR.CB-CLAIMS-EXTRACT%' ORDER BY FileName")
+    files = [(r[0], _parse_extract_dt(r[0])) for r in frows if r and r[0]]
+    files.sort(key=lambda x: (x[1] or datetime.min))
+    return qid, stage_end, files
+
+
+def batch_state(stage_end):
+    """How far the last Stage's batch has progressed through Load -> Snap, as
+    (icon, label). Per user 2026-07-14 a Snap only counts once it runs for the
+    CURRENT load, so 'snapped' requires snap_is_current."""
+    load = job_run(HRP_JOBID)
+    l_start = _to_dt(load.get('StartDate')); l_end = _to_dt(load.get('EndDate'))
+    # Is the latest Load run the one for this stage batch (started after staging)?
+    load_for_batch = bool(l_start and stage_end and l_start >= stage_end)
+    if load_for_batch and load.get('Status') == 'Failed' and l_end:
+        return ':x:', 'load FAILED'
+    if load_for_batch and l_end and load.get('Status') == 'Successful':
+        if snap_is_current(HRP_JOBID, SNAP_JOBID) \
+                and job_run(SNAP_JOBID).get('Status') in RAMP_OK:
+            return ':white_check_mark:', 'loaded + snapped'
+        return ':white_check_mark:', 'loaded (snap pending)'
+    if load_for_batch and not l_end:
+        return ':hourglass_flowing_sand:', 'loading'
+    return ':hourglass_flowing_sand:', 'staged, pending load'
+
+
+def claim_file_lines(files, icon):
+    """Slack lines for the claim-files section: the whole batch from the last
+    Stage, each file tagged with its data date; the batch's Load/Snap progress is
+    carried in the section header (see main)."""
+    if not files:
+        return ["- (RAMP FileLog unavailable / no CB-CLAIMS-EXTRACT files in last stage)"]
     out = []
-    for name, state, dt in rows:
-        icon = ':white_check_mark:' if state == 'loaded' else ':hourglass_flowing_sand:'
-        tag = 'loaded' if state == 'loaded' else 'pending load'
+    for name, dt in files:
         dstr = dt.strftime('%m/%d/%Y') if dt else '?'
-        out.append(f"- {icon} `{name}` ({tag}, {dstr})")
+        out.append(f"- {icon} `{name}` ({dstr})")
     return out
 
 
@@ -401,8 +423,11 @@ def main():
     for server, name, label in SQL_JOBS:
         lines.append(f"- `{label}` ({server}): " + sql_job(server, name))
     lines.append("")
-    lines.append("*Claim Files - Aetna 0100 HRP Stage*")
-    lines.extend(claim_file_lines())
+    _stage_qid, stage_end, files = last_stage_batch()
+    icon, state_label = batch_state(stage_end)
+    staged_on = stage_end.strftime('%m/%d/%Y') if stage_end else '?'
+    lines.append(f"*Claim Files - last Aetna 0100 HRP Stage (staged {staged_on}, {state_label})*")
+    lines.extend(claim_file_lines(files, icon))
     msg = "\n".join(lines)
     print("SLACK|" + msg.replace("\n", "\\n"))
 
