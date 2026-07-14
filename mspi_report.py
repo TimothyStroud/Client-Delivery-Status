@@ -1,0 +1,517 @@
+"""Generate a static HTML MSPI File Report dashboard.
+
+Self-contained single .html file: embedded JSON data + vanilla JS filtering.
+No external dependencies, no server, no auth. Styled to match the
+MissingPayDates / CAQH Traffic reports. Drop it on a shared drive and users
+open it in a browser.
+
+Data source: TRGINTP3 / MSP.  One row per loaded MSPI file (etl.Tape,
+TapeID >= 3000) with record counts from the three history tables:
+
+    TableID 310 = DET file  -> history.DET record count
+    TableID 300 = PRM file  -> history.PRM + history.MSP record counts
+                               (MSP records share the PRM file's TapeID)
+
+Client and Contract are parsed out of the FileName path, e.g.
+    \\\\ETL2\\Clients\\MSP\\Tufts_Audit_CIT\\DET\\H0342.MSPCOBMA.D260622.T0858590
+      Client   = Tufts_Audit_CIT   (folder after ...\\MSP\\)
+      Contract = H0342             (H#### / RH#### token in the leaf name)
+
+Filterable: Client, Type (DET / MSP / PRM by record presence), Contract,
+File Name, and load-date range.  Record-count columns are display + sortable.
+
+Output paths (overwritten each run):
+- \\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Delivery Schedule\\Daily Status Reports\\MSPIReport.html
+- C:\\Users\\tls2\\.claude\\projects\\H--\\MSPIReport.html
+- C:\\Users\\tls2\\OneDrive - Machinify\\Documents\\Reports\\MSPIReport.html
+
+Run:
+    python C:\\Users\\tls2\\.claude\\projects\\H--\\mspi_report.py
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+from datetime import datetime
+
+SERVER = "TRGINTP3"
+DATABASE = "MSP"
+TAPE_MIN = 3000
+
+# sqlcmd's -s only honors a single character, so use a tab (never present in
+# these numeric / filename / date fields).
+SEP = "\t"
+
+SQL = """SET NOCOUNT ON;
+WITH d AS (SELECT TapeID, COUNT_BIG(*) c, MAX(Client) client
+             FROM MSP.history.DET WHERE TapeID >= {tmin} GROUP BY TapeID),
+     p AS (SELECT TapeID, COUNT_BIG(*) c, MAX(Client) client
+             FROM MSP.history.PRM WHERE TapeID >= {tmin} GROUP BY TapeID),
+     m AS (SELECT TapeID, COUNT_BIG(*) c, MAX(Client) client
+             FROM MSP.history.MSP WHERE TapeID >= {tmin} GROUP BY TapeID)
+SELECT  t.TapeID,
+        t.TableID,
+        t.ProdCtrlNo,
+        t.FileName,
+        CONVERT(varchar(10), t.FileCreateDate, 120) AS Created,
+        CONVERT(varchar(19), t.FileLoadDate, 120)   AS Loaded,
+        COALESCE(d.client, p.client, m.client)       AS Client,
+        ISNULL(d.c, 0) AS DetC,
+        ISNULL(m.c, 0) AS MspC,
+        ISNULL(p.c, 0) AS PrmC
+FROM MSP.etl.Tape t
+  LEFT JOIN d ON d.TapeID = t.TapeID
+  LEFT JOIN p ON p.TapeID = t.TapeID
+  LEFT JOIN m ON m.TapeID = t.TapeID
+WHERE t.TapeID >= {tmin}
+ORDER BY t.TapeID DESC;
+""".format(tmin=TAPE_MIN)
+
+OUTPUT_PATHS = [
+    r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule\Daily Status Reports\MSPIReport.html",
+    r"C:\Users\tls2\.claude\projects\H--\MSPIReport.html",
+    r"C:\Users\tls2\OneDrive - Machinify\Documents\Reports\MSPIReport.html",
+]
+
+TYPE_BY_TABLEID = {"310": "DET", "300": "PRM"}
+CONTRACT_RE = re.compile(r"R?H\d{3,5}")
+
+
+def parse_client(path: str, sql_client: str) -> str:
+    """Folder after ...\\MSP\\ in the path; fall back to the history Client."""
+    segs = [s for s in re.split(r"[\\/]", path or "") if s]
+    for i, seg in enumerate(segs[:-1]):
+        if seg.upper() == "MSP" and i + 1 < len(segs):
+            return segs[i + 1]
+    return (sql_client or "").strip()
+
+
+def parse_contract(path: str) -> str:
+    """H#### / RH#### token in the leaf file name (e.g. H0342, RH3890)."""
+    leaf = re.split(r"[\\/]", path or "")[-1]
+    m = CONTRACT_RE.search(leaf.upper())
+    return m.group(0) if m else ""
+
+
+def leaf_name(path: str) -> str:
+    return re.split(r"[\\/]", path or "")[-1]
+
+
+def fetch_rows():
+    cmd = [
+        "sqlcmd", "-S", SERVER, "-d", DATABASE, "-E",
+        "-h", "-1", "-W", "-s", SEP, "-Q", SQL,
+    ]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+    rows = []
+    for line in out.splitlines():
+        line = line.rstrip("\r\n")
+        if not line.strip():
+            continue
+        parts = line.split(SEP)
+        if len(parts) != 10:
+            continue
+        tape, tableid, prod, fname, created, loaded, sqlclient, detc, mspc, prmc = [p.strip() for p in parts]
+        if not tape.isdigit():  # skip sqlcmd footer / noise
+            continue
+        rows.append({
+            "tape": tape,
+            "type": TYPE_BY_TABLEID.get(tableid, tableid),
+            "prod": prod,
+            "client": parse_client(fname, sqlclient),
+            "contract": parse_contract(fname),
+            "filename": leaf_name(fname),
+            "created": created if created and created != "NULL" else "",
+            "loaded": loaded if loaded and loaded != "NULL" else "",
+            "det": int(detc) if detc.isdigit() else 0,
+            "msp": int(mspc) if mspc.isdigit() else 0,
+            "prm": int(prmc) if prmc.isdigit() else 0,
+        })
+    return rows
+
+
+HTML_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MSPI File Report</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --border: #d8dee6;
+    --text: #1f2a37;
+    --muted: #5b6776;
+    --accent: #2c5f8a;
+    --accent-dark: #1f3d5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  header {
+    background: var(--accent-dark);
+    color: #39ff14;
+    padding: 16px 24px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header .meta { font-size: 12px; opacity: 0.85; margin-top: 4px; }
+  main { padding: 16px 24px 32px; }
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .kpi {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .kpi .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .kpi .value { font-size: 22px; font-weight: 600; margin-top: 2px; color: var(--accent-dark); }
+  .filters {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: end;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .field select, .field input {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 13px;
+    background: #fff;
+    min-width: 120px;
+  }
+  .field input[type=date] { min-width: 140px; }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: 0;
+    border-radius: 4px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+  table {
+    width: auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    border-collapse: separate;
+    border-spacing: 0;
+    overflow: hidden;
+  }
+  thead { background: var(--accent); color: #39ff14; position: sticky; top: 0; z-index: 1; }
+  th {
+    text-align: left;
+    padding: 6px 8px;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  th .arrow { opacity: 0.5; font-size: 10px; margin-left: 3px; }
+  th.sort-asc .arrow, th.sort-desc .arrow { opacity: 1; }
+  td {
+    padding: 4px 8px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.zero { color: #b6bec8; }
+  tr:hover td { background: #f8fafc; }
+  .pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; justify-content: flex-end; font-size: 13px; color: var(--muted); }
+  .empty { padding: 24px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>MSPI File Report</h1>
+  <div class="meta">Generated __GENERATED__ &middot; TRGINTP3 / MSP &middot; etl.Tape TapeID &ge; __TAPE_MIN__ &middot; __ROW_COUNT__ files</div>
+</header>
+<main>
+  <section class="kpis">
+    <div class="kpi"><div class="label">Files</div><div class="value" id="kpi-files">&mdash;</div></div>
+    <div class="kpi"><div class="label">Clients</div><div class="value" id="kpi-clients">&mdash;</div></div>
+    <div class="kpi"><div class="label">DET Records</div><div class="value" id="kpi-det">&mdash;</div></div>
+    <div class="kpi"><div class="label">MSP Records</div><div class="value" id="kpi-msp">&mdash;</div></div>
+    <div class="kpi"><div class="label">PRM Records</div><div class="value" id="kpi-prm">&mdash;</div></div>
+    <div class="kpi"><div class="label">Latest Load</div><div class="value" id="kpi-latest">&mdash;</div></div>
+  </section>
+
+  <section class="filters">
+    <div class="field">
+      <label for="f-client">Client</label>
+      <select id="f-client"><option value="">All clients</option></select>
+    </div>
+    <div class="field">
+      <label for="f-type">Type</label>
+      <select id="f-type">
+        <option value="">All types</option>
+        <option value="DET">DET</option>
+        <option value="MSP">MSP</option>
+        <option value="PRM">PRM</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-contract">Contract</label>
+      <input type="text" id="f-contract" placeholder="e.g. H0342">
+    </div>
+    <div class="field">
+      <label for="f-filename">File Name</label>
+      <input type="text" id="f-filename" placeholder="contains&hellip;">
+    </div>
+    <div class="field">
+      <label for="f-ldfrom">Loaded From</label>
+      <input type="date" id="f-ldfrom">
+    </div>
+    <div class="field">
+      <label for="f-ldto">Loaded To</label>
+      <input type="date" id="f-ldto">
+    </div>
+    <button class="secondary" id="btn-reset">Reset</button>
+  </section>
+
+  <table id="grid">
+    <thead>
+      <tr>
+        <th data-key="client">Client<span class="arrow">&#8597;</span></th>
+        <th data-key="contract">Contract<span class="arrow">&#8597;</span></th>
+        <th data-key="type">Type<span class="arrow">&#8597;</span></th>
+        <th data-key="filename">File Name<span class="arrow">&#8597;</span></th>
+        <th data-key="prod">ProdCtrlNo<span class="arrow">&#8597;</span></th>
+        <th data-key="created">File Date<span class="arrow">&#8597;</span></th>
+        <th data-key="loaded">Loaded<span class="arrow">&#8597;</span></th>
+        <th data-key="det" class="num">DET<span class="arrow">&#8597;</span></th>
+        <th data-key="msp" class="num">MSP<span class="arrow">&#8597;</span></th>
+        <th data-key="prm" class="num">PRM<span class="arrow">&#8597;</span></th>
+      </tr>
+    </thead>
+    <tbody id="grid-body"></tbody>
+  </table>
+  <div class="pager">
+    <span id="pager-info"></span>
+    <button class="secondary" id="pg-prev">&laquo; Prev</button>
+    <button class="secondary" id="pg-next">Next &raquo;</button>
+  </div>
+</main>
+
+<script type="application/json" id="data">__DATA_JSON__</script>
+<script>
+(function() {
+  const ROWS = JSON.parse(document.getElementById('data').textContent);
+  const PAGE_SIZE = 100;
+  let state = {
+    client: '', type: '', contract: '', filename: '',
+    ldfrom: '', ldto: '',
+    sortKey: 'loaded', sortDir: 'desc', page: 0,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const fmtInt = (v) => (v == null ? '' : v.toLocaleString('en-US'));
+
+  const clients = [...new Set(ROWS.map(r => r.client).filter(Boolean))].sort();
+  for (const c of clients) {
+    const opt = document.createElement('option');
+    opt.value = c; opt.textContent = c;
+    $('f-client').appendChild(opt);
+  }
+
+  function applyFilters() {
+    const conQ = state.contract.trim().toLowerCase();
+    const fnQ = state.filename.trim().toLowerCase();
+    return ROWS.filter(r => {
+      if (state.client && r.client !== state.client) return false;
+      // Type filters by record presence: DET->det>0, MSP->msp>0, PRM->prm>0.
+      if (state.type === 'DET' && !(r.det > 0)) return false;
+      if (state.type === 'MSP' && !(r.msp > 0)) return false;
+      if (state.type === 'PRM' && !(r.prm > 0)) return false;
+      if (conQ && r.contract.toLowerCase().indexOf(conQ) === -1) return false;
+      if (fnQ && r.filename.toLowerCase().indexOf(fnQ) === -1) return false;
+      const ld = r.loaded ? r.loaded.slice(0, 10) : '';
+      if (state.ldfrom && (!ld || ld < state.ldfrom)) return false;
+      if (state.ldto && (!ld || ld > state.ldto)) return false;
+      return true;
+    });
+  }
+
+  function sortRows(rows) {
+    const k = state.sortKey;
+    const dir = state.sortDir === 'asc' ? 1 : -1;
+    const numeric = (k === 'det' || k === 'msp' || k === 'prm' || k === 'prod' || k === 'tape');
+    return rows.slice().sort((a, b) => {
+      let av = a[k], bv = b[k];
+      if (numeric) { av = Number(av); bv = Number(bv); }
+      if (av == null) av = '';
+      if (bv == null) bv = '';
+      if (av < bv) return -1 * dir;
+      if (av > bv) return  1 * dir;
+      return 0;
+    });
+  }
+
+  function render() {
+    const filtered = applyFilters();
+    const sorted = sortRows(filtered);
+
+    // KPIs
+    let det = 0, msp = 0, prm = 0, latest = '';
+    const cset = new Set();
+    for (const r of filtered) {
+      det += r.det || 0; msp += r.msp || 0; prm += r.prm || 0;
+      if (r.client) cset.add(r.client);
+      if (r.loaded && r.loaded > latest) latest = r.loaded;
+    }
+    $('kpi-files').textContent = filtered.length.toLocaleString();
+    $('kpi-clients').textContent = cset.size.toLocaleString();
+    $('kpi-det').textContent = det.toLocaleString();
+    $('kpi-msp').textContent = msp.toLocaleString();
+    $('kpi-prm').textContent = prm.toLocaleString();
+    $('kpi-latest').textContent = latest ? latest.slice(0, 10) : '—';
+
+    // Pagination
+    const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+    if (state.page >= pageCount) state.page = pageCount - 1;
+    if (state.page < 0) state.page = 0;
+    const start = state.page * PAGE_SIZE;
+    const slice = sorted.slice(start, start + PAGE_SIZE);
+
+    const body = $('grid-body');
+    body.innerHTML = '';
+    if (slice.length === 0) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="10" class="empty">No files match the current filters.</td>';
+      body.appendChild(tr);
+    } else {
+      const esc = (s) => (s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+      const cnt = (v) => '<td class="num' + (v ? '' : ' zero') + '">' + fmtInt(v) + '</td>';
+      for (const r of slice) {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + esc(r.client) + '</td>' +
+          '<td>' + esc(r.contract) + '</td>' +
+          '<td>' + esc(r.type) + '</td>' +
+          '<td>' + esc(r.filename) + '</td>' +
+          '<td>' + esc(r.prod) + '</td>' +
+          '<td>' + esc(r.created) + '</td>' +
+          '<td>' + esc(r.loaded) + '</td>' +
+          cnt(r.det) + cnt(r.msp) + cnt(r.prm);
+        body.appendChild(tr);
+      }
+    }
+
+    for (const th of document.querySelectorAll('th[data-key]')) {
+      th.classList.remove('sort-asc', 'sort-desc');
+      const arrow = th.querySelector('.arrow');
+      if (th.dataset.key === state.sortKey) {
+        th.classList.add('sort-' + state.sortDir);
+        arrow.textContent = state.sortDir === 'asc' ? '▲' : '▼';
+      } else {
+        arrow.textContent = '↕';
+      }
+    }
+
+    $('pager-info').textContent = sorted.length === 0
+      ? '0 files'
+      : (start + 1).toLocaleString() + '–' + (start + slice.length).toLocaleString() + ' of ' + sorted.length.toLocaleString();
+  }
+
+  function bindFilters() {
+    const ids = ['f-client', 'f-type', 'f-contract', 'f-filename', 'f-ldfrom', 'f-ldto'];
+    const keys = ['client', 'type', 'contract', 'filename', 'ldfrom', 'ldto'];
+    ids.forEach((id, i) => {
+      $(id).addEventListener('input', () => {
+        state[keys[i]] = $(id).value;
+        state.page = 0;
+        render();
+      });
+    });
+    $('btn-reset').addEventListener('click', () => {
+      ids.forEach(id => $(id).value = '');
+      Object.assign(state, { client: '', type: '', contract: '', filename: '', ldfrom: '', ldto: '', page: 0 });
+      render();
+    });
+    document.querySelectorAll('th[data-key]').forEach(th => {
+      th.addEventListener('click', () => {
+        const k = th.dataset.key;
+        if (state.sortKey === k) {
+          state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sortKey = k;
+          state.sortDir = (k === 'det' || k === 'msp' || k === 'prm' || k === 'loaded' || k === 'created') ? 'desc' : 'asc';
+        }
+        render();
+      });
+    });
+    $('pg-prev').addEventListener('click', () => { state.page--; render(); });
+    $('pg-next').addEventListener('click', () => { state.page++; render(); });
+  }
+
+  bindFilters();
+  render();
+})();
+</script>
+</body>
+</html>
+"""
+
+
+def generate_html(rows) -> str:
+    return (HTML_TEMPLATE
+            .replace("__GENERATED__", datetime.now().strftime("%Y-%m-%d %H:%M"))
+            .replace("__TAPE_MIN__", str(TAPE_MIN))
+            .replace("__ROW_COUNT__", f"{len(rows):,}")
+            .replace("__DATA_JSON__", json.dumps(rows, separators=(",", ":"))))
+
+
+def main():
+    print(f"[info] Fetching MSPI files from {SERVER}/{DATABASE} (TapeID >= {TAPE_MIN})")
+    rows = fetch_rows()
+    print(f"[info] {len(rows)} files")
+    html = generate_html(rows)
+
+    primary = OUTPUT_PATHS[0]
+    try:
+        os.makedirs(os.path.dirname(primary), exist_ok=True)
+        with open(primary, "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"[done] Wrote {primary}")
+    except (PermissionError, OSError) as e:
+        print(f"[warn] Couldn't write primary path: {e}")
+
+    for path in OUTPUT_PATHS[1:]:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            if os.path.exists(primary):
+                shutil.copyfile(primary, path)
+            else:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(html)
+            print(f"[done] Copy: {path}")
+        except (PermissionError, OSError) as e:
+            print(f"[warn] Couldn't write {path}: {e}")
+
+
+if __name__ == "__main__":
+    main()
