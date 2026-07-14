@@ -50,11 +50,14 @@ def _claim_slot():
         json.dump({'last_emit': datetime.now().isoformat()}, f)
     os.replace(tmp, STATE_FILE)
 
-# (server, SQL Agent job name, display label). The RCE ETL Load is the SQL job
-# 'SSIS AetnaRCE Daily Process' (its steps are the real RCE monitor steps, e.g.
-# step 4 = 'Build Chimera') — NOT ETL_AetnaSupport_MasterLoad (AuditSupport).
+# (server, SQL Agent job name, display label). Per user 2026-07-14 the "Aetna RCE
+# ETL Load" shown in SSMS Job Activity Monitor is 'ETL_AetnaSupport_MasterLoad'
+# (its step 3 = 'Build Chimera' — the step the user watches). This reverses the
+# 2026-06-23 swap to 'SSIS AetnaRCE Daily Process' (that job runs overnight and
+# was already Idle by digest time, so it reported "Idle" while the load the user
+# was actually watching was still running).
 SQL_JOBS = [
-    ("TRGETL2", "SSIS AetnaRCE Daily Process", "Aetna RCE ETL Load"),
+    ("TRGETL2", "ETL_AetnaSupport_MasterLoad", "Aetna RCE ETL Load"),
     ("TRGETL4", "ETL NCStateAetna MasterLoad", "ETL NCStateAetna MasterLoad"),
 ]
 
