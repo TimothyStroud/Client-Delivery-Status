@@ -58,7 +58,6 @@ SELECT  t.TapeID,
         t.TableID,
         t.ProdCtrlNo,
         t.FileName,
-        CONVERT(varchar(10), t.FileCreateDate, 120) AS Created,
         CONVERT(varchar(19), t.FileLoadDate, 120)   AS Loaded,
         COALESCE(d.client, p.client, m.client)       AS Client,
         ISNULL(d.c, 0) AS DetC,
@@ -124,9 +123,9 @@ def fetch_rows():
         if not line.strip():
             continue
         parts = line.split(SEP)
-        if len(parts) != 10:
+        if len(parts) != 9:
             continue
-        tape, tableid, prod, fname, created, loaded, sqlclient, detc, mspc, prmc = [p.strip() for p in parts]
+        tape, tableid, prod, fname, loaded, sqlclient, detc, mspc, prmc = [p.strip() for p in parts]
         if not tape.isdigit():  # skip sqlcmd footer / noise
             continue
         rows.append({
@@ -136,7 +135,6 @@ def fetch_rows():
             "client": parse_client(fname, sqlclient),
             "contract": parse_contract(fname),
             "filename": leaf_name(fname),
-            "created": created if created and created != "NULL" else "",
             "loaded": loaded if loaded and loaded != "NULL" else "",
             "det": int(detc) if detc.isdigit() else 0,
             "msp": int(mspc) if mspc.isdigit() else 0,
@@ -315,7 +313,6 @@ HTML_TEMPLATE = """<!doctype html>
         <th data-key="filename">File Name<span class="arrow">&#8597;</span></th>
         <th data-key="prod">ProdCtrlNo<span class="arrow">&#8597;</span></th>
         <th data-key="tape">TapeID<span class="arrow">&#8597;</span></th>
-        <th data-key="created">File Date<span class="arrow">&#8597;</span></th>
         <th data-key="loaded">Loaded<span class="arrow">&#8597;</span></th>
         <th data-key="records" class="num">Records<span class="arrow">&#8597;</span></th>
       </tr>
@@ -425,7 +422,7 @@ HTML_TEMPLATE = """<!doctype html>
     body.innerHTML = '';
     if (slice.length === 0) {
       const tr = document.createElement('tr');
-      tr.innerHTML = '<td colspan="9" class="empty">No files match the current filters.</td>';
+      tr.innerHTML = '<td colspan="8" class="empty">No files match the current filters.</td>';
       body.appendChild(tr);
     } else {
       const esc = (s) => (s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
@@ -439,7 +436,6 @@ HTML_TEMPLATE = """<!doctype html>
           '<td>' + esc(r.filename) + '</td>' +
           '<td>' + esc(r.prod) + '</td>' +
           '<td>' + esc(r.tape) + '</td>' +
-          '<td>' + esc(r.created) + '</td>' +
           '<td>' + esc(r.loaded) + '</td>' +
           cnt(recVal(r));
         body.appendChild(tr);
@@ -484,7 +480,7 @@ HTML_TEMPLATE = """<!doctype html>
           state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
         } else {
           state.sortKey = k;
-          state.sortDir = (k === 'records' || k === 'loaded' || k === 'created') ? 'desc' : 'asc';
+          state.sortDir = (k === 'records' || k === 'loaded') ? 'desc' : 'asc';
         }
         render();
       });
