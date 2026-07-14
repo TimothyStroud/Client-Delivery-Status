@@ -214,9 +214,9 @@ def build_message(stage, load, snap, files, load_date):
 
     for state in ("MA", "SC"):
         if state in files:
-            lines.append(f"{state}: {files[state]}")
+            lines.append(f":white_check_mark: {state}: {files[state]}")
         else:
-            lines.append(f"{state}: MISSING - no staged {state} file found")
+            lines.append(f":x: {state}: NOT LOADED - no staged {state} file found")
     return "\n".join(lines)
 
 
