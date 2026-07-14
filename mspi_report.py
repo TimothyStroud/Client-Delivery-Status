@@ -15,10 +15,13 @@ TapeID >= 3000) with record counts from the three history tables:
 Client and Contract are parsed out of the FileName path, e.g.
     \\\\ETL2\\Clients\\MSP\\Tufts_Audit_CIT\\DET\\H0342.MSPCOBMA.D260622.T0858590
       Client   = Tufts_Audit_CIT   (folder after ...\\MSP\\)
-      Contract = H0342             (H#### / RH#### token in the leaf name)
+      Contract = H0342             (letter+digits token in the leaf name; a
+                                    leading routing 'R' is dropped, so
+                                    RH3890 -> H3890 and RR6694 -> R6694)
 
 Filterable: Client, Type (DET / MSP / PRM by record presence), Contract,
-File Name, and load-date range.  Record-count columns are display + sortable.
+File Name, and load-date range.  A single "Records" column shows the count for
+the selected Type (native file count when Type is "All").
 
 Output paths (overwritten each run):
 - \\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Delivery Schedule\\Daily Status Reports\\MSPIReport.html
@@ -76,7 +79,12 @@ OUTPUT_PATHS = [
 ]
 
 TYPE_BY_TABLEID = {"310": "DET", "300": "PRM"}
-CONTRACT_RE = re.compile(r"R?H\d{3,5}")
+# A contract dot-segment: optional routing 'R', a letter, then 3-5 digits
+# (anchored so date/time segments like D260622 / T0858590 don't match).
+CONTRACT_SEG_RE = re.compile(r"^R?[A-Z]\d{3,5}$")
+# Drop a single leading routing 'R' only when a real contract (letter+digit)
+# follows it: RH3890 -> H3890, RR6694 -> R6694, but R6694 stays R6694.
+LEAD_R_RE = re.compile(r"^R(?=[A-Z]\d)")
 
 
 def parse_client(path: str, sql_client: str) -> str:
@@ -89,10 +97,15 @@ def parse_client(path: str, sql_client: str) -> str:
 
 
 def parse_contract(path: str) -> str:
-    """H#### / RH#### token in the leaf file name (e.g. H0342, RH3890)."""
+    """Contract token in the leaf file name, leading routing 'R' dropped.
+
+    e.g. H0342 -> H0342, EFTO.RH3890... -> H3890, P.RR6694... -> R6694.
+    """
     leaf = re.split(r"[\\/]", path or "")[-1]
-    m = CONTRACT_RE.search(leaf.upper())
-    return m.group(0) if m else ""
+    for seg in leaf.upper().split("."):
+        if CONTRACT_SEG_RE.match(seg):
+            return LEAD_R_RE.sub("", seg)
+    return ""
 
 
 def leaf_name(path: str) -> str:
@@ -276,7 +289,7 @@ HTML_TEMPLATE = """<!doctype html>
     </div>
     <div class="field">
       <label for="f-contract">Contract</label>
-      <input type="text" id="f-contract" placeholder="e.g. H0342">
+      <select id="f-contract"><option value="">All contracts</option></select>
     </div>
     <div class="field">
       <label for="f-filename">File Name</label>
@@ -301,11 +314,10 @@ HTML_TEMPLATE = """<!doctype html>
         <th data-key="type">Type<span class="arrow">&#8597;</span></th>
         <th data-key="filename">File Name<span class="arrow">&#8597;</span></th>
         <th data-key="prod">ProdCtrlNo<span class="arrow">&#8597;</span></th>
+        <th data-key="tape">TapeID<span class="arrow">&#8597;</span></th>
         <th data-key="created">File Date<span class="arrow">&#8597;</span></th>
         <th data-key="loaded">Loaded<span class="arrow">&#8597;</span></th>
-        <th data-key="det" class="num">DET<span class="arrow">&#8597;</span></th>
-        <th data-key="msp" class="num">MSP<span class="arrow">&#8597;</span></th>
-        <th data-key="prm" class="num">PRM<span class="arrow">&#8597;</span></th>
+        <th data-key="records" class="num">Records<span class="arrow">&#8597;</span></th>
       </tr>
     </thead>
     <tbody id="grid-body"></tbody>
@@ -331,15 +343,26 @@ HTML_TEMPLATE = """<!doctype html>
   const $ = (id) => document.getElementById(id);
   const fmtInt = (v) => (v == null ? '' : v.toLocaleString('en-US'));
 
-  const clients = [...new Set(ROWS.map(r => r.client).filter(Boolean))].sort();
-  for (const c of clients) {
-    const opt = document.createElement('option');
-    opt.value = c; opt.textContent = c;
-    $('f-client').appendChild(opt);
-  }
+  // Record count shown in the single "Records" column, driven by the Type
+  // filter; when Type is "All" show the file's native count (DET or PRM).
+  const recVal = (r) => {
+    if (state.type === 'DET') return r.det;
+    if (state.type === 'MSP') return r.msp;
+    if (state.type === 'PRM') return r.prm;
+    return r.type === 'DET' ? r.det : r.prm;
+  };
+
+  const fillSelect = (id, values) => {
+    for (const v of values) {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      $(id).appendChild(opt);
+    }
+  };
+  fillSelect('f-client', [...new Set(ROWS.map(r => r.client).filter(Boolean))].sort());
+  fillSelect('f-contract', [...new Set(ROWS.map(r => r.contract).filter(Boolean))].sort());
 
   function applyFilters() {
-    const conQ = state.contract.trim().toLowerCase();
     const fnQ = state.filename.trim().toLowerCase();
     return ROWS.filter(r => {
       if (state.client && r.client !== state.client) return false;
@@ -347,7 +370,7 @@ HTML_TEMPLATE = """<!doctype html>
       if (state.type === 'DET' && !(r.det > 0)) return false;
       if (state.type === 'MSP' && !(r.msp > 0)) return false;
       if (state.type === 'PRM' && !(r.prm > 0)) return false;
-      if (conQ && r.contract.toLowerCase().indexOf(conQ) === -1) return false;
+      if (state.contract && r.contract !== state.contract) return false;
       if (fnQ && r.filename.toLowerCase().indexOf(fnQ) === -1) return false;
       const ld = r.loaded ? r.loaded.slice(0, 10) : '';
       if (state.ldfrom && (!ld || ld < state.ldfrom)) return false;
@@ -359,9 +382,10 @@ HTML_TEMPLATE = """<!doctype html>
   function sortRows(rows) {
     const k = state.sortKey;
     const dir = state.sortDir === 'asc' ? 1 : -1;
-    const numeric = (k === 'det' || k === 'msp' || k === 'prm' || k === 'prod' || k === 'tape');
+    const numeric = (k === 'records' || k === 'prod' || k === 'tape');
     return rows.slice().sort((a, b) => {
-      let av = a[k], bv = b[k];
+      let av = (k === 'records') ? recVal(a) : a[k];
+      let bv = (k === 'records') ? recVal(b) : b[k];
       if (numeric) { av = Number(av); bv = Number(bv); }
       if (av == null) av = '';
       if (bv == null) bv = '';
@@ -401,7 +425,7 @@ HTML_TEMPLATE = """<!doctype html>
     body.innerHTML = '';
     if (slice.length === 0) {
       const tr = document.createElement('tr');
-      tr.innerHTML = '<td colspan="10" class="empty">No files match the current filters.</td>';
+      tr.innerHTML = '<td colspan="9" class="empty">No files match the current filters.</td>';
       body.appendChild(tr);
     } else {
       const esc = (s) => (s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
@@ -414,9 +438,10 @@ HTML_TEMPLATE = """<!doctype html>
           '<td>' + esc(r.type) + '</td>' +
           '<td>' + esc(r.filename) + '</td>' +
           '<td>' + esc(r.prod) + '</td>' +
+          '<td>' + esc(r.tape) + '</td>' +
           '<td>' + esc(r.created) + '</td>' +
           '<td>' + esc(r.loaded) + '</td>' +
-          cnt(r.det) + cnt(r.msp) + cnt(r.prm);
+          cnt(recVal(r));
         body.appendChild(tr);
       }
     }
@@ -459,7 +484,7 @@ HTML_TEMPLATE = """<!doctype html>
           state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
         } else {
           state.sortKey = k;
-          state.sortDir = (k === 'det' || k === 'msp' || k === 'prm' || k === 'loaded' || k === 'created') ? 'desc' : 'asc';
+          state.sortDir = (k === 'records' || k === 'loaded' || k === 'created') ? 'desc' : 'asc';
         }
         render();
       });
