@@ -51,19 +51,20 @@ def _claim_slot():
         json.dump({'last_emit': datetime.now().isoformat()}, f)
     os.replace(tmp, STATE_FILE)
 
-# (server, SQL Agent job name, display label). Per user 2026-07-14 the digest
-# tracks EVERYTHING the "Aetna RCE 310 ETL Load" process shows in the TRGETL2 Job
-# Activity Monitor -> BOTH TRGETL2 load jobs:
-#   * 'SSIS AetnaRCE Daily Process'  — the overnight RCE run (its start matches
-#     the RAMP 2257 "Aetna RCE 310 ETL Load" start; Build Chimera is step 4).
-#   * 'ETL_AetnaSupport_MasterLoad'  — the later Support MasterLoad (Build Chimera
-#     is step 3); this is the one that was mid-run showing "Idle" earlier because
-#     the digest had been pointed only at the already-finished overnight job.
-# (History: single-job, swapped AuditSupport<->Daily Process 6/23 & 7/14; now BOTH.)
-SQL_JOBS = [
-    ("TRGETL2", "SSIS AetnaRCE Daily Process", "Aetna RCE Daily Process"),
-    ("TRGETL2", "ETL_AetnaSupport_MasterLoad", "Aetna RCE Support MasterLoad"),
-    ("TRGETL4", "ETL NCStateAetna MasterLoad", "ETL NCStateAetna MasterLoad"),
+# Unified digest list — ONE flat, ORDERED set of items (order per user 2026-07-14):
+#   1. Aetna RCE Daily Process      (SQL 'SSIS AetnaRCE Daily Process', TRGETL2)
+#   2. ETL NCStateAetna MasterLoad  (SQL, TRGETL4)
+#   3. Aetna RCE 400 Daily Snap     (RAMP job 10053)
+#   4. Aetna RCE Support MasterLoad (SQL 'ETL_AetnaSupport_MasterLoad', TRGETL2)
+# The old RAMP 'Aetna RCE 310 ETL Load' (2257) line was dropped as redundant with
+# the 'Aetna RCE Daily Process' SQL job (same run; matching start ~12:58am). 2257
+# is still used by rce_succeeded_today() for the both-done skip.
+# Each item: ('sql', server, jobname, label) or ('ramp', jobid, None, label).
+DIGEST_ITEMS = [
+    ('sql',  'TRGETL2', 'SSIS AetnaRCE Daily Process', 'Aetna RCE Daily Process'),
+    ('sql',  'TRGETL4', 'ETL NCStateAetna MasterLoad', 'ETL NCStateAetna MasterLoad'),
+    ('ramp', SNAP_JOBID, None,                          'Aetna RCE 400 Daily Snap'),
+    ('sql',  'TRGETL2', 'ETL_AetnaSupport_MasterLoad', 'Aetna RCE Support MasterLoad'),
 ]
 
 OUTCOME = {1: "Succeeded", 0: "Failed", 2: "Retry", 3: "Canceled", 4: "In Progress"}
@@ -112,20 +113,27 @@ def rce_run():
     return job_run(RCE_JOBID)
 
 
-def ramp_status(jobid):
-    """One '- Status: ...' line for a RAMP job's LatestJobRun."""
+# RAMP terminal-good statuses: mining/load jobs report 'Successful'; snap jobs
+# report 'Resolved' (a full snap run resolves its queue item — e.g. the RCE 330
+# Weekly Snap sits at 'Resolved' after a ~1h run). Both get a green check.
+RAMP_OK = ('Successful', 'Resolved')
+
+
+def ramp_line(jobid):
+    """Status body (no leading '- ') for a RAMP job's LatestJobRun, for the unified
+    digest list. Green check for Successful/Resolved (red X for Failed)."""
     lr = job_run(jobid)
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
-    # Per user: green check for Successful (red X for Failed) instead of the
-    # ```diff color trick.
-    if end and status == 'Successful':
-        return f"- Status: :white_check_mark: *Successful* | started {fmt(start)} | *completed {fmt(end)}*"
+    if end and status in RAMP_OK:
+        return f":white_check_mark: *{status}* | started {fmt(start)} | *completed {fmt(end)}*"
     if end and status == 'Failed':
-        return f"- Status: :x: *FAILED* | started {fmt(start)} | ended {fmt(end)} - please investigate"
+        return f":x: *FAILED* | started {fmt(start)} | ended {fmt(end)} - please investigate"
     if end:
-        return f"- Status: *{status}* | started {fmt(start)} | *completed {fmt(end)}*"
-    return f"- Status: *{status}* (running) | started {fmt(start)} | not yet complete"
+        return f"*{status}* | started {fmt(start)} | *completed {fmt(end)}*"
+    if not start:
+        return f"*{status}* (queued) | not yet started"
+    return f"*{status}* (running) | started {fmt(start)} | not yet complete"
 
 
 def fmt_dt(d, t):
@@ -221,14 +229,16 @@ def sql_job(server, name):
         return line
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
-    return f"*{st}* | last run {oc} ({fmt_dt(row[-13], row[-12])})"
+    # Checkmark for a Succeeded last run, red X for Failed (per user 2026-07-14).
+    icon = ':white_check_mark: ' if oc == 'Succeeded' else (':x: ' if oc == 'Failed' else '')
+    return f"{icon}*{st}* | last run {oc} ({fmt_dt(row[-13], row[-12])})"
 
 
-def _ramp_succeeded_today(jobid):
-    """True if a RAMP job completed Successful today."""
+def _ramp_succeeded_today(jobid, ok=('Successful',)):
+    """True if a RAMP job reached an OK terminal status today."""
     lr = job_run(jobid)
     end = lr.get('EndDate')
-    if lr.get('Status') == 'Successful' and end:
+    if lr.get('Status') in ok and end:
         try:
             return datetime.fromisoformat(str(end).split('.')[0]).date() == datetime.now().date()
         except Exception:
@@ -242,8 +252,9 @@ def rce_succeeded_today():
 
 
 def snap_succeeded_today():
-    """True if RAMP 'Aetna RCE 400 Daily Snap' (10053) completed Successful today."""
-    return _ramp_succeeded_today(SNAP_JOBID)
+    """True if RAMP 'Aetna RCE 400 Daily Snap' (10053) resolved OK today.
+    Snaps report 'Resolved' (not 'Successful') on a clean run."""
+    return _ramp_succeeded_today(SNAP_JOBID, RAMP_OK)
 
 
 def job_succeeded_today(server, name):
@@ -286,15 +297,13 @@ def main():
         return
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
     lines = [f"<!here> :bar_chart: *Aetna RCE 310 - Status Update*  ({now})", ""]
-    lines.append("*RAMP - Aetna RCE 310 ETL Load*")
-    lines.append(ramp_status(RCE_JOBID))
-    lines.append("")
-    lines.append("*RAMP - Aetna RCE 400 Daily Snap*")
-    lines.append(ramp_status(SNAP_JOBID))
-    lines.append("")
-    lines.append("*SQL Job Activity Monitor*")
-    for server, name, label in SQL_JOBS:
-        lines.append(f"- `{label}` ({server}): " + sql_job(server, name))
+    for item in DIGEST_ITEMS:
+        if item[0] == 'ramp':
+            _, jobid, _, label = item
+            lines.append(f"- `{label}` (RAMP): " + ramp_line(jobid))
+        else:
+            _, server, name, label = item
+            lines.append(f"- `{label}` ({server}): " + sql_job(server, name))
     msg = "\n".join(lines)
     print("SLACK|" + msg.replace("\n", "\\n"))
 
