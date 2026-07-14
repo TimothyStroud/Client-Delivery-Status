@@ -2,9 +2,11 @@
 Headless Aetna RCE poster (zero Claude tokens). Replaces the Claude-cron path.
 
 Runs aetna_tick.py (fail-only monitor every tick + status digest at slots) and
-posts its tagged output to Slack via Workflow Builder webhooks:
-  POST_SUPPORT|<text>  -> support channel only        (RCE failure alert)
-  POST_BOTH|<text>     -> support + mining channels    (status digest)
+posts its tagged output to Slack via a Workflow Builder webhook. As of
+2026-07-14 ALL Aetna RCE posts route to #data-operations-aetna-updates ONLY
+(moved off support + mining per user):
+  POST_SUPPORT|<text>  -> aetna-updates channel   (RCE failure alert)
+  POST_BOTH|<text>     -> aetna-updates channel   (status digest)
 After a POST_SUPPORT posts OK, runs `aetna_tick.py --commit` (two-phase, so a
 failed post retries next tick). Digest needs no commit (it self-dedupes).
 
@@ -14,7 +16,7 @@ Workflow Builder rendering quirk (verified 2026-06-26): the workflow renders
 emoji shortcodes are kept. Per user, failure alerts lose the @here ping (option
 B) — they still post a red :x: message.
 
-Webhook URLs live OFF the git repo: H:\slack_wf_support.txt / H:\slack_wf_mining.txt.
+Webhook URL lives OFF the git repo: H:\slack_wf_aetna_updates.txt.
 The POST body key is "Text" (capital T — the Workflow Builder variable name).
 """
 import sys, os, re, json, subprocess, urllib.request
@@ -23,8 +25,7 @@ from datetime import datetime
 BASE = r'C:\Users\tls2\.claude\projects\H--'
 PY = sys.executable
 TICK = os.path.join(BASE, 'aetna_tick.py')
-SUPPORT_URL_FILE = r'H:\slack_wf_support.txt'
-MINING_URL_FILE = r'H:\slack_wf_mining.txt'
+AETNA_URL_FILE = r'H:\slack_wf_aetna_updates.txt'
 LOG_FILE = r'H:\aetna_webhook_post.log'
 
 
@@ -64,10 +65,9 @@ def post(url, text):
 
 
 def main():
-    support = read_url(SUPPORT_URL_FILE)
-    mining = read_url(MINING_URL_FILE)
-    if not support:
-        log(f"INERT: no support webhook URL in {SUPPORT_URL_FILE}")
+    updates = read_url(AETNA_URL_FILE)
+    if not updates:
+        log(f"INERT: no aetna-updates webhook URL in {AETNA_URL_FILE}")
         return 0
 
     r = subprocess.run([PY, TICK], capture_output=True, text=True, timeout=300)
@@ -76,18 +76,16 @@ def main():
         if line.startswith('POST_SUPPORT|'):
             txt = sanitize(line[len('POST_SUPPORT|'):].replace('\\n', '\n'))
             try:
-                post(support, txt)
+                post(updates, txt)
                 posted_support = True
-                log("posted RCE FAILURE -> support")
+                log("posted RCE FAILURE -> aetna-updates")
             except Exception as e:
                 log(f"FAIL alert post error (will retry next tick): {e}")
         elif line.startswith('POST_BOTH|'):
             txt = sanitize(line[len('POST_BOTH|'):].replace('\\n', '\n'))
             try:
-                post(support, txt)
-                if mining:
-                    post(mining, txt)
-                log("posted digest -> both")
+                post(updates, txt)
+                log("posted digest -> aetna-updates")
             except Exception as e:
                 log(f"digest post error: {e}")
 
