@@ -3,8 +3,9 @@ Ad-hoc Aetna HRP status poster (headless, zero Claude tokens).
 
 Runs ramp_aetnahrp_status_digest.py --force (bypasses the 25-min dedupe and the
 Tue-Fri/8-12-16 slot gate that aetnahrp_tick.py applies) and posts the resulting
-status line to the SUPPORT channel ONLY via the Workflow Builder webhook, using
-the same sanitize + {"Text": ...} mechanism as aetnahrp_webhook_post.py.
+status line to #data-operations-aetna-updates via the Workflow Builder webhook
+(same channel as the headless tick since the 2026-07-14 move), using the same
+sanitize + {"Text": ...} mechanism as aetnahrp_webhook_post.py.
 
 For one-off "post HRP status now" requests. The digest's own skip still applies
 (emits nothing once the HRP load + snap have all succeeded today).
@@ -14,7 +15,7 @@ from datetime import datetime
 
 BASE = r'C:\Users\tls2\.claude\projects\H--'
 DIGEST = os.path.join(BASE, 'ramp_aetnahrp_status_digest.py')
-SUPPORT_URL_FILE = r'H:\slack_wf_support.txt'
+AETNA_URL_FILE = r'H:\slack_wf_aetna_updates.txt'
 LOG_FILE = r'H:\aetnahrp_force_post.log'
 
 
@@ -57,15 +58,15 @@ def main():
         log("no SLACK line (digest skipped: " + (r.stdout.strip()[:120] or "empty") + ")")
         return 0
     txt = sanitize(line[len('SLACK|'):].replace('\\n', '\n'))
-    url = read_url(SUPPORT_URL_FILE)
+    url = read_url(AETNA_URL_FILE)
     if not url:
-        log(f"SKIP: no support webhook URL at {SUPPORT_URL_FILE}")
+        log(f"SKIP: no aetna-updates webhook URL at {AETNA_URL_FILE}")
         return 0
     try:
         st, body = post(url, txt)
-        log(f"posted HRP status -> support: HTTP {st} {body[:50]}")
+        log(f"posted HRP status -> aetna-updates: HTTP {st} {body[:50]}")
     except Exception as e:
-        log(f"ERROR -> support: {e}")
+        log(f"ERROR -> aetna-updates: {e}")
     return 0
 
 

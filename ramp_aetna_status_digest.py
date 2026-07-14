@@ -234,6 +234,52 @@ def sql_job(server, name):
     return f"{icon}*{st}* | last run {oc} ({fmt_dt(row[-13], row[-12])})"
 
 
+def _to_dt(v):
+    """Parse a RAMP ISO-ish timestamp to datetime, or None."""
+    if not v:
+        return None
+    try:
+        return datetime.fromisoformat(str(v).split('.')[0])
+    except Exception:
+        try:
+            return datetime.strptime(str(v), '%Y-%m-%d %H:%M:%S')
+        except Exception:
+            return None
+
+
+def snap_is_current(load_jobid, snap_jobid):
+    """True if the snap's latest run belongs to the CURRENT load — i.e. the snap
+    STARTED at/after the load's latest completion. A load that hasn't completed
+    yet has no current snap (returns False). Per user 2026-07-14: don't credit a
+    snap that ran for a prior load cycle."""
+    load_end = _to_dt(job_run(load_jobid).get('EndDate'))
+    snap_start = _to_dt(job_run(snap_jobid).get('StartDate'))
+    return bool(load_end and snap_start and snap_start >= load_end)
+
+
+def snap_line(load_jobid, snap_jobid):
+    """Status body for a Snap RAMP job. Per user (2026-07-14): do NOT show the
+    snap as Successful until it has finished for the CURRENT load. A resolved snap
+    whose run predates the current load's completion (or a load still running) is
+    stale -> shown as waiting, not a green check. A Failed snap still surfaces as
+    a red X regardless (worth investigating)."""
+    lr = job_run(snap_jobid)
+    status = lr.get('Status', '?')
+    start = lr.get('StartDate'); end = lr.get('EndDate')
+    if end and status in RAMP_OK and not snap_is_current(load_jobid, snap_jobid):
+        return (":hourglass_flowing_sand: *Waiting to snap current load* "
+                f"(last snap {status} {fmt(end)}, ran before this load completed)")
+    if end and status in RAMP_OK:
+        return f":white_check_mark: *{status}* | started {fmt(start)} | *completed {fmt(end)}*"
+    if end and status == 'Failed':
+        return f":x: *FAILED* | started {fmt(start)} | ended {fmt(end)} - please investigate"
+    if end:
+        return f"*{status}* | started {fmt(start)} | *completed {fmt(end)}*"
+    if not start:
+        return f"*{status}* (queued) | not yet started"
+    return f"*{status}* (running) | started {fmt(start)} | not yet complete"
+
+
 def _ramp_succeeded_today(jobid, ok=('Successful',)):
     """True if a RAMP job reached an OK terminal status today."""
     lr = job_run(jobid)
@@ -252,9 +298,11 @@ def rce_succeeded_today():
 
 
 def snap_succeeded_today():
-    """True if RAMP 'Aetna RCE 400 Daily Snap' (10053) resolved OK today.
-    Snaps report 'Resolved' (not 'Successful') on a clean run."""
-    return _ramp_succeeded_today(SNAP_JOBID, RAMP_OK)
+    """True if RAMP 'Aetna RCE 400 Daily Snap' (10053) resolved OK today AND that
+    snap ran for the CURRENT load (started after the RCE load completed). A stale
+    resolved snap from a prior cycle does NOT count (per user 2026-07-14)."""
+    return (_ramp_succeeded_today(SNAP_JOBID, RAMP_OK)
+            and snap_is_current(RCE_JOBID, SNAP_JOBID))
 
 
 def job_succeeded_today(server, name):
@@ -300,7 +348,8 @@ def main():
     for item in DIGEST_ITEMS:
         if item[0] == 'ramp':
             _, jobid, _, label = item
-            lines.append(f"- `{label}` (RAMP): " + ramp_line(jobid))
+            body = snap_line(RCE_JOBID, jobid) if jobid == SNAP_JOBID else ramp_line(jobid)
+            lines.append(f"- `{label}` (RAMP): " + body)
         else:
             _, server, name, label = item
             lines.append(f"- `{label}` ({server}): " + sql_job(server, name))
