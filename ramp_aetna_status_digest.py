@@ -50,14 +50,18 @@ def _claim_slot():
         json.dump({'last_emit': datetime.now().isoformat()}, f)
     os.replace(tmp, STATE_FILE)
 
-# (server, SQL Agent job name, display label). Per user 2026-07-14 the "Aetna RCE
-# ETL Load" shown in SSMS Job Activity Monitor is 'ETL_AetnaSupport_MasterLoad'
-# (its step 3 = 'Build Chimera' — the step the user watches). This reverses the
-# 2026-06-23 swap to 'SSIS AetnaRCE Daily Process' (that job runs overnight and
-# was already Idle by digest time, so it reported "Idle" while the load the user
-# was actually watching was still running).
+# (server, SQL Agent job name, display label). Per user 2026-07-14 the digest
+# tracks EVERYTHING the "Aetna RCE 310 ETL Load" process shows in the TRGETL2 Job
+# Activity Monitor -> BOTH TRGETL2 load jobs:
+#   * 'SSIS AetnaRCE Daily Process'  — the overnight RCE run (its start matches
+#     the RAMP 2257 "Aetna RCE 310 ETL Load" start; Build Chimera is step 4).
+#   * 'ETL_AetnaSupport_MasterLoad'  — the later Support MasterLoad (Build Chimera
+#     is step 3); this is the one that was mid-run showing "Idle" earlier because
+#     the digest had been pointed only at the already-finished overnight job.
+# (History: single-job, swapped AuditSupport<->Daily Process 6/23 & 7/14; now BOTH.)
 SQL_JOBS = [
-    ("TRGETL2", "ETL_AetnaSupport_MasterLoad", "Aetna RCE ETL Load"),
+    ("TRGETL2", "SSIS AetnaRCE Daily Process", "Aetna RCE Daily Process"),
+    ("TRGETL2", "ETL_AetnaSupport_MasterLoad", "Aetna RCE Support MasterLoad"),
     ("TRGETL4", "ETL NCStateAetna MasterLoad", "ETL NCStateAetna MasterLoad"),
 ]
 
