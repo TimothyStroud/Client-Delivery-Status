@@ -590,16 +590,15 @@ MANUAL_OVERRIDES = {
     # today+future Wednesdays are handled by adding "Oscar" to FORCED_INACTIVE.
     ("Oscar",         date(2026, 7, 1)): "Inactive",
     ("Oscar",         date(2026, 7, 8)): "Inactive",
-    # 2026-07-09: AetnaHRP (daily) is in a Load Failure state — the 7/5, 7/6,
-    # 7/7 data still have not loaded, and the 7/8 certification did NOT include
-    # those files. Pin "Load Failure" (pink) on Mon 7/6 (covers the 7/5 Sun
-    # data), Tue 7/7 and Thu 7/9. The 7/8 cell shows the 7/8 cert date (per user
-    # 2026-07-09: re-add the HRP cert for 7/8, rest remain Load Failure).
-    # Remove/replace once the backlog loads and certifies.
-    ("AetnaHRP",      date(2026, 7, 6)): "Load Failure",
-    ("AetnaHRP",      date(2026, 7, 7)): "Load Failure",
+    # 2026-07-09: AetnaHRP (daily) was in a Load Failure state — the 7/5, 7/6,
+    # 7/7 data had not loaded, and the 7/8 certification did NOT include those
+    # files. 2026-07-15: per user the backlog loaded and CERTIFIED today (7/15);
+    # last week's Load-Failure cells (7/6, 7/7, 7/9) now show the 7/15 cert date.
+    # The 7/8 cell keeps its own 7/8 cert.
+    ("AetnaHRP",      date(2026, 7, 6)): date(2026, 7, 15),
+    ("AetnaHRP",      date(2026, 7, 7)): date(2026, 7, 15),
     ("AetnaHRP",      date(2026, 7, 8)): date(2026, 7, 8),
-    ("AetnaHRP",      date(2026, 7, 9)): "Load Failure",
+    ("AetnaHRP",      date(2026, 7, 9)): date(2026, 7, 15),
     # 2026-07-13: TuftsMedPref (weekly Mon) — today's cert (7/13) is for THIS
     # week's data. Last week's data is still MISSING. Pin the 7/13 cert on this
     # week's Mon 7/13 cell and flag last week's Mon 7/6 cell "No Data" (pink).
@@ -721,6 +720,11 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     # it is in a Load Failure status — not completed. Pin "Load Failure" (pink)
     # on its 6/25 expected day. Remove once the reload completes / certifies.
     "BCBSFLEligibilityLoad": (date(2026, 6, 25), "Load Failure"),
+    # 2026-07-15: HumanaRx (monthly, snap/load-as-delivery) was auto-rendering ✓,
+    # but per user it is still in Staging and has NOT loaded — remove the
+    # checkmark. Pin "L" (in progress) on 7/15. Remove/replace once it actually
+    # loads and snaps.
+    "HumanaRx": (date(2026, 7, 15), "L"),
 }
 
 # Extra rows injected into the calendar after standard placement runs. Use for
