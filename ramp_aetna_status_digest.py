@@ -361,15 +361,20 @@ def main():
         print('NO_POST: RCE + Snap + NCStateAetna all Succeeded today')
         return
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
-    lines = [f"<!here> :bar_chart: *Aetna RCE 310 - Status Update*  ({now})", ""]
+    lines = [f"<!here> :bar_chart: *Aetna RCE 310 - Status Update*  ({now})"]
+    # One block per job, separated by a blank line: label header, status beneath.
     for item in DIGEST_ITEMS:
         if item[0] == 'ramp':
             _, jobid, _, label = item
             body = snap_line(RCE_JOBID, jobid) if jobid == SNAP_JOBID else ramp_line(jobid)
-            lines.append(f"- `{label}` (RAMP): " + body)
+            src = 'RAMP'
         else:
             _, server, name, label = item
-            lines.append(f"- `{label}` ({server}): " + sql_job(server, name))
+            body = sql_job(server, name)
+            src = server
+        lines.append("")                                   # blank line before each job
+        lines.append(f"*{label}* ({src})")
+        lines.append(body)
     msg = "\n".join(lines)
     print("SLACK|" + msg.replace("\n", "\\n"))
 
