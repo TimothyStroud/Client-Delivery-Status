@@ -68,3 +68,14 @@ Outside monthly check window (15th-20th); today is the 13. Skipping.
 Outside monthly check window (15th-20th); today is the 13. Skipping.
 Outside monthly check window (15th-20th); today is the 14. Skipping.
 Outside monthly check window (15th-20th); today is the 14. Skipping.
+Load start (anchor): 2026-07-14 09:08:11.723000
+SLA deadline:        2026-07-17 09:08:11.723000
+Response files found: 5/5
+  [OK ] RESP_RWGS_CEE_FF_*  2026-07-14 19:06
+  [OK ] RESP_EH_RAWLINGS_GPPO_MEMELIG_FA_FM01_PROD_*  2026-07-14 17:29
+  [OK ] RESP_CCI_RAWLINGS_MULTI_MEMELIG_FA_FM01_PROD_*  2026-07-14 15:24
+  [OK ] RESP_CCI_RAWLINGS_CCOMM_EMPGRP_FA_FM01_PROD_*  2026-07-14 10:17
+  [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-07-14 10:19
+Now:                 2026-07-15 09:00:02.825760  (before deadline)
+Send result: Sent.
+Cycle marked as sent.

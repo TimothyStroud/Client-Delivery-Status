@@ -355,9 +355,12 @@ WEEKLY_CLIENTS = {
 # Kaiser_AmbM removed 2026-05-19 (no longer inactive). Snap re-enabled
 # 2026-06-08 — now treated as a normal monthly Kaiser_Amb cert feed (see
 # MONTHLY_CERT_ONLY_CLIENTS / SNAP_KIND_ONLY_CLIENTS).
-# Oscar (weekly Wed) added 2026-07-09 per user: Inactive from 7/1 forward. Past
-# 7/1 & 7/8 cells pinned via MANUAL_OVERRIDES; FORCED_INACTIVE covers today+future.
-FORCED_INACTIVE = {"Tufts_PublicPlan", "TuftsRx", "HealthNetCA", "Oscar"}
+# Oscar (weekly Wed) was Inactive 7/1-7/8; reactivated 2026-07-15 (backfill
+# certified today covering 7/1 & 7/8, new week loads today) — removed from
+# FORCED_INACTIVE. See MANUAL_OVERRIDES for the 7/1/7/8/7/15 cells.
+# ESIPBMRx (monthly, tape/snap-driven) added 2026-07-15 per user: mark Inactive
+# until loading resumes ("can go to 'L' once loading starts again").
+FORCED_INACTIVE = {"Tufts_PublicPlan", "TuftsRx", "HealthNetCA", "ESIPBMRx"}
 
 # Clients whose load is running but snap step is disabled in RAMP — show
 # marker "Snap" with pink shading on the expected delivery day. Mechanism kept
@@ -585,20 +588,22 @@ MANUAL_OVERRIDES = {
     # occasional occurrence per user. Mark the 7/7 Tuesday cell "Empty" (pink,
     # matching the team's ALL_CLIENTS_ALERT_MARKERS convention). Remove next week.
     ("HMSA_Rx",       date(2026, 7, 7)): "Empty",
-    # 2026-07-09: Oscar (weekly Wed) — mark Inactive from 7/1 forward (per user).
-    # 7/1 and 7/8 are past Wednesday cells so they need explicit overrides;
-    # today+future Wednesdays are handled by adding "Oscar" to FORCED_INACTIVE.
-    ("Oscar",         date(2026, 7, 1)): "Inactive",
-    ("Oscar",         date(2026, 7, 8)): "Inactive",
+    # 2026-07-09: Oscar (weekly Wed) — was Inactive 7/1 & 7/8. 2026-07-15: per
+    # user a backfill certified today (7/15) covering BOTH the 7/1 and 7/8
+    # deliveries; the new week is active and loads today. Pin the 7/15 cert on
+    # the 7/1 & 7/8 cells and "L" on this week's 7/15 cell (loading today).
+    ("Oscar",         date(2026, 7, 1)):  date(2026, 7, 15),
+    ("Oscar",         date(2026, 7, 8)):  date(2026, 7, 15),
+    ("Oscar",         date(2026, 7, 15)): "L",
     # 2026-07-09: AetnaHRP (daily) was in a Load Failure state — the 7/5, 7/6,
     # 7/7 data had not loaded, and the 7/8 certification did NOT include those
-    # files. 2026-07-15: per user the backlog loaded and CERTIFIED today (7/15);
-    # last week's Load-Failure cells (7/6, 7/7, 7/9) now show the 7/15 cert date.
-    # The 7/8 cell keeps its own 7/8 cert.
-    ("AetnaHRP",      date(2026, 7, 6)): date(2026, 7, 15),
-    ("AetnaHRP",      date(2026, 7, 7)): date(2026, 7, 15),
+    # files. 2026-07-15: per user the backlog loaded and certified; the last-week
+    # Load-Failure cells (7/6, 7/7, 7/9) now show ✓ (corrected from a 7/15 cert
+    # date per user). The 7/8 cell keeps its own 7/8 cert.
+    ("AetnaHRP",      date(2026, 7, 6)): "✓",
+    ("AetnaHRP",      date(2026, 7, 7)): "✓",
     ("AetnaHRP",      date(2026, 7, 8)): date(2026, 7, 8),
-    ("AetnaHRP",      date(2026, 7, 9)): date(2026, 7, 15),
+    ("AetnaHRP",      date(2026, 7, 9)): "✓",
     # 2026-07-13: TuftsMedPref (weekly Mon) — today's cert (7/13) is for THIS
     # week's data. Last week's data is still MISSING. Pin the 7/13 cert on this
     # week's Mon 7/13 cell and flag last week's Mon 7/6 cell "No Data" (pink).
@@ -3784,7 +3789,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         if key in _cvspbm_ah_seen:
             continue
         _cvspbm_ah_seen.add(key)
-        weekly[cell].append(("CVSPBMRx (Ad Hoc)", mk, False, None))
+        # Highlight the in-flight "L" (per user 2026-07-15) so the Ad Hoc
+        # backfill stands out while it loads; the highlight clears once the
+        # load job finishes and snaps (mk flips to ✓).
+        ah_highlight = "yellow" if mk == "L" else None
+        weekly[cell].append(("CVSPBMRx (Ad Hoc)", mk, False, ah_highlight))
 
     # One-off (per user 2026-06-11): Kaiser_AmbM runs a SECOND June cycle — it
     # certified 6/11, and a new monthly load lands ~6/18. determine_monthly only
