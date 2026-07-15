@@ -229,16 +229,23 @@ def sql_job(server, name):
         return line
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
+    # Did the most recent run finish TODAY?
+    try:
+        d = int(row[-13])
+        t = datetime.now()
+        ran_today = d == t.year * 10000 + t.month * 100 + t.day
+    except (ValueError, TypeError):
+        ran_today = False
     # Icon rules (per user 2026-07-14, 2026-07-15):
     #   - Failure always wins -> red X.
-    #   - Otherwise an Idle process shows the hourglass (it's between runs).
-    #   - Any other non-executing state with a Succeeded last run -> checkmark.
+    #   - Today's run already Succeeded -> keep the green checkmark (done for the day).
+    #   - Otherwise an Idle process shows the hourglass (between runs, not yet done).
     if oc == 'Failed':
         icon = ':x: '
-    elif status == '4':                       # Idle -> hourglass unless a failure
-        icon = ':hourglass_flowing_sand: '
-    elif oc == 'Succeeded':
+    elif oc == 'Succeeded' and ran_today:
         icon = ':white_check_mark: '
+    elif status == '4':                       # Idle, no success yet today -> hourglass
+        icon = ':hourglass_flowing_sand: '
     else:
         icon = ''
     return f"{icon}*{st}* | last run {oc} ({fmt_dt(row[-13], row[-12])})"
