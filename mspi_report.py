@@ -313,12 +313,20 @@ HTML_TEMPLATE = """<!doctype html>
   }
   table.matrix thead th.rowhdr { z-index: 4; text-align: left; }
 
-  /* Frozen Client & Contract columns */
-  table.matrix th.rowhdr, table.matrix td.rowhdr { padding: 7px 14px; font-size: 12.5px; position: sticky; }
+  /* Frozen Client & Contract columns — fixed widths so the sticky left
+     offsets line up exactly with the auto-sized table columns. */
+  table.matrix th.rowhdr, table.matrix td.rowhdr {
+    padding: 7px 14px; font-size: 12.5px; position: sticky;
+    overflow: hidden; text-overflow: ellipsis;
+  }
   table.matrix td.rowhdr { background: #fff; color: var(--text); z-index: 2; }
-  table.matrix th.c-client, table.matrix td.c-client { left: 0; min-width: 185px; border-right: 1px solid #eef1f5; }
+  table.matrix th.c-client, table.matrix td.c-client {
+    left: 0; width: 190px; min-width: 190px; max-width: 190px;
+    border-right: 1px solid #eef1f5;
+  }
   table.matrix th.c-contract, table.matrix td.c-contract {
-    left: 185px; min-width: 115px; font-variant-numeric: tabular-nums; color: var(--muted);
+    left: 190px; width: 120px; min-width: 120px; max-width: 120px;
+    font-variant-numeric: tabular-nums; color: var(--muted);
     border-right: 2px solid var(--border);
   }
 
@@ -348,7 +356,10 @@ HTML_TEMPLATE = """<!doctype html>
   /* Contract child rows */
   tr.contract-row:hover td { background: #f4f8fd; }
   tr.contract-row:hover td.rowhdr { background: #eef4fb; }
-  tr.contract-row td.c-contract { padding-left: 24px; position: relative; }
+  /* NB: c-contract is position:sticky, which is itself a containing block for
+     this absolute marker — do NOT add position:relative here (it would cancel
+     the sticky frozen-column behaviour and throw the column out of alignment). */
+  tr.contract-row td.c-contract { padding-left: 24px; }
   tr.contract-row td.c-contract::before {
     content: ""; position: absolute; left: 13px; top: 50%; width: 5px; height: 5px;
     margin-top: -3px; border-radius: 50%; background: #c2ccd8;
