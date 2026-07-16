@@ -316,7 +316,7 @@ def main():
     # Minimal PLAIN-TEXT format (per user 2026-07-16): ONLY the ETL AetnaRx
     # MasterLoad Claims And Eligibility step & ETA. Webhook renders only :emoji:
     # (no markup/color), so the only standout is the :red_circle: on the ETA line.
-    lines = [f"AETNA RX - STATUS UPDATE   ({now})", ""]
+    lines = ["AETNA RX - STATUS UPDATE", ""]
     for server, name, label in SQL_JOBS:
         status_text, detail = sql_job(server, name)
         lines.append(f"{label} {status_text}".rstrip())

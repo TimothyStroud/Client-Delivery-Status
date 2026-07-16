@@ -463,7 +463,7 @@ def main():
     # & ETA + the claim file(s) loading from Aetna 0100 HRP Stage. The webhook
     # renders only :emoji: (no markup/color), so the only standout is the
     # :red_circle: on the ETA line.
-    lines = [f"AETNA HRP - STATUS UPDATE   ({now})", ""]
+    lines = ["AETNA HRP - STATUS UPDATE", ""]
     for server, name, label in SQL_JOBS:
         status_text, detail = sql_job(server, name)
         lines.append(f"{label} {status_text}".rstrip())

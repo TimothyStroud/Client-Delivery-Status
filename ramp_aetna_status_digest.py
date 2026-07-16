@@ -391,7 +391,7 @@ def main():
     # Minimal PLAIN-TEXT format (per user 2026-07-16): the webhook renders only
     # :emoji: -- *bold*/_italic_/`code` show literally + Slack has no text color --
     # so no markup; the only standout is a :red_circle: on the ETA line.
-    lines = [f"AETNA RCE - STATUS UPDATE   ({now})", ""]
+    lines = ["AETNA RCE - STATUS UPDATE", ""]
     for server, name, label in SQL_JOBS:
         status_text, detail = sql_job(server, name)
         lines.append(f"{label} {status_text}".rstrip())
