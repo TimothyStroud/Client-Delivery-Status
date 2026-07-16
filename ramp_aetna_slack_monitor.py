@@ -72,9 +72,9 @@ def detect(runs, state):
     # final status never flips and a later failure carries a new QueueId.
     if rce.get('EndDate') and rce.get('Status') == 'Failed' \
             and rce.get('QueueId') != state.get('rce_last_completed_qid'):
-        txt = ("<!here> :x: *Aetna RCE 310 ETL Load - FAILED in RAMP*\n"
-               f"_QueueId {rce['QueueId']} | started {fmt(rce.get('StartDate'))} | "
-               f"ended {fmt(rce.get('EndDate'))} - please investigate_")
+        txt = ("<!here> :x: Aetna RCE 310 ETL Load - FAILED in RAMP\n"
+               f"QueueId {rce['QueueId']} | started {fmt(rce.get('StartDate'))} | "
+               f"ended {fmt(rce.get('EndDate'))} - please investigate")
         events.append(('rce', txt))
     return events
 

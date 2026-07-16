@@ -74,9 +74,9 @@ def detect(runs, state):
     for jobid, (name, lr) in sorted(runs.items()):
         if lr.get('EndDate') and lr.get('Status') == 'Failed' \
                 and lr.get('QueueId') != last.get(str(jobid)):
-            txt = (f"<!here> :x: *{name} - FAILED in RAMP*\n"
-                   f"_QueueId {lr['QueueId']} | started {fmt(lr.get('StartDate'))} | "
-                   f"ended {fmt(lr.get('EndDate'))} - please investigate_")
+            txt = (f"<!here> :x: {name} - FAILED in RAMP\n"
+                   f"QueueId {lr['QueueId']} | started {fmt(lr.get('StartDate'))} | "
+                   f"ended {fmt(lr.get('EndDate'))} - please investigate")
             events.append((jobid, txt))
     return events
 

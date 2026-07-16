@@ -218,19 +218,19 @@ def sql_job(server, name):
         return ("(no data)", "")
     status, step = row[-7], row[-6]
     if status == '1':
-        eta = None
+        detail = [f"Step {step}"]
         m = re.match(r'\s*(\d+)', step)
         if m:
             secs = remaining_secs(server, name, int(m.group(1)))
             if secs and secs > 0:
                 eta = _clock(datetime.now() + timedelta(seconds=secs))
-        detail = f"_Step {step}_"
-        if eta:
-            detail += f"   `ETA ~{eta}`"     # inline code -> standout color
+                # ETA on its own line with a red-dot emoji (only standout Slack
+                # renders; mrkdwn/color do not) -- per user 2026-07-16.
+                detail.append(f":red_circle: ETA ~{eta}")
         return ("Executing", detail)
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
-    return (st, f"_last run {oc} ({fmt_dt(row[-13], row[-12])})_")
+    return (st, [f"last run {oc} ({fmt_dt(row[-13], row[-12])})"])
 
 
 def job_succeeded_today(server, name):
@@ -279,14 +279,14 @@ def main():
         return
 
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
-    # Minimal format (per user 2026-07-16): ONLY the ETL AetnaRx MasterLoad Claims
-    # And Eligibility step & ETA. Bold job name + status, step/ETA italic. No emoji.
-    lines = [f"*Aetna Rx - Status Update*   _{now}_", ""]
+    # Minimal PLAIN-TEXT format (per user 2026-07-16): ONLY the ETL AetnaRx
+    # MasterLoad Claims And Eligibility step & ETA. Webhook renders only :emoji:
+    # (no markup/color), so the only standout is the :red_circle: on the ETA line.
+    lines = [f"Aetna Rx - Status Update   ({now})", ""]
     for server, name, label in SQL_JOBS:
         head, detail = sql_job(server, name)
-        lines.append(f"*{label}*  {head}")
-        if detail:
-            lines.append(detail)   # detail already carries its own _italic_ / `code`
+        lines.append(f"{label}  {head}")
+        lines.extend(detail)
         lines.append("")
     while lines and lines[-1] == "":
         lines.pop()

@@ -47,9 +47,13 @@ def read_url(path):
 
 
 def sanitize(text):
-    """Workflow Builder renders mrkdwn (*bold* / _italic_) + :emoji: (confirmed
-    2026-07-16), but <!here> shows literally and does not ping -> drop only that."""
-    return text.replace('<!here> ', '').replace('<!here>', '')
+    """Workflow Builder shows *bold*/_italic_/`code` LITERALLY (only :emoji:
+    renders) — confirmed 2026-07-16, superseding the earlier mistaken 'bold
+    renders' note — so strip them. <!here> also shows literally + doesn't ping."""
+    text = text.replace('<!here> ', '').replace('<!here>', '')
+    text = re.sub(r'(?m)^> ?', '', text)
+    # NB: do NOT strip '_' -> it lives inside emoji shortcodes (:red_circle:).
+    return text.replace('*', '').replace('`', '')
 
 
 def post(url, text):

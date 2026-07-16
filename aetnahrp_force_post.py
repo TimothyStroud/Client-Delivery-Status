@@ -30,9 +30,12 @@ def log(msg):
 
 
 def sanitize(text):
-    # Workflow Builder renders mrkdwn (*bold*/_italic_) + emoji; only <!here> must
-    # be dropped (shows literally, doesn't ping). Confirmed 2026-07-16.
-    return text.replace('<!here> ', '').replace('<!here>', '')
+    # Workflow Builder shows *bold*/_italic_/`code` literally (only emoji renders,
+    # confirmed 2026-07-16); strip them + <!here> (which also shows literally).
+    text = text.replace('<!here> ', '').replace('<!here>', '')
+    text = re.sub(r'(?m)^> ?', '', text)
+    # NB: do NOT strip '_' -> it lives inside emoji shortcodes (:red_circle:).
+    return text.replace('*', '').replace('`', '')
 
 
 def post(url, text):
