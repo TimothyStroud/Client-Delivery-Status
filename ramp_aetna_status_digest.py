@@ -56,24 +56,11 @@ def _claim_slot():
         json.dump({'last_emit': datetime.now().isoformat()}, f)
     os.replace(tmp, STATE_FILE)
 
-# Digest items, grouped in main() into a RAMP section + a SQL section.
-# RAMP jobs (per user 2026-07-16 the 310 ETL Load is back, plus Daily Mine, the two
-# Weekly jobs, and the NCStateAetna snap were added):
-#   Aetna RCE 310 ETL Load / 400 Daily Snap / 450 Daily Mine / 330 Weekly Snap /
-#   350 Weekly Mining / NCStateAetna 0110 Snap
-# SQL Job Activity Monitor:
-#   Aetna RCE Daily Process / ETL NCStateAetna MasterLoad / Aetna RCE Support MasterLoad
-# Each item: ('sql', server, jobname, label) or ('ramp', jobid, None, label).
-DIGEST_ITEMS = [
-    ('ramp', RCE_JOBID,          None, 'Aetna RCE 310 ETL Load'),
-    ('ramp', SNAP_JOBID,         None, 'Aetna RCE 400 Daily Snap'),
-    ('ramp', DAILY_MINE_JOBID,   None, 'Aetna RCE 450 Daily Mine'),
-    ('ramp', WEEKLY_SNAP_JOBID,  None, 'Aetna RCE 330 Weekly Snap'),
-    ('ramp', WEEKLY_MINE_JOBID,  None, 'Aetna RCE 350 Weekly Mining'),
-    ('ramp', NCSTATE_SNAP_JOBID, None, 'NCStateAetna 0110 Snap'),
-    ('sql',  'TRGETL2', 'SSIS AetnaRCE Daily Process', 'Aetna RCE Daily Process'),
-    ('sql',  'TRGETL4', 'ETL NCStateAetna MasterLoad', 'ETL NCStateAetna MasterLoad'),
-    ('sql',  'TRGETL2', 'ETL_AetnaSupport_MasterLoad', 'Aetna RCE Support MasterLoad'),
+# New minimal format (per user 2026-07-16): show ONLY the step & ETA of these two
+# SQL Agent jobs. (server, SQL Agent job name, display label.)
+SQL_JOBS = [
+    ("TRGETL2", "SSIS AetnaRCE Daily Process", "Aetna RCE Daily Process"),
+    ("TRGETL4", "ETL NCStateAetna MasterLoad", "ETL NCStateAetna MasterLoad"),
 ]
 
 OUTCOME = {1: "Succeeded", 0: "Failed", 2: "Retry", 3: "Canceled", 4: "In Progress"}
@@ -244,36 +231,16 @@ def sql_job(server, name):
 
     status, step = row[-7], row[-6]
     if status == '1':                        # Executing -> current step + ETA
-        detail = step
+        detail = f"Step {step}"
         m = re.match(r'\s*(\d+)', step)      # leading step number, e.g. "4 (Build Chimera)"
         if m:
             secs = remaining_secs(server, name, int(m.group(1)))
             if secs and secs > 0:
                 detail += f" | ETA ~{_clock(datetime.now() + timedelta(seconds=secs))}"
-        return (f"{EXEC_ICON} Executing", detail)
+        return ("Executing", detail)
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
-    # Did the most recent run finish TODAY?
-    try:
-        d = int(row[-13])
-        t = datetime.now()
-        ran_today = d == t.year * 10000 + t.month * 100 + t.day
-    except (ValueError, TypeError):
-        ran_today = False
-    # Icon rules (per user 2026-07-14, 2026-07-15):
-    #   - Failure always wins -> red X.
-    #   - Today's run already Succeeded -> keep the green checkmark (done for the day).
-    #   - Otherwise an Idle process shows the hourglass (between runs, not yet done).
-    if oc == 'Failed':
-        icon = ':x:'
-    elif oc == 'Succeeded' and ran_today:
-        icon = ':white_check_mark:'
-    elif status == '4':                       # Idle, no success yet today -> hourglass
-        icon = ':hourglass_flowing_sand:'
-    else:
-        icon = ''
-    head = f"{icon} {st}".strip()
-    return (head, f"last run {oc} ({fmt_dt(row[-13], row[-12])})")
+    return (st, f"last run {oc} ({fmt_dt(row[-13], row[-12])})")
 
 
 def _to_dt(v):
@@ -376,43 +343,22 @@ def main():
     # against this one. Done before the slow SQL/curl work to shrink the race window.
     _claim_slot()
 
-    # Per user 2026-06-23: once BOTH the RCE load and NCStateAetna MasterLoad
-    # have already SUCCEEDED today, the rest of the day's digests are redundant
-    # -> emit no SLACK line so the cron/task posts nothing. (If either is still
-    # running, failed, or hasn't run, the digest still posts.)
-    if (rce_succeeded_today()
-            and snap_succeeded_today()
+    # Once BOTH SQL jobs have already SUCCEEDED today, the rest of the day's
+    # digests are redundant -> emit no SLACK line so the task posts nothing.
+    if (job_succeeded_today('TRGETL2', 'SSIS AetnaRCE Daily Process')
             and job_succeeded_today('TRGETL4', 'ETL NCStateAetna MasterLoad')):
-        print('NO_POST: RCE + Snap + NCStateAetna all Succeeded today')
+        print('NO_POST: Aetna RCE Daily Process + NCStateAetna Succeeded today')
         return
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
-    # Bold job/section names carry the status (main line); timestamps drop to a
-    # quiet italic sub-line so the reader hones in on state (per user 2026-07-16).
-    lines = [f":bar_chart: *Aetna RCE 310 - Status Update*   _{now}_", ""]
-
-    # Broken out into RAMP + SQL sections like the AetnaRx digest (per user
-    # 2026-07-16), a blank line between every item.
-    ramp_items = [it for it in DIGEST_ITEMS if it[0] == 'ramp']
-    sql_items = [it for it in DIGEST_ITEMS if it[0] == 'sql']
-
-    if ramp_items:
-        lines.append("*RAMP*")
-        for _, jobid, _, label in ramp_items:
-            head, detail = snap_line(RCE_JOBID, jobid) if jobid == SNAP_JOBID else ramp_line(jobid)
-            lines.append(f"*{label}*  {head}")
-            if detail:
-                lines.append(f"_{detail}_")
-            lines.append("")
-
-    if sql_items:
-        lines.append("*SQL Job Activity Monitor*")
-        for _, server, name, label in sql_items:
-            head, detail = sql_job(server, name)
-            lines.append(f"*{label}*  ({server})  {head}")
-            if detail:
-                lines.append(f"_{detail}_")
-            lines.append("")
-
+    # Minimal format (per user 2026-07-16): bold job name + status, step & ETA on a
+    # quiet italic sub-line. No emoji.
+    lines = [f"*Aetna RCE - Status Update*   _{now}_", ""]
+    for server, name, label in SQL_JOBS:
+        head, detail = sql_job(server, name)
+        lines.append(f"*{label}*  {head}")
+        if detail:
+            lines.append(f"_{detail}_")
+        lines.append("")
     while lines and lines[-1] == "":
         lines.pop()
     msg = "\n".join(lines)

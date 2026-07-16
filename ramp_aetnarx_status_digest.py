@@ -218,17 +218,16 @@ def sql_job(server, name):
         return ("(no data)", "")
     status, step = row[-7], row[-6]
     if status == '1':
-        detail = step
+        detail = f"Step {step}"
         m = re.match(r'\s*(\d+)', step)
         if m:
             secs = remaining_secs(server, name, int(m.group(1)))
             if secs and secs > 0:
                 detail += f" | ETA ~{_clock(datetime.now() + timedelta(seconds=secs))}"
-        return (f"{EXEC_ICON} Executing", detail)
+        return ("Executing", detail)
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
-    icon = ':white_check_mark:' if oc == 'Succeeded' else (':x:' if oc == 'Failed' else ':hourglass_flowing_sand:')
-    return (f"{icon} {st}", f"last run {oc} ({fmt_dt(row[-13], row[-12])})")
+    return (st, f"last run {oc} ({fmt_dt(row[-13], row[-12])})")
 
 
 def job_succeeded_today(server, name):
@@ -270,43 +269,19 @@ def main():
             return
     _claim_slot()
 
-    jobs = claim_jobs()
-
-    # Fully green for today (SQL Claims+Elig Succeeded today AND no Claim RAMP job
-    # failed/running today) -> redundant, emit nothing.
-    if (job_succeeded_today('TRGETL2', 'ETL AetnaRx MasterLoad Claims And Eligibility')
-            and all_claim_green_today(jobs)):
-        print('NO_POST: AetnaRx Claim pipeline + SQL Succeeded today (RAMP + SQL)')
+    # Once ETL AetnaRx MasterLoad Claims And Eligibility has SUCCEEDED today, the
+    # rest of the day's digests are redundant -> emit no SLACK line.
+    if job_succeeded_today('TRGETL2', 'ETL AetnaRx MasterLoad Claims And Eligibility'):
+        print('NO_POST: ETL AetnaRx MasterLoad Claims And Eligibility Succeeded today')
         return
 
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
-    # Bold job/section names carry the status (main line); the timestamps drop to a
-    # quiet italic sub-line so the reader hones in on state (per user 2026-07-16).
-    lines = [f":bar_chart: *AetnaRx Claim - Status Update*   _{now}_", ""]
-    if jobs:
-        # Break the pipeline into readable phase sub-sections (like HRP): each
-        # phase is its own labeled block separated by a blank line.
-        grouped = {}
-        for name, lr in jobs:
-            grouped.setdefault(phase_of(name), []).append((name, lr))
-        for phase in PHASE_ORDER:
-            if phase not in grouped:
-                continue
-            lines.append(f"*RAMP - {phase}*")
-            for name, lr in grouped[phase]:
-                head, detail = ramp_line(name, lr)
-                lines.append(f"*{short_name(name)}*  {head}")
-                if detail:
-                    lines.append(f"_{detail}_")
-                lines.append("")   # blank line between jobs for readability
-    else:
-        lines.append("*RAMP*")
-        lines.append("(no AetnaRx Claim jobs found in RAMP)")
-        lines.append("")
-    lines.append("*SQL Job Activity Monitor*")
+    # Minimal format (per user 2026-07-16): ONLY the ETL AetnaRx MasterLoad Claims
+    # And Eligibility step & ETA. Bold job name + status, step/ETA italic. No emoji.
+    lines = [f"*Aetna Rx - Status Update*   _{now}_", ""]
     for server, name, label in SQL_JOBS:
         head, detail = sql_job(server, name)
-        lines.append(f"*{label}*  ({server})  {head}")
+        lines.append(f"*{label}*  {head}")
         if detail:
             lines.append(f"_{detail}_")
         lines.append("")

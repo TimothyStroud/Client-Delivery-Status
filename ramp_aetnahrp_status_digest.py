@@ -219,19 +219,16 @@ def sql_job(server, name):
 
     status, step = row[-7], row[-6]
     if status == '1':                        # Executing -> current step + ETA
-        detail = step
+        detail = f"Step {step}"
         m = re.match(r'\s*(\d+)', step)      # leading step number
         if m:
             secs = remaining_secs(server, name, int(m.group(1)))
             if secs and secs > 0:
                 detail += f" | ETA ~{_clock(datetime.now() + timedelta(seconds=secs))}"
-        return (f"{EXEC_ICON} Executing", detail)
+        return ("Executing", detail)
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
-    # Checkmark for a Succeeded last run, red X for Failed (per user 2026-07-14).
-    icon = ':white_check_mark:' if oc == 'Succeeded' else (':x:' if oc == 'Failed' else '')
-    head = f"{icon} {st}".strip()
-    return (head, f"last run {oc} ({fmt_dt(row[-13], row[-12])})")
+    return (st, f"last run {oc} ({fmt_dt(row[-13], row[-12])})")
 
 
 def _to_dt(v):
@@ -390,7 +387,7 @@ def claim_file_lines(files, icon):
     out = []
     for name, dt in files:
         dstr = dt.strftime('%m/%d/%Y') if dt else '?'
-        out.append(f"- {icon} `{name}` ({dstr})")
+        out.append(f"- `{name}`  _({dstr})_")   # no emoji per user 2026-07-16
     return out
 
 
@@ -419,31 +416,18 @@ def main():
             return
     _claim_slot()
 
-    # Once the HRP load has already SUCCEEDED today in BOTH RAMP and the SQL
-    # Agent job, the rest of the day's digests are redundant -> emit no SLACK
-    # line so nothing posts. (If either is still running, failed, or hasn't run,
-    # the digest still posts.)
-    if (hrp_succeeded_today()
-            and snap_succeeded_today()
-            and job_succeeded_today('TRGETL2', 'ETL AetnaHRP MasterLoad')):
-        print('NO_POST: HRP load + snap Succeeded today (RAMP + SQL)')
+    # Once ETL AetnaHRP MasterLoad has SUCCEEDED today, the rest of the day's
+    # digests are redundant -> emit no SLACK line so nothing posts.
+    if job_succeeded_today('TRGETL2', 'ETL AetnaHRP MasterLoad'):
+        print('NO_POST: ETL AetnaHRP MasterLoad Succeeded today')
         return
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
-    # Bold job/section names carry the status (main line); timestamps drop to a
-    # quiet italic sub-line so the reader hones in on state (per user 2026-07-16).
-    lines = [f":bar_chart: *Aetna HRP - Status Update*   _{now}_", ""]
-    lines.append("*RAMP*")
-    for label, (head, detail) in [
-            ("Aetna 0110 HRP Load", ramp_line(HRP_JOBID)),
-            ("Aetna 0120 HRP Snap", snap_line(HRP_JOBID, SNAP_JOBID))]:
-        lines.append(f"*{label}*  {head}")
-        if detail:
-            lines.append(f"_{detail}_")
-        lines.append("")
-    lines.append("*SQL Job Activity Monitor*")
+    # Minimal format (per user 2026-07-16): ETL AetnaHRP MasterLoad step & ETA +
+    # the claim file(s) currently loading from Aetna 0100 HRP Stage. No emoji.
+    lines = [f"*Aetna HRP - Status Update*   _{now}_", ""]
     for server, name, label in SQL_JOBS:
         head, detail = sql_job(server, name)
-        lines.append(f"*{label}*  ({server})  {head}")
+        lines.append(f"*{label}*  {head}")
         if detail:
             lines.append(f"_{detail}_")
         lines.append("")
