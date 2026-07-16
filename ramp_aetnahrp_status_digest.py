@@ -248,22 +248,25 @@ def sql_job(server, name):
             secs = remaining_secs(server, name, int(m.group(1)))
             if secs and secs > 0:
                 eta = _clock(datetime.now() + timedelta(seconds=secs))
-                # ETA on its own line with a red-dot emoji (only standout Slack
-                # renders; mrkdwn/color do not) -- per user 2026-07-16.
-                detail.append(f":red_circle: ETA ~{eta}")
+                # Icon set (per user 2026-07-16): cycling-arrows = loading,
+                # :white_check_mark: = success, :x: = failure.
+                detail.append(f":arrows_counterclockwise: ETA ~{eta}")
         return (f"Executing Step {step}", detail)
-    # Idle: if it completed SUCCESSFULLY TODAY, show green circle + Successful +
-    # completion time (in place of the ETA line), per user 2026-07-16.
+    # Idle: reflect TODAY's last-run outcome (per user 2026-07-16) -- green
+    # checkmark + Successful + completion time, or red X + Failed + time. A run
+    # from a prior day (or never) stays "- Idle" with no icon.
     oc = RUN_OUTCOME.get(row[-11], row[-11])
     try:
         _d = int(row[-13]); _t = datetime.now()
         ran_today = _d == _t.year * 10000 + _t.month * 100 + _t.day
     except (ValueError, TypeError):
         ran_today = False
-    if oc == 'Succeeded' and ran_today:
+    if ran_today and oc in ('Succeeded', 'Failed'):
         comp = last_completion(server, name)
         ctext = comp.strftime('%m/%d/%Y %I:%M %p') if comp else fmt_dt(row[-13], row[-12])
-        return ("", [f":large_green_circle: Successful {ctext}"])
+        if oc == 'Succeeded':
+            return ("", [f":white_check_mark: Successful {ctext}"])
+        return ("", [f":x: Failed {ctext}"])
     st = EXEC_STATUS.get(status, f'State {status}')
     return (f"- {st}", [])
 
