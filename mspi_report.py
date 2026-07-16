@@ -232,7 +232,7 @@ HTML_TEMPLATE = """<!doctype html>
     align-items: end;
   }
   .field { display: flex; flex-direction: column; gap: 4px; }
-  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
   .field select, .field input {
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -294,7 +294,7 @@ HTML_TEMPLATE = """<!doctype html>
   table.matrix thead th {
     position: sticky; top: 0; z-index: 3;
     background: #fff; color: var(--text);
-    padding: 4px 6px; font-size: 11px; text-align: center; font-weight: 600;
+    padding: 4px 6px; font-size: 11px; text-align: center; font-weight: 700;
   }
   table.matrix thead th.wknd { background: #eef2f7; color: var(--muted); }
   table.matrix th.rowhdr, table.matrix td.rowhdr {
@@ -316,9 +316,9 @@ HTML_TEMPLATE = """<!doctype html>
   tr.client-row td.rowhdr { cursor: pointer; background: #fff; }
   tr.client-row:hover td.rowhdr { background: #eef4fb; }
   tr.client-row td.c-client { font-weight: 700; }
-  tr.client-row td.day { background: #13224d; color: #39ff14; }
-  tr.client-row td.day.wknd { background: #0f1c40; }
-  tr.client-row td.day.hit:hover { background: #21407e; }
+  tr.client-row td.day { background: #fff; color: var(--accent); }
+  tr.client-row td.day.wknd { background: #f0f3f7; }
+  tr.client-row td.day.hit:hover { background: #d7ecff; }
   .tri { display: inline-block; width: 12px; margin-right: 4px; color: var(--accent); font-size: 10px; }
   /* Contract child row. */
   tr.contract-row td.c-contract { padding-left: 20px; }
