@@ -282,7 +282,7 @@ def main():
             lines.append(f"*RAMP - {phase}*")
             for name, lr in grouped[phase]:
                 lines.append(f"- `{short_name(name)}`: " + ramp_line(name, lr))
-            lines.append("")
+                lines.append("")   # blank line between jobs for readability
     else:
         lines.append("*RAMP*")
         lines.append("- (no AetnaRx Claim jobs found in RAMP)")
