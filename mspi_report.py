@@ -679,6 +679,15 @@ HTML_TEMPLATE = """<!doctype html>
   }
   const hideTip = () => { tip.style.display = 'none'; };
 
+  // All-time universe of client -> [contracts], so every client/contract is
+  // listed each month whether or not it loaded (the X is the load indicator).
+  const ALL_PAIRS = {};
+  {
+    const tmp = {};
+    for (const r of ROWS) (tmp[r.client] = tmp[r.client] || new Set()).add(r.contract);
+    for (const k of Object.keys(tmp)) ALL_PAIRS[k] = [...tmp[k]].sort((a, b) => a.localeCompare(b));
+  }
+
   let cid = 0;   // unique cell/tooltip id counter across a render
   // Build the day cells for one row from a {day: [files]} map + a class prefix.
   function dayCells(y, m, daysInMonth, dayMap, extraCls) {
@@ -719,13 +728,11 @@ HTML_TEMPLATE = """<!doctype html>
     htr.innerHTML = hh;
     head.appendChild(htr);
 
-    // Group by client, then by contract, for the selected month + filters.
+    // Load data for the selected month drives the X cells (which days loaded).
     // clients[name] = { contracts: {ct: {day:[files]}}, agg: {day:[files]} }
     const clients = {};
     for (const r of ROWS) {
       if (!r.loaded || r.loaded.slice(0, 7) !== ym) continue;
-      if (monthState.client && r.client !== monthState.client) continue;
-      if (monthState.contract && r.contract !== monthState.contract) continue;
       const c = clients[r.client] || (clients[r.client] = { contracts: {}, agg: {} });
       const ct = c.contracts[r.contract] || (c.contracts[r.contract] = {});
       const day = Number(r.loaded.slice(8, 10));
@@ -733,9 +740,15 @@ HTML_TEMPLATE = """<!doctype html>
       (c.agg[day] = c.agg[day] || []).push(r);
     }
 
-    const clientNames = Object.keys(clients).sort((a, b) => a.localeCompare(b));
+    // Render the FULL universe of clients+contracts (loaded or not) for the
+    // month, applying the client/contract filters. Blank X cells = not loaded.
+    let clientNames = Object.keys(ALL_PAIRS);
+    if (monthState.client) clientNames = clientNames.filter(n => n === monthState.client);
+    if (monthState.contract) clientNames = clientNames.filter(n => ALL_PAIRS[n].indexOf(monthState.contract) !== -1);
+    clientNames = clientNames.sort((a, b) => a.localeCompare(b));
+
     if (clientNames.length === 0) {
-      body.innerHTML = '<tr><td class="mx-empty" colspan="' + (daysInMonth + 2) + '">No files loaded in ' + monthLabel(ym) + '.</td></tr>';
+      body.innerHTML = '<tr><td class="mx-empty" colspan="' + (daysInMonth + 2) + '">No clients match the current filters.</td></tr>';
       return;
     }
 
@@ -743,7 +756,7 @@ HTML_TEMPLATE = """<!doctype html>
     const forceOpen = !!monthState.contract;
 
     for (const name of clientNames) {
-      const c = clients[name];
+      const c = clients[name] || { contracts: {}, agg: {} };
       const open = forceOpen || monthState.expanded.has(name);
       const tri = open ? '&#9660;' : '&#9654;';   // ▼ / ▶
 
@@ -756,7 +769,8 @@ HTML_TEMPLATE = """<!doctype html>
         dayCells(y, m, daysInMonth, c.agg, '');
       body.appendChild(ctr);
 
-      const contracts = Object.keys(c.contracts).sort((a, b) => a.localeCompare(b));
+      let contracts = ALL_PAIRS[name].slice();
+      if (monthState.contract) contracts = contracts.filter(ct => ct === monthState.contract);
       for (const ct of contracts) {
         const rtr = document.createElement('tr');
         rtr.className = 'contract-row';
@@ -764,8 +778,8 @@ HTML_TEMPLATE = """<!doctype html>
         if (!open) rtr.style.display = 'none';
         rtr.innerHTML =
           '<td class="rowhdr c-client"></td>' +
-          '<td class="rowhdr c-contract">' + escT(ct) + '</td>' +
-          dayCells(y, m, daysInMonth, c.contracts[ct], '');
+          '<td class="rowhdr c-contract">' + (escT(ct) || '<span style="color:var(--muted)">(none)</span>') + '</td>' +
+          dayCells(y, m, daysInMonth, (c.contracts[ct] || {}), '');
         body.appendChild(rtr);
       }
     }
