@@ -732,6 +732,22 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     "HumanaRx": (date(2026, 7, 15), "L"),
 }
 
+# Per-(client, year, month) marker override for monthly clients. Unlike
+# MONTHLY_PLACEMENT_OVERRIDES (one entry per client), this keys on the specific
+# month so a single client can be forced across SEVERAL months. The marker is
+# placed on the client's normal expected day; a real DHT cert for that month
+# always wins (checked first in determine_monthly), so the marker only shows
+# until the cert lands. Value = marker string ("L", "No Data", "✓", ...).
+MONTHLY_MONTH_MARKER_OVERRIDES = {
+    # 2026-07-16: ElixirRx data for May, June, and July has loaded and will be
+    # certified tomorrow (per user). Show "L" (loaded, awaiting cert) on each
+    # month's expected day until the DHT cert lands — the cert auto-wins once it
+    # does. Remove these three entries after ElixirRx certifies.
+    ("ElixirRx", 2026, 5): "L",
+    ("ElixirRx", 2026, 6): "L",
+    ("ElixirRx", 2026, 7): "L",
+}
+
 # Extra rows injected into the calendar after standard placement runs. Use for
 # one-off catch-up entries that don't fit the regular weekly/monthly cadence.
 # Tuple: (section, day, label, marker, alert, highlight)
@@ -3216,6 +3232,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             d = c_latest.date()
             d = next_monday_if_weekend(d) if d.weekday() >= 5 else d
             return d, c_latest.date()
+
+        # 1a) Per-month marker override (e.g. force "L" until cert) — placed on
+        # the client's expected day. A cert this month (handled above) always
+        # wins, so this only shows while the month is uncertified.
+        mm_ov = MONTHLY_MONTH_MARKER_OVERRIDES.get((client, year, month))
+        if mm_ov is not None:
+            return expected_date, mm_ov
 
         # "Today" rules only fire when today actually falls within the target
         # month — future-month templates must not pull placements back into the
