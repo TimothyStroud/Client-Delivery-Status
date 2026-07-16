@@ -16,8 +16,13 @@ are converted to a datetime manually.
 import json, os, re, subprocess, sys
 from datetime import datetime, timedelta
 
-RCE_JOBID = 2257
+RCE_JOBID = 2257       # RAMP 'Aetna RCE 310 ETL Load'
 SNAP_JOBID = 10053     # RAMP 'Aetna RCE 400 Daily Snap' (added 2026-07-14 per user)
+# Extra RAMP jobs added to the digest's RAMP section per user 2026-07-16.
+DAILY_MINE_JOBID = 10574    # 'Aetna RCE 450 Daily Mine'
+WEEKLY_SNAP_JOBID = 2258    # 'Aetna RCE 330 Weekly Snap'
+WEEKLY_MINE_JOBID = 2266    # 'Aetna RCE 350 Weekly Mining'
+NCSTATE_SNAP_JOBID = 10738  # 'NCStateAetna 0110 Snap'
 CHANNEL = 'C09EPLQL2D9'
 
 # ---- Cross-session dedupe guard (added 2026-06-26) ----------------------------
@@ -51,19 +56,23 @@ def _claim_slot():
         json.dump({'last_emit': datetime.now().isoformat()}, f)
     os.replace(tmp, STATE_FILE)
 
-# Unified digest list — ONE flat, ORDERED set of items (order per user 2026-07-14):
-#   1. Aetna RCE Daily Process      (SQL 'SSIS AetnaRCE Daily Process', TRGETL2)
-#   2. ETL NCStateAetna MasterLoad  (SQL, TRGETL4)
-#   3. Aetna RCE 400 Daily Snap     (RAMP job 10053)
-#   4. Aetna RCE Support MasterLoad (SQL 'ETL_AetnaSupport_MasterLoad', TRGETL2)
-# The old RAMP 'Aetna RCE 310 ETL Load' (2257) line was dropped as redundant with
-# the 'Aetna RCE Daily Process' SQL job (same run; matching start ~12:58am). 2257
-# is still used by rce_succeeded_today() for the both-done skip.
+# Digest items, grouped in main() into a RAMP section + a SQL section.
+# RAMP jobs (per user 2026-07-16 the 310 ETL Load is back, plus Daily Mine, the two
+# Weekly jobs, and the NCStateAetna snap were added):
+#   Aetna RCE 310 ETL Load / 400 Daily Snap / 450 Daily Mine / 330 Weekly Snap /
+#   350 Weekly Mining / NCStateAetna 0110 Snap
+# SQL Job Activity Monitor:
+#   Aetna RCE Daily Process / ETL NCStateAetna MasterLoad / Aetna RCE Support MasterLoad
 # Each item: ('sql', server, jobname, label) or ('ramp', jobid, None, label).
 DIGEST_ITEMS = [
+    ('ramp', RCE_JOBID,          None, 'Aetna RCE 310 ETL Load'),
+    ('ramp', SNAP_JOBID,         None, 'Aetna RCE 400 Daily Snap'),
+    ('ramp', DAILY_MINE_JOBID,   None, 'Aetna RCE 450 Daily Mine'),
+    ('ramp', WEEKLY_SNAP_JOBID,  None, 'Aetna RCE 330 Weekly Snap'),
+    ('ramp', WEEKLY_MINE_JOBID,  None, 'Aetna RCE 350 Weekly Mining'),
+    ('ramp', NCSTATE_SNAP_JOBID, None, 'NCStateAetna 0110 Snap'),
     ('sql',  'TRGETL2', 'SSIS AetnaRCE Daily Process', 'Aetna RCE Daily Process'),
     ('sql',  'TRGETL4', 'ETL NCStateAetna MasterLoad', 'ETL NCStateAetna MasterLoad'),
-    ('ramp', SNAP_JOBID, None,                          'Aetna RCE 400 Daily Snap'),
     ('sql',  'TRGETL2', 'ETL_AetnaSupport_MasterLoad', 'Aetna RCE Support MasterLoad'),
 ]
 
@@ -119,12 +128,23 @@ def rce_run():
 RAMP_OK = ('Successful', 'Resolved')
 
 
+def _started_today(start):
+    dt = _to_dt(start)
+    return bool(dt and dt.date() == datetime.now().date())
+
+
 def ramp_line(jobid):
     """Status body (no leading '- ') for a RAMP job's LatestJobRun, for the unified
-    digest list. Green check for Successful/Resolved (red X for Failed)."""
+    digest list. Green check for Successful/Resolved (red X for Failed). A job that
+    has NOT run today is shown Idle with its last-run outcome (per user 2026-07-16),
+    which suits the weekly jobs (Weekly Snap/Mining) that don't run daily."""
     lr = job_run(jobid)
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
+    if end and not _started_today(start):
+        oc = 'Succeeded' if status in RAMP_OK else ('Failed' if status == 'Failed' else status)
+        icon = ':x:' if status == 'Failed' else ':hourglass_flowing_sand:'
+        return f"{icon} *Idle* | last run {oc} ({fmt(end)})"
     if end and status in RAMP_OK:
         return f":white_check_mark: *{status}* | started {fmt(start)} | *completed {fmt(end)}*"
     if end and status == 'Failed':
