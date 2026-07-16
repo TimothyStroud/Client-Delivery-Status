@@ -301,8 +301,8 @@ HTML_TEMPLATE = """<!doctype html>
     text-align: left; padding: 4px 10px; font-size: 12px;
     position: sticky; z-index: 2;
   }
-  /* Navy background on the frozen Client & Contract columns. */
-  table.matrix td.rowhdr { background: var(--navy); color: #fff; border-right-color: #24407a; }
+  /* White background on the frozen Client & Contract columns. */
+  table.matrix td.rowhdr { background: #fff; color: var(--text); }
   table.matrix th.c-client, table.matrix td.c-client { left: 0; min-width: 170px; }
   table.matrix th.c-contract, table.matrix td.c-contract { left: 170px; min-width: 100px; font-variant-numeric: tabular-nums; }
   table.matrix thead th.rowhdr { z-index: 4; }
@@ -313,15 +313,14 @@ HTML_TEMPLATE = """<!doctype html>
   .mx-empty { padding: 24px; text-align: center; color: var(--muted); }
 
   /* Client group (expandable) row. */
-  tr.client-row td.rowhdr { cursor: pointer; background: var(--navy); }
-  tr.client-row:hover td.rowhdr { background: #14306b; }
+  tr.client-row td.rowhdr { cursor: pointer; background: #fff; }
+  tr.client-row:hover td.rowhdr { background: #eef4fb; }
   tr.client-row td.c-client { font-weight: 700; }
   tr.client-row td.day { background: #13224d; color: #39ff14; }
   tr.client-row td.day.wknd { background: #0f1c40; }
   tr.client-row td.day.hit:hover { background: #21407e; }
-  .tri { display: inline-block; width: 12px; margin-right: 4px; color: #9fb4cc; font-size: 10px; }
+  .tri { display: inline-block; width: 12px; margin-right: 4px; color: var(--accent); font-size: 10px; }
   /* Contract child row. */
-  tr.contract-row td.c-client { background: #071634; }
   tr.contract-row td.c-contract { padding-left: 20px; }
 
   #tooltip {
