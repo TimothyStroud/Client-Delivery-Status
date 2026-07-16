@@ -82,16 +82,35 @@ def _all_jobs():
 
 def claim_jobs():
     """[(JobName, LatestJobRun), ...] name-sorted, for jobs 'AetnaRx Claim*'
-    that have run at least once (have a StartDate)."""
+    that have run at least once (have a StartDate). RTA jobs are excluded per
+    user (2026-07-16)."""
     out = []
     for j in _all_jobs():
         name = (j.get('JobName') or j.get('Name') or '')
-        if name.lower().startswith(JOB_PREFIX):
+        if name.lower().startswith(JOB_PREFIX) and 'rta' not in name.lower():
             lr = j.get('LatestJobRun') or {}
             if lr.get('StartDate'):
                 out.append((name, lr))
     out.sort(key=lambda x: x[0].lower())
     return out
+
+
+def short_name(name):
+    """Drop the repetitive 'AetnaRx Claim ' prefix for a cleaner label."""
+    return re.sub(r'(?i)^aetnarx\s+claim\s+', '', name).strip() or name
+
+
+def phase_of(name):
+    """Group a Claim job into a readable pipeline phase (Load first, then Snap)."""
+    n = name.lower()
+    if 'snap' in n:
+        return 'Snap'
+    if 'stage' in n or 'load' in n:
+        return 'Load'
+    return 'Other'
+
+
+PHASE_ORDER = ['Load', 'Snap', 'Other']
 
 
 def _to_dt(v):
@@ -251,13 +270,23 @@ def main():
 
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
     lines = [f"<!here> :bar_chart: *AetnaRx Claim - Status Update*  ({now})", ""]
-    lines.append("*RAMP*")
     if jobs:
+        # Break the pipeline into readable phase sub-sections (like HRP): each
+        # phase is its own labeled block separated by a blank line.
+        grouped = {}
         for name, lr in jobs:
-            lines.append(f"- `{name}`: " + ramp_line(name, lr))
+            grouped.setdefault(phase_of(name), []).append((name, lr))
+        for phase in PHASE_ORDER:
+            if phase not in grouped:
+                continue
+            lines.append(f"*RAMP - {phase}*")
+            for name, lr in grouped[phase]:
+                lines.append(f"- `{short_name(name)}`: " + ramp_line(name, lr))
+            lines.append("")
     else:
+        lines.append("*RAMP*")
         lines.append("- (no AetnaRx Claim jobs found in RAMP)")
-    lines.append("")
+        lines.append("")
     lines.append("*SQL Job Activity Monitor*")
     for server, name, label in SQL_JOBS:
         lines.append(f"- `{label}` ({server}): " + sql_job(server, name))

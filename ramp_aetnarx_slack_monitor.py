@@ -37,11 +37,12 @@ def all_jobs():
 
 
 def watched_runs():
-    """{JobId: (JobName, LatestJobRun)} for jobs named 'AetnaRx Claim*'."""
+    """{JobId: (JobName, LatestJobRun)} for jobs named 'AetnaRx Claim*'.
+    RTA jobs are excluded per user (2026-07-16)."""
     runs = {}
     for j in all_jobs():
         name = (j.get('JobName') or j.get('Name') or '')
-        if name.lower().startswith(JOB_PREFIX):
+        if name.lower().startswith(JOB_PREFIX) and 'rta' not in name.lower():
             runs[j['JobId']] = (name, j.get('LatestJobRun') or {})
     return runs
 
