@@ -361,20 +361,28 @@ def main():
         print('NO_POST: RCE + Snap + NCStateAetna all Succeeded today')
         return
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
-    lines = [f"<!here> :bar_chart: *Aetna RCE 310 - Status Update*  ({now})"]
-    # One block per job, separated by a blank line: label header, status beneath.
-    for item in DIGEST_ITEMS:
-        if item[0] == 'ramp':
-            _, jobid, _, label = item
+    lines = [f"<!here> :bar_chart: *Aetna RCE 310 - Status Update*  ({now})", ""]
+
+    # Broken out into RAMP + SQL sections like the AetnaRx digest (per user
+    # 2026-07-16): bulleted items, a blank line between every item.
+    ramp_items = [it for it in DIGEST_ITEMS if it[0] == 'ramp']
+    sql_items = [it for it in DIGEST_ITEMS if it[0] == 'sql']
+
+    if ramp_items:
+        lines.append("*RAMP*")
+        for _, jobid, _, label in ramp_items:
             body = snap_line(RCE_JOBID, jobid) if jobid == SNAP_JOBID else ramp_line(jobid)
-            src = 'RAMP'
-        else:
-            _, server, name, label = item
-            body = sql_job(server, name)
-            src = server
-        lines.append("")                                   # blank line before each job
-        lines.append(f"*{label}* ({src})")
-        lines.append(body)
+            lines.append(f"- `{label}`: " + body)
+            lines.append("")
+
+    if sql_items:
+        lines.append("*SQL Job Activity Monitor*")
+        for _, server, name, label in sql_items:
+            lines.append(f"- `{label}` ({server}): " + sql_job(server, name))
+            lines.append("")
+
+    while lines and lines[-1] == "":
+        lines.pop()
     msg = "\n".join(lines)
     print("SLACK|" + msg.replace("\n", "\\n"))
 

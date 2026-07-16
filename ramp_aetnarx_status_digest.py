@@ -126,9 +126,15 @@ def _to_dt(v):
 
 
 def ramp_line(name, lr):
-    """Status body (no leading '- ') for a RAMP job's LatestJobRun."""
+    """Status body (no leading '- ') for a RAMP job's LatestJobRun. A job that has
+    NOT run today is shown Idle with its last-run outcome (RCE SQL-monitor style),
+    instead of a stale green completion from a prior day (per user 2026-07-16)."""
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
+    if end and not _ran_today(lr):
+        oc = 'Succeeded' if status in RAMP_OK else ('Failed' if status == 'Failed' else status)
+        icon = ':x:' if status == 'Failed' else ':hourglass_flowing_sand:'
+        return f"{icon} *Idle* | last run {oc} ({fmt(end)})"
     if end and status in RAMP_OK:
         return f":white_check_mark: *{status}* | started {fmt(start)} | *completed {fmt(end)}*"
     if end and status == 'Failed':

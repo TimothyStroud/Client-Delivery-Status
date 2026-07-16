@@ -3,21 +3,21 @@ Ad-hoc Aetna RCE status poster (headless, zero Claude tokens).
 
 Runs ramp_aetna_status_digest.py --force (bypasses the 25-min dedupe and the
 Tue-Fri/8-12-16 gate that aetna_tick.py applies) and posts the resulting status
-line to BOTH Slack channels via the Workflow Builder webhooks, using the same
-sanitize + {"Text": ...} mechanism as aetna_webhook_post.py.
+line to #data-operations-aetna-updates via the Workflow Builder webhook, using the
+same sanitize + {"Text": ...} mechanism as aetna_webhook_post.py. (Aligned to the
+aetna-updates channel 2026-07-16 to match the live tick's 2026-07-14 channel move;
+previously posted to the now-abandoned support/mining webhooks.)
 
-Used for one-off "post RCE status all day" requests on days the regular digest
-schedule skips (e.g. Mondays). Driven by a temporary scheduled task; the digest's
-own both-succeeded-today skip still applies (emits nothing if RCE + NCStateAetna
-have both succeeded today).
+Used for one-off "post RCE status now" requests. The digest's own both-succeeded-
+today skip still applies (emits nothing if RCE + Snap + NCStateAetna have all
+succeeded today).
 """
 import sys, os, re, json, subprocess, urllib.request
 from datetime import datetime
 
 BASE = r'C:\Users\tls2\.claude\projects\H--'
 DIGEST = os.path.join(BASE, 'ramp_aetna_status_digest.py')
-SUPPORT_URL_FILE = r'H:\slack_wf_support.txt'
-MINING_URL_FILE = r'H:\slack_wf_mining.txt'
+AETNA_URL_FILE = r'H:\slack_wf_aetna_updates.txt'
 LOG_FILE = r'H:\aetna_rce_adhoc.log'
 
 
@@ -60,16 +60,15 @@ def main():
         log("no SLACK line (digest skipped: " + (r.stdout.strip()[:120] or "empty") + ")")
         return 0
     txt = sanitize(line[len('SLACK|'):].replace('\\n', '\n'))
-    for label, path in (('support', SUPPORT_URL_FILE), ('mining', MINING_URL_FILE)):
-        url = read_url(path)
-        if not url:
-            log(f"SKIP {label}: no webhook URL at {path}")
-            continue
-        try:
-            st, body = post(url, txt)
-            log(f"posted RCE status -> {label}: HTTP {st} {body[:50]}")
-        except Exception as e:
-            log(f"ERROR -> {label}: {e}")
+    url = read_url(AETNA_URL_FILE)
+    if not url:
+        log(f"SKIP: no aetna-updates webhook URL at {AETNA_URL_FILE}")
+        return 0
+    try:
+        st, body = post(url, txt)
+        log(f"posted RCE status -> aetna-updates: HTTP {st} {body[:50]}")
+    except Exception as e:
+        log(f"ERROR -> aetna-updates: {e}")
     return 0
 
 
