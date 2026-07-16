@@ -141,14 +141,14 @@ def ramp_line(name, lr):
         icon = ':x:' if status == 'Failed' else ':hourglass_flowing_sand:'
         return (f"{icon} Idle", f"last run {oc} {fmt(end)}")
     if end and status in RAMP_OK:
-        return (f":white_check_mark: {status}", f"started {fmt(start)} · completed {fmt(end)}")
+        return (f":white_check_mark: {status}", f"started {fmt(start)} | completed {fmt(end)}")
     if end and status == 'Failed':
-        return (":x: FAILED", f"started {fmt(start)} · ended {fmt(end)} — please investigate")
+        return (":x: FAILED", f"started {fmt(start)} | ended {fmt(end)} - please investigate")
     if end:
-        return (status, f"started {fmt(start)} · completed {fmt(end)}")
+        return (status, f"started {fmt(start)} | completed {fmt(end)}")
     if not start:
         return (":hourglass_flowing_sand: Queued", "not yet started")
-    return (":hourglass_flowing_sand: Running", f"started {fmt(start)} · not yet complete")
+    return (":hourglass_flowing_sand: Running", f"started {fmt(start)} | not yet complete")
 
 
 def fmt_dt(d, t):
@@ -223,7 +223,7 @@ def sql_job(server, name):
         if m:
             secs = remaining_secs(server, name, int(m.group(1)))
             if secs and secs > 0:
-                detail += f" · ETA ~{_clock(datetime.now() + timedelta(seconds=secs))}"
+                detail += f" | ETA ~{_clock(datetime.now() + timedelta(seconds=secs))}"
         return (f"{EXEC_ICON} Executing", detail)
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
@@ -292,7 +292,7 @@ def main():
         for phase in PHASE_ORDER:
             if phase not in grouped:
                 continue
-            lines.append(f"*RAMP — {phase}*")
+            lines.append(f"*RAMP - {phase}*")
             for name, lr in grouped[phase]:
                 head, detail = ramp_line(name, lr)
                 lines.append(f"*{short_name(name)}*  {head}")
