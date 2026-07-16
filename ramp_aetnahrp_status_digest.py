@@ -205,6 +205,29 @@ def _clock(dt):
     return dt.strftime('%I:%M %p').lstrip('0')
 
 
+def last_completion(server, name):
+    """Datetime the job's most recent run FINISHED = start + duration from the
+    step_id=0 (job outcome) row in sysjobhistory. None if unavailable."""
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         "SELECT TOP 1 run_date, run_time, run_duration FROM msdb.dbo.sysjobhistory WITH (NOLOCK) "
+         "WHERE job_id=@jid AND step_id=0 ORDER BY run_date DESC, run_time DESC;")
+    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
+                         capture_output=True, text=True, timeout=120)
+    for line in out.stdout.splitlines():
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) >= 3 and parts[0].isdigit():
+            try:
+                d, t, dur = int(parts[0]), int(parts[1]), int(parts[2])
+                start = datetime(d // 10000, (d // 100) % 100, d % 100,
+                                 t // 10000, (t // 100) % 100, t % 100)
+                dur_s = (dur // 10000) * 3600 + ((dur // 100) % 100) * 60 + (dur % 100)
+                return start + timedelta(seconds=dur_s)
+            except Exception:
+                return None
+    return None
+
+
 def sql_job(server, name):
     """Report where the CURRENT load is, via sp_help_job (the value SSMS Job
     Activity Monitor shows). When executing, returns the live step + ETA. When
@@ -229,6 +252,18 @@ def sql_job(server, name):
                 # renders; mrkdwn/color do not) -- per user 2026-07-16.
                 detail.append(f":red_circle: ETA ~{eta}")
         return (f"Executing Step {step}", detail)
+    # Idle: if it completed SUCCESSFULLY TODAY, show green circle + Successful +
+    # completion time (in place of the ETA line), per user 2026-07-16.
+    oc = RUN_OUTCOME.get(row[-11], row[-11])
+    try:
+        _d = int(row[-13]); _t = datetime.now()
+        ran_today = _d == _t.year * 10000 + _t.month * 100 + _t.day
+    except (ValueError, TypeError):
+        ran_today = False
+    if oc == 'Succeeded' and ran_today:
+        comp = last_completion(server, name)
+        ctext = comp.strftime('%m/%d/%Y %I:%M %p') if comp else fmt_dt(row[-13], row[-12])
+        return ("", [f":large_green_circle: Successful {ctext}"])
     st = EXEC_STATUS.get(status, f'State {status}')
     return (f"- {st}", [])
 
@@ -431,7 +466,7 @@ def main():
     lines = [f"Aetna HRP - Status Update   ({now})", ""]
     for server, name, label in SQL_JOBS:
         status_text, detail = sql_job(server, name)
-        lines.append(f"{label} {status_text}")
+        lines.append(f"{label} {status_text}".rstrip())
         lines.extend(detail)
         lines.append("")
     _stage_qid, stage_end, files = last_stage_batch()
