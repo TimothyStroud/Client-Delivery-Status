@@ -176,7 +176,7 @@
 <body>
 <header>
   <h1>MSPI File Report</h1>
-  <div class="meta">Generated 2026-07-16 10:44 &middot; TRGINTP3 / MSP &middot; etl.Tape TapeID &ge; 3000 &middot; 1,844 files</div>
+  <div class="meta">Generated 2026-07-16 11:03 &middot; TRGINTP3 / MSP &middot; etl.Tape TapeID &ge; 3000 &middot; 1,844 files</div>
 </header>
 <main>
   <div class="tabs">
@@ -187,8 +187,8 @@
   <section id="view-monthly" class="view active">
     <section class="filters">
       <div class="field">
-        <label for="m-month">Month</label>
-        <select id="m-month"></select>
+        <label for="m-year">Year</label>
+        <select id="m-year"></select>
       </div>
       <div class="field">
         <label for="m-client">Client</label>
@@ -450,20 +450,19 @@
   // Record count shown for a file: its native count by type.
   const fileRecords = (r) => (r.type === 'DET' ? r.det : (r.type === 'PRM' ? r.prm : r.msp)) || 0;
 
-  const monthState = { month: '', client: '', contract: '', expanded: new Set() };
+  const monthState = { year: '', client: '', contract: '', expanded: new Set() };
 
-  // Distinct load-months (YYYY-MM), newest first.
-  const months = [...new Set(ROWS.map(r => r.loaded).filter(Boolean).map(s => s.slice(0, 7)))].sort().reverse();
-  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const monthLabel = (ym) => { const [y, m] = ym.split('-'); return MONTH_NAMES[Number(m) - 1] + ' ' + y; };
+  const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-  for (const ym of months) {
+  // Distinct load-years (YYYY), newest first.
+  const years = [...new Set(ROWS.map(r => r.loaded).filter(Boolean).map(s => s.slice(0, 4)))].sort().reverse();
+  for (const yy of years) {
     const opt = document.createElement('option');
-    opt.value = ym; opt.textContent = monthLabel(ym);
-    $('m-month').appendChild(opt);
+    opt.value = yy; opt.textContent = yy;
+    $('m-year').appendChild(opt);
   }
-  monthState.month = months[0] || '';
-  if (monthState.month) $('m-month').value = monthState.month;
+  monthState.year = years[0] || '';
+  if (monthState.year) $('m-year').value = monthState.year;
   fillSelect('m-client', [...new Set(ROWS.map(r => r.client).filter(Boolean))].sort());
 
   // Contract dropdown is scoped to the selected client (cascading filter).
@@ -521,66 +520,56 @@
   }
 
   let cid = 0;   // unique cell/tooltip id counter across a render
-  // Build the day cells for one row from a {day: [files]} map + a class prefix.
-  function dayCells(y, m, daysInMonth, dayMap, extraCls) {
+  // Build the 12 month cells for one row from a {month: [files]} map (1-12).
+  function monthCells(monthMap) {
     let cells = '';
-    for (let d = 1; d <= daysInMonth; d++) {
-      const dow = new Date(y, m - 1, d).getDay();
-      const wknd = (dow === 0 || dow === 6) ? ' wknd' : '';
-      const files = dayMap[d];
+    for (let mo = 1; mo <= 12; mo++) {
+      const files = monthMap[mo];
       if (files && files.length) {
         const id = 'x' + (cid++);
         tipMap[id] = files;
-        cells += '<td class="day hit' + wknd + extraCls + '" data-tip="' + id + '">X</td>';
+        cells += '<td class="day hit" data-tip="' + id + '">X</td>';
       } else {
-        cells += '<td class="day' + wknd + extraCls + '"></td>';
+        cells += '<td class="day"></td>';
       }
     }
     return cells;
   }
 
   function renderMatrix() {
-    const ym = monthState.month;
+    const yr = monthState.year;
     const head = $('matrix-head'), body = $('matrix-body');
     head.innerHTML = ''; body.innerHTML = ''; tipMap = {}; cid = 0;
-    if (!ym) { body.innerHTML = '<tr><td class="mx-empty">No data.</td></tr>'; return; }
+    if (!yr) { body.innerHTML = '<tr><td class="mx-empty">No data.</td></tr>'; return; }
 
-    const [y, m] = ym.split('-').map(Number);
-    const daysInMonth = new Date(y, m, 0).getDate();
-    const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-
-    // Header: Client | Contract | 1..daysInMonth
+    // Header: Client | Contract | Jan..Dec
     const htr = document.createElement('tr');
     let hh = '<th class="rowhdr c-client">Client</th><th class="rowhdr c-contract">Contract</th>';
-    for (let d = 1; d <= daysInMonth; d++) {
-      const dow = new Date(y, m - 1, d).getDay();
-      const wknd = (dow === 0 || dow === 6) ? ' wknd' : '';
-      hh += '<th class="' + wknd.trim() + '">' + d + '<br>' + DOW[dow] + '</th>';
-    }
+    for (let mo = 1; mo <= 12; mo++) hh += '<th>' + MONTH_ABBR[mo - 1] + '</th>';
     htr.innerHTML = hh;
     head.appendChild(htr);
 
-    // Load data for the selected month drives the X cells (which days loaded).
-    // clients[name] = { contracts: {ct: {day:[files]}}, agg: {day:[files]} }
+    // Load data for the selected year drives the X cells (which months loaded).
+    // clients[name] = { contracts: {ct: {month:[files]}}, agg: {month:[files]} }
     const clients = {};
     for (const r of ROWS) {
-      if (!r.loaded || r.loaded.slice(0, 7) !== ym) continue;
+      if (!r.loaded || r.loaded.slice(0, 4) !== yr) continue;
       const c = clients[r.client] || (clients[r.client] = { contracts: {}, agg: {} });
       const ct = c.contracts[r.contract] || (c.contracts[r.contract] = {});
-      const day = Number(r.loaded.slice(8, 10));
-      (ct[day] = ct[day] || []).push(r);
-      (c.agg[day] = c.agg[day] || []).push(r);
+      const mo = Number(r.loaded.slice(5, 7));
+      (ct[mo] = ct[mo] || []).push(r);
+      (c.agg[mo] = c.agg[mo] || []).push(r);
     }
 
     // Render the FULL universe of clients+contracts (loaded or not) for the
-    // month, applying the client/contract filters. Blank X cells = not loaded.
+    // year, applying the client/contract filters. Blank X cells = not loaded.
     let clientNames = Object.keys(ALL_PAIRS);
     if (monthState.client) clientNames = clientNames.filter(n => n === monthState.client);
     if (monthState.contract) clientNames = clientNames.filter(n => ALL_PAIRS[n].indexOf(monthState.contract) !== -1);
     clientNames = clientNames.sort((a, b) => a.localeCompare(b));
 
     if (clientNames.length === 0) {
-      body.innerHTML = '<tr><td class="mx-empty" colspan="' + (daysInMonth + 2) + '">No clients match the current filters.</td></tr>';
+      body.innerHTML = '<tr><td class="mx-empty" colspan="14">No clients match the current filters.</td></tr>';
       return;
     }
 
@@ -598,7 +587,7 @@
       ctr.innerHTML =
         '<td class="rowhdr c-client"><span class="tri">' + tri + '</span>' + escT(name) + '</td>' +
         '<td class="rowhdr c-contract"></td>' +
-        dayCells(y, m, daysInMonth, c.agg, '');
+        monthCells(c.agg);
       body.appendChild(ctr);
 
       let contracts = ALL_PAIRS[name].slice();
@@ -611,7 +600,7 @@
         rtr.innerHTML =
           '<td class="rowhdr c-client"></td>' +
           '<td class="rowhdr c-contract">' + (escT(ct) || '<span style="color:var(--muted)">(none)</span>') + '</td>' +
-          dayCells(y, m, daysInMonth, (c.contracts[ct] || {}), '');
+          monthCells(c.contracts[ct] || {});
         body.appendChild(rtr);
       }
     }
@@ -639,7 +628,7 @@
     renderMatrix();
   });
 
-  $('m-month').addEventListener('change', () => { monthState.month = $('m-month').value; renderMatrix(); });
+  $('m-year').addEventListener('change', () => { monthState.year = $('m-year').value; renderMatrix(); });
   $('m-client').addEventListener('change', () => {
     monthState.client = $('m-client').value;
     populateContracts();
