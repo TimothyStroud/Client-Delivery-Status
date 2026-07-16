@@ -293,10 +293,10 @@ HTML_TEMPLATE = """<!doctype html>
   table.matrix th, table.matrix td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); white-space: nowrap; }
   table.matrix thead th {
     position: sticky; top: 0; z-index: 3;
-    background: var(--accent); color: #39ff14;
+    background: #fff; color: var(--text);
     padding: 4px 6px; font-size: 11px; text-align: center; font-weight: 600;
   }
-  table.matrix thead th.wknd { background: var(--accent-dark); }
+  table.matrix thead th.wknd { background: #eef2f7; color: var(--muted); }
   table.matrix th.rowhdr, table.matrix td.rowhdr {
     text-align: left; padding: 4px 10px; font-size: 12px;
     position: sticky; z-index: 2;
