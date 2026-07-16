@@ -84,6 +84,8 @@ CONTRACT_SEG_RE = re.compile(r"^R?[A-Z]\d{3,5}$")
 # Drop a single leading routing 'R' only when a real contract (letter+digit)
 # follows it: RH3890 -> H3890, RR6694 -> R6694, but R6694 stays R6694.
 LEAD_R_RE = re.compile(r"^R(?=[A-Z]\d)")
+# Data-date token in the leaf name, e.g. D260623 -> 2026-06-23 (Date Extracted).
+DATE_TOKEN_RE = re.compile(r"^D(\d{2})(\d{2})(\d{2})$")
 
 
 def parse_client(path: str, sql_client: str) -> str:
@@ -104,6 +106,19 @@ def parse_contract(path: str) -> str:
     for seg in leaf.upper().split("."):
         if CONTRACT_SEG_RE.match(seg):
             return LEAD_R_RE.sub("", seg)
+    return ""
+
+
+def parse_extracted(path: str) -> str:
+    """Data date parsed from the D-token in the leaf name (Date Extracted).
+
+    e.g. ...D260623.T130209.txt -> 2026-06-23; '' if none present.
+    """
+    leaf = re.split(r"[\\/]", path or "")[-1]
+    for seg in leaf.upper().split("."):
+        m = DATE_TOKEN_RE.match(seg)
+        if m:
+            return f"20{m.group(1)}-{m.group(2)}-{m.group(3)}"
     return ""
 
 
@@ -135,6 +150,7 @@ def fetch_rows():
             "client": parse_client(fname, sqlclient),
             "contract": parse_contract(fname),
             "filename": leaf_name(fname),
+            "extracted": parse_extracted(fname),
             "loaded": loaded if loaded and loaded != "NULL" else "",
             "det": int(detc) if detc.isdigit() else 0,
             "msp": int(mspc) if mspc.isdigit() else 0,
@@ -174,6 +190,21 @@ HTML_TEMPLATE = """<!doctype html>
   header h1 { margin: 0; font-size: 18px; font-weight: 600; }
   header .meta { font-size: 12px; opacity: 0.85; margin-top: 4px; }
   main { padding: 16px 24px 32px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+  .tab {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    padding: 8px 18px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .tab.active { background: var(--accent); color: #39ff14; border-color: var(--accent); }
+  .view { display: none; }
+  .view.active { display: block; }
   .kpis {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -254,6 +285,42 @@ HTML_TEMPLATE = """<!doctype html>
   tr:hover td { background: #f8fafc; }
   .pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; justify-content: flex-end; font-size: 13px; color: var(--muted); }
   .empty { padding: 24px; text-align: center; color: var(--muted); }
+
+  /* ---- Monthly matrix ---- */
+  .matrix-wrap { overflow: auto; max-height: calc(100vh - 220px); border: 1px solid var(--border); border-radius: 6px; background: var(--card); }
+  table.matrix { border-collapse: separate; border-spacing: 0; width: auto; border: 0; border-radius: 0; }
+  table.matrix th, table.matrix td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.matrix thead th {
+    position: sticky; top: 0; z-index: 3;
+    background: var(--accent); color: #39ff14;
+    padding: 4px 6px; font-size: 11px; text-align: center; font-weight: 600;
+  }
+  table.matrix thead th.wknd { background: var(--accent-dark); }
+  table.matrix th.rowhdr, table.matrix td.rowhdr {
+    text-align: left; padding: 4px 10px; font-size: 12px;
+    background: var(--card); position: sticky; z-index: 2;
+  }
+  table.matrix th.c-client, table.matrix td.c-client { left: 0; min-width: 150px; }
+  table.matrix th.c-entity, table.matrix td.c-entity { left: 150px; min-width: 90px; font-variant-numeric: tabular-nums; }
+  table.matrix thead th.rowhdr { z-index: 4; }
+  table.matrix td.c-client { font-weight: 600; }
+  table.matrix tbody tr:nth-child(even) td.rowhdr { background: #eef2f7; }
+  table.matrix td.day { text-align: center; padding: 3px 6px; min-width: 26px; font-weight: 700; color: var(--accent); }
+  table.matrix td.day.wknd { background: #f0f3f7; }
+  table.matrix td.day.hit { cursor: pointer; }
+  table.matrix td.day.hit:hover { background: #d7ecff; }
+  table.matrix tbody tr:hover td.rowhdr { background: #dbeafe; }
+  .mx-empty { padding: 24px; text-align: center; color: var(--muted); }
+
+  #tooltip {
+    position: fixed; z-index: 9999; pointer-events: none;
+    background: #1f2a37; color: #fff; border-radius: 6px;
+    padding: 8px 10px; font-size: 12px; line-height: 1.45;
+    box-shadow: 0 4px 16px rgba(0,0,0,.3); max-width: 460px;
+  }
+  #tooltip .tt-file + .tt-file { margin-top: 6px; border-top: 1px solid #3a4757; padding-top: 6px; }
+  #tooltip .tt-name { font-family: Consolas, "Courier New", monospace; word-break: break-all; }
+  #tooltip .tt-label { color: #9fb4cc; }
 </style>
 </head>
 <body>
@@ -262,6 +329,35 @@ HTML_TEMPLATE = """<!doctype html>
   <div class="meta">Generated __GENERATED__ &middot; TRGINTP3 / MSP &middot; etl.Tape TapeID &ge; __TAPE_MIN__ &middot; __ROW_COUNT__ files</div>
 </header>
 <main>
+  <div class="tabs">
+    <div class="tab active" data-view="monthly">Monthly</div>
+    <div class="tab" data-view="detail">Detail</div>
+  </div>
+
+  <section id="view-monthly" class="view active">
+    <section class="filters">
+      <div class="field">
+        <label for="m-month">Month</label>
+        <select id="m-month"></select>
+      </div>
+      <div class="field">
+        <label for="m-client">Client</label>
+        <select id="m-client"><option value="">All clients</option></select>
+      </div>
+      <div class="field" style="justify-content:flex-end">
+        <label>&nbsp;</label>
+        <span style="font-size:12px;color:var(--muted)">Hover an <b>X</b> for date extracted, file name &amp; record count.</span>
+      </div>
+    </section>
+    <div class="matrix-wrap">
+      <table class="matrix" id="matrix">
+        <thead id="matrix-head"></thead>
+        <tbody id="matrix-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="view-detail" class="view">
   <section class="kpis">
     <div class="kpi"><div class="label">Files</div><div class="value" id="kpi-files">&mdash;</div></div>
     <div class="kpi"><div class="label">Clients</div><div class="value" id="kpi-clients">&mdash;</div></div>
@@ -324,7 +420,9 @@ HTML_TEMPLATE = """<!doctype html>
     <button class="secondary" id="pg-prev">&laquo; Prev</button>
     <button class="secondary" id="pg-next">Next &raquo;</button>
   </div>
+  </section>
 </main>
+<div id="tooltip" style="display:none"></div>
 
 <script type="application/json" id="data">__DATA_JSON__</script>
 <script>
@@ -491,6 +589,148 @@ HTML_TEMPLATE = """<!doctype html>
 
   bindFilters();
   render();
+
+  // ===================== Monthly matrix view =====================
+  // Record count shown for a file: its native count by type.
+  const fileRecords = (r) => (r.type === 'DET' ? r.det : (r.type === 'PRM' ? r.prm : r.msp)) || 0;
+
+  const monthState = { month: '', client: '' };
+
+  // Distinct load-months (YYYY-MM), newest first.
+  const months = [...new Set(ROWS.map(r => r.loaded).filter(Boolean).map(s => s.slice(0, 7)))].sort().reverse();
+  const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const monthLabel = (ym) => { const [y, m] = ym.split('-'); return MONTH_NAMES[Number(m) - 1] + ' ' + y; };
+
+  for (const ym of months) {
+    const opt = document.createElement('option');
+    opt.value = ym; opt.textContent = monthLabel(ym);
+    $('m-month').appendChild(opt);
+  }
+  monthState.month = months[0] || '';
+  if (monthState.month) $('m-month').value = monthState.month;
+  fillSelect('m-client', [...new Set(ROWS.map(r => r.client).filter(Boolean))].sort());
+
+  const tip = $('tooltip');
+  let tipMap = {};   // cell id -> array of files
+  const escT = (s) => (s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+
+  function showTip(evt, id) {
+    const files = tipMap[id];
+    if (!files) return;
+    tip.innerHTML = files.map(f =>
+      '<div class="tt-file">' +
+        '<div class="tt-name">' + escT(f.type) + ' &middot; ' + escT(f.filename) + '</div>' +
+        '<div><span class="tt-label">Date Extracted:</span> ' + (escT(f.extracted) || '&mdash;') + '</div>' +
+        '<div><span class="tt-label">Date Loaded:</span> ' + escT((f.loaded || '').slice(0, 10)) + '</div>' +
+        '<div><span class="tt-label">File Count:</span> ' + fileRecords(f).toLocaleString('en-US') + ' records</div>' +
+      '</div>'
+    ).join('');
+    tip.style.display = 'block';
+    moveTip(evt);
+  }
+  function moveTip(evt) {
+    const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    if (x + w > window.innerWidth) x = evt.clientX - w - pad;
+    if (y + h > window.innerHeight) y = evt.clientY - h - pad;
+    tip.style.left = Math.max(4, x) + 'px';
+    tip.style.top = Math.max(4, y) + 'px';
+  }
+  const hideTip = () => { tip.style.display = 'none'; };
+
+  function renderMatrix() {
+    const ym = monthState.month;
+    const head = $('matrix-head'), body = $('matrix-body');
+    head.innerHTML = ''; body.innerHTML = ''; tipMap = {};
+    if (!ym) { body.innerHTML = '<tr><td class="mx-empty">No data.</td></tr>'; return; }
+
+    const [y, m] = ym.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+    // Header: Client | Entity | 1..daysInMonth
+    const htr = document.createElement('tr');
+    let hh = '<th class="rowhdr c-client">Client</th><th class="rowhdr c-entity">Entity</th>';
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dow = new Date(y, m - 1, d).getDay();
+      const wknd = (dow === 0 || dow === 6) ? ' wknd' : '';
+      hh += '<th class="' + wknd.trim() + '">' + d + '<br>' + DOW[dow] + '</th>';
+    }
+    htr.innerHTML = hh;
+    head.appendChild(htr);
+
+    // Group rows by client + entity for the selected month (and client filter).
+    const groups = {};
+    for (const r of ROWS) {
+      if (!r.loaded || r.loaded.slice(0, 7) !== ym) continue;
+      if (monthState.client && r.client !== monthState.client) continue;
+      const key = r.client + '\\u0000' + r.contract;
+      if (!groups[key]) groups[key] = { client: r.client, contract: r.contract, days: {} };
+      const day = Number(r.loaded.slice(8, 10));
+      (groups[key].days[day] = groups[key].days[day] || []).push(r);
+    }
+
+    const keys = Object.keys(groups).sort((a, b) => {
+      const ga = groups[a], gb = groups[b];
+      return (ga.client || '').localeCompare(gb.client || '') ||
+             (ga.contract || '').localeCompare(gb.contract || '');
+    });
+
+    if (keys.length === 0) {
+      body.innerHTML = '<tr><td class="mx-empty" colspan="' + (daysInMonth + 2) + '">No files loaded in ' + monthLabel(ym) + '.</td></tr>';
+      return;
+    }
+
+    let cid = 0;
+    for (const key of keys) {
+      const g = groups[key];
+      const tr = document.createElement('tr');
+      let cells = '<td class="rowhdr c-client">' + escT(g.client) + '</td>' +
+                  '<td class="rowhdr c-entity">' + escT(g.contract) + '</td>';
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dow = new Date(y, m - 1, d).getDay();
+        const wknd = (dow === 0 || dow === 6) ? ' wknd' : '';
+        const files = g.days[d];
+        if (files && files.length) {
+          const id = 'x' + (cid++);
+          tipMap[id] = files;
+          cells += '<td class="day hit' + wknd + '" data-tip="' + id + '">X</td>';
+        } else {
+          cells += '<td class="day' + wknd + '"></td>';
+        }
+      }
+      tr.innerHTML = cells;
+      body.appendChild(tr);
+    }
+  }
+
+  $('matrix-body').addEventListener('mouseover', (e) => {
+    const td = e.target.closest('td.hit');
+    if (td && td.dataset.tip) showTip(e, td.dataset.tip);
+  });
+  $('matrix-body').addEventListener('mousemove', (e) => {
+    if (tip.style.display === 'block') moveTip(e);
+  });
+  $('matrix-body').addEventListener('mouseout', (e) => {
+    const to = e.relatedTarget;
+    if (!to || !to.closest || !to.closest('td.hit')) hideTip();
+  });
+
+  $('m-month').addEventListener('change', () => { monthState.month = $('m-month').value; renderMatrix(); });
+  $('m-client').addEventListener('change', () => { monthState.client = $('m-client').value; renderMatrix(); });
+
+  // Tab switching.
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      $('view-' + t.dataset.view).classList.add('active');
+      hideTip();
+    });
+  });
+
+  renderMatrix();
 })();
 </script>
 </body>
