@@ -230,8 +230,8 @@ def sql_job(server, name):
         return ("(no data)", "")
 
     status, step = row[-7], row[-6]
-    if status == '1':                        # Executing -> current step + ETA
-        detail = [f"Step {step}"]
+    if status == '1':                        # Executing -> "Executing Step N (name)" + ETA line
+        detail = []
         m = re.match(r'\s*(\d+)', step)      # leading step number, e.g. "4 (Build Chimera)"
         if m:
             secs = remaining_secs(server, name, int(m.group(1)))
@@ -240,10 +240,9 @@ def sql_job(server, name):
                 # ETA on its own line with a red-dot emoji (only standout Slack
                 # renders; mrkdwn/color do not) -- per user 2026-07-16.
                 detail.append(f":red_circle: ETA ~{eta}")
-        return ("Executing", detail)
+        return (f"Executing Step {step}", detail)
     st = EXEC_STATUS.get(status, f'State {status}')
-    oc = RUN_OUTCOME.get(row[-11], row[-11])
-    return (st, [f"last run {oc} ({fmt_dt(row[-13], row[-12])})"])
+    return (f"- {st}", [])
 
 
 def _to_dt(v):
@@ -348,7 +347,8 @@ def main():
 
     # Once BOTH SQL jobs have already SUCCEEDED today, the rest of the day's
     # digests are redundant -> emit no SLACK line so the task posts nothing.
-    if (job_succeeded_today('TRGETL2', 'SSIS AetnaRCE Daily Process')
+    if (not force
+            and job_succeeded_today('TRGETL2', 'SSIS AetnaRCE Daily Process')
             and job_succeeded_today('TRGETL4', 'ETL NCStateAetna MasterLoad')):
         print('NO_POST: Aetna RCE Daily Process + NCStateAetna Succeeded today')
         return
@@ -358,8 +358,8 @@ def main():
     # so no markup; the only standout is a :red_circle: on the ETA line.
     lines = [f"Aetna RCE - Status Update   ({now})", ""]
     for server, name, label in SQL_JOBS:
-        head, detail = sql_job(server, name)
-        lines.append(f"{label}  {head}")
+        status_text, detail = sql_job(server, name)
+        lines.append(f"{label} {status_text}")
         lines.extend(detail)
         lines.append("")
     while lines and lines[-1] == "":
