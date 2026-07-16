@@ -295,40 +295,64 @@ HTML_TEMPLATE = """<!doctype html>
   .empty { padding: 24px; text-align: center; color: var(--muted); }
 
   /* ---- Monthly matrix ---- */
-  .matrix-wrap { overflow: auto; max-height: calc(100vh - 220px); border: 1px solid var(--border); border-radius: 6px; background: var(--card); }
-  table.matrix { border-collapse: separate; border-spacing: 0; width: auto; border: 0; border-radius: 0; }
-  table.matrix th, table.matrix td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .matrix-wrap {
+    overflow: auto; max-height: calc(100vh - 230px);
+    border: 1px solid var(--border); border-radius: 10px; background: var(--card);
+    box-shadow: 0 1px 3px rgba(16,32,64,.06), 0 10px 28px rgba(16,32,64,.05);
+  }
+  table.matrix { border-collapse: separate; border-spacing: 0; width: auto; border: 0; }
+  table.matrix th, table.matrix td { border-bottom: 1px solid #eef1f5; white-space: nowrap; }
+
+  /* Month header row */
   table.matrix thead th {
     position: sticky; top: 0; z-index: 3;
-    background: #fff; color: var(--text);
-    padding: 4px 6px; font-size: 11px; text-align: center; font-weight: 700;
+    background: linear-gradient(#ffffff, #f2f6fb); color: var(--accent-dark);
+    padding: 10px 10px; font-size: 11px; text-align: center; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .6px;
+    border-bottom: 2px solid var(--accent);
   }
-  table.matrix thead th.wknd { background: #eef2f7; color: var(--muted); }
-  table.matrix th.rowhdr, table.matrix td.rowhdr {
-    text-align: left; padding: 4px 10px; font-size: 12px;
-    position: sticky; z-index: 2;
-  }
-  /* White background on the frozen Client & Contract columns. */
-  table.matrix td.rowhdr { background: #fff; color: var(--text); }
-  table.matrix th.c-client, table.matrix td.c-client { left: 0; min-width: 170px; }
-  table.matrix th.c-contract, table.matrix td.c-contract { left: 170px; min-width: 100px; font-variant-numeric: tabular-nums; }
-  table.matrix thead th.rowhdr { z-index: 4; }
-  table.matrix td.day { text-align: center; padding: 3px 6px; min-width: 26px; font-weight: 700; color: var(--accent); }
-  table.matrix td.day.wknd { background: #f0f3f7; }
-  table.matrix td.day.hit { cursor: pointer; }
-  table.matrix td.day.hit:hover { background: #d7ecff; }
-  .mx-empty { padding: 24px; text-align: center; color: var(--muted); }
+  table.matrix thead th.rowhdr { z-index: 4; text-align: left; }
 
-  /* Client group (expandable) row. */
-  tr.client-row td.rowhdr { cursor: pointer; background: #fff; }
-  tr.client-row:hover td.rowhdr { background: #eef4fb; }
-  tr.client-row td.c-client { font-weight: 700; }
-  tr.client-row td.day { background: #fff; color: var(--accent); }
-  tr.client-row td.day.wknd { background: #f0f3f7; }
-  tr.client-row td.day.hit:hover { background: #d7ecff; }
-  .tri { display: inline-block; width: 12px; margin-right: 4px; color: var(--accent); font-size: 10px; }
-  /* Contract child row. */
-  tr.contract-row td.c-contract { padding-left: 20px; }
+  /* Frozen Client & Contract columns */
+  table.matrix th.rowhdr, table.matrix td.rowhdr { padding: 7px 14px; font-size: 12.5px; position: sticky; }
+  table.matrix td.rowhdr { background: #fff; color: var(--text); z-index: 2; }
+  table.matrix th.c-client, table.matrix td.c-client { left: 0; min-width: 185px; border-right: 1px solid #eef1f5; }
+  table.matrix th.c-contract, table.matrix td.c-contract {
+    left: 185px; min-width: 115px; font-variant-numeric: tabular-nums; color: var(--muted);
+    border-right: 2px solid var(--border);
+  }
+
+  /* Month value cells + the "X" load badge */
+  table.matrix td.day { text-align: center; padding: 6px; min-width: 44px; }
+  table.matrix td.day.hit { cursor: pointer; }
+  .mk {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 6px;
+    background: #e3f4ea; color: #1c7a44; font-weight: 800; font-size: 12px;
+    box-shadow: inset 0 0 0 1px rgba(28,122,68,.28);
+    transition: transform .08s ease;
+  }
+  table.matrix td.day.hit:hover .mk { background: #cdecd8; transform: scale(1.12); }
+  .mx-empty { padding: 28px; text-align: center; color: var(--muted); }
+
+  /* Client group (expandable) row */
+  tr.client-row td { background: #f5f9fd; border-bottom: 1px solid #dce7f3; }
+  tr.client-row td.rowhdr { cursor: pointer; background: #eef4fb; }
+  tr.client-row:hover td { background: #e6effb; }
+  tr.client-row:hover td.rowhdr { background: #dfeafb; }
+  tr.client-row td.c-client { font-weight: 700; color: var(--accent-dark); box-shadow: inset 3px 0 0 var(--accent); }
+  tr.client-row .mk { background: var(--accent); color: #fff; box-shadow: none; }   /* rollup badge */
+  tr.client-row td.day.hit:hover .mk { background: var(--accent-dark); }
+  .tri { display: inline-block; width: 12px; margin-right: 5px; color: var(--accent); font-size: 10px; }
+
+  /* Contract child rows */
+  tr.contract-row:hover td { background: #f4f8fd; }
+  tr.contract-row:hover td.rowhdr { background: #eef4fb; }
+  tr.contract-row td.c-contract { padding-left: 24px; position: relative; }
+  tr.contract-row td.c-contract::before {
+    content: ""; position: absolute; left: 13px; top: 50%; width: 5px; height: 5px;
+    margin-top: -3px; border-radius: 50%; background: #c2ccd8;
+  }
 
   #tooltip {
     position: fixed; z-index: 9999; pointer-events: none;
@@ -696,7 +720,7 @@ HTML_TEMPLATE = """<!doctype html>
       if (files && files.length) {
         const id = 'x' + (cid++);
         tipMap[id] = files;
-        cells += '<td class="day hit" data-tip="' + id + '">X</td>';
+        cells += '<td class="day hit" data-tip="' + id + '"><span class="mk">X</span></td>';
       } else {
         cells += '<td class="day"></td>';
       }
