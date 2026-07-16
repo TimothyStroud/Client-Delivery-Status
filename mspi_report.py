@@ -86,6 +86,8 @@ CONTRACT_SEG_RE = re.compile(r"^R?[A-Z]\d{3,5}$")
 LEAD_R_RE = re.compile(r"^R(?=[A-Z]\d)")
 # Data-date token in the leaf name, e.g. D260623 -> 2026-06-23 (Date Extracted).
 DATE_TOKEN_RE = re.compile(r"^D(\d{2})(\d{2})(\d{2})$")
+# Aetna MAO_DATA / MAODATA files carry no contract token -> label them 'MAO'.
+MAO_DATA_RE = re.compile(r"^MAO[ _]?DATA", re.I)
 
 
 def parse_client(path: str, sql_client: str) -> str:
@@ -100,10 +102,15 @@ def parse_client(path: str, sql_client: str) -> str:
 def parse_contract(path: str) -> str:
     """Contract token in the leaf file name, leading routing 'R' dropped.
 
-    e.g. H0342 -> H0342, EFTO.RH3890... -> H3890, P.RR6694... -> R6694.
+    e.g. H0342 -> H0342, EFTO.RH3890... -> H3890, P.RR6694... -> R6694,
+    H5580_MSPCOBMA... -> H5580 (underscore-joined).  Aetna MAO_DATA files
+    have no contract token and are labelled 'MAO'.
     """
     leaf = re.split(r"[\\/]", path or "")[-1]
-    for seg in leaf.upper().split("."):
+    if MAO_DATA_RE.match(leaf):
+        return "MAO"
+    # Segments split on dot / underscore / space so H5580_MSPCOBMA yields H5580.
+    for seg in re.split(r"[._ ]", leaf.upper()):
         if CONTRACT_SEG_RE.match(seg):
             return LEAD_R_RE.sub("", seg)
     return ""
