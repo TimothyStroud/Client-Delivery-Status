@@ -12,6 +12,7 @@
     --muted: #5b6776;
     --accent: #2c5f8a;
     --accent-dark: #1f3d5c;
+    --navy: #0a1f4d;
   }
   * { box-sizing: border-box; }
   body {
@@ -137,19 +138,30 @@
   table.matrix thead th.wknd { background: var(--accent-dark); }
   table.matrix th.rowhdr, table.matrix td.rowhdr {
     text-align: left; padding: 4px 10px; font-size: 12px;
-    background: var(--card); position: sticky; z-index: 2;
+    position: sticky; z-index: 2;
   }
-  table.matrix th.c-client, table.matrix td.c-client { left: 0; min-width: 150px; }
-  table.matrix th.c-entity, table.matrix td.c-entity { left: 150px; min-width: 90px; font-variant-numeric: tabular-nums; }
+  /* Navy background on the frozen Client & Contract columns. */
+  table.matrix td.rowhdr { background: var(--navy); color: #fff; border-right-color: #24407a; }
+  table.matrix th.c-client, table.matrix td.c-client { left: 0; min-width: 170px; }
+  table.matrix th.c-contract, table.matrix td.c-contract { left: 170px; min-width: 100px; font-variant-numeric: tabular-nums; }
   table.matrix thead th.rowhdr { z-index: 4; }
-  table.matrix td.c-client { font-weight: 600; }
-  table.matrix tbody tr:nth-child(even) td.rowhdr { background: #eef2f7; }
   table.matrix td.day { text-align: center; padding: 3px 6px; min-width: 26px; font-weight: 700; color: var(--accent); }
   table.matrix td.day.wknd { background: #f0f3f7; }
   table.matrix td.day.hit { cursor: pointer; }
   table.matrix td.day.hit:hover { background: #d7ecff; }
-  table.matrix tbody tr:hover td.rowhdr { background: #dbeafe; }
   .mx-empty { padding: 24px; text-align: center; color: var(--muted); }
+
+  /* Client group (expandable) row. */
+  tr.client-row td.rowhdr { cursor: pointer; background: var(--navy); }
+  tr.client-row:hover td.rowhdr { background: #14306b; }
+  tr.client-row td.c-client { font-weight: 700; }
+  tr.client-row td.day { background: #13224d; color: #39ff14; }
+  tr.client-row td.day.wknd { background: #0f1c40; }
+  tr.client-row td.day.hit:hover { background: #21407e; }
+  .tri { display: inline-block; width: 12px; margin-right: 4px; color: #9fb4cc; font-size: 10px; }
+  /* Contract child row. */
+  tr.contract-row td.c-client { background: #071634; }
+  tr.contract-row td.c-contract { padding-left: 20px; }
 
   #tooltip {
     position: fixed; z-index: 9999; pointer-events: none;
@@ -165,7 +177,7 @@
 <body>
 <header>
   <h1>MSPI File Report</h1>
-  <div class="meta">Generated 2026-07-16 09:11 &middot; TRGINTP3 / MSP &middot; etl.Tape TapeID &ge; 3000 &middot; 1,844 files</div>
+  <div class="meta">Generated 2026-07-16 09:49 &middot; TRGINTP3 / MSP &middot; etl.Tape TapeID &ge; 3000 &middot; 1,844 files</div>
 </header>
 <main>
   <div class="tabs">
@@ -183,9 +195,15 @@
         <label for="m-client">Client</label>
         <select id="m-client"><option value="">All clients</option></select>
       </div>
+      <div class="field">
+        <label for="m-contract">Contract</label>
+        <select id="m-contract"><option value="">All contracts</option></select>
+      </div>
+      <button class="secondary" id="m-expand">Expand all</button>
+      <button class="secondary" id="m-collapse">Collapse all</button>
       <div class="field" style="justify-content:flex-end">
         <label>&nbsp;</label>
-        <span style="font-size:12px;color:var(--muted)">Hover an <b>X</b> for date extracted, file name &amp; record count.</span>
+        <span style="font-size:12px;color:var(--muted)">Click a client to expand its contracts &middot; hover an <b>X</b> for date extracted, file name &amp; record count.</span>
       </div>
     </section>
     <div class="matrix-wrap">
@@ -433,7 +451,7 @@
   // Record count shown for a file: its native count by type.
   const fileRecords = (r) => (r.type === 'DET' ? r.det : (r.type === 'PRM' ? r.prm : r.msp)) || 0;
 
-  const monthState = { month: '', client: '' };
+  const monthState = { month: '', client: '', contract: '', expanded: new Set() };
 
   // Distinct load-months (YYYY-MM), newest first.
   const months = [...new Set(ROWS.map(r => r.loaded).filter(Boolean).map(s => s.slice(0, 7)))].sort().reverse();
@@ -448,6 +466,23 @@
   monthState.month = months[0] || '';
   if (monthState.month) $('m-month').value = monthState.month;
   fillSelect('m-client', [...new Set(ROWS.map(r => r.client).filter(Boolean))].sort());
+
+  // Contract dropdown is scoped to the selected client (cascading filter).
+  function populateContracts() {
+    const sel = $('m-contract');
+    const keep = monthState.contract;
+    sel.innerHTML = '<option value="">All contracts</option>';
+    const src = monthState.client ? ROWS.filter(r => r.client === monthState.client) : ROWS;
+    const cts = [...new Set(src.map(r => r.contract).filter(Boolean))].sort();
+    for (const c of cts) {
+      const opt = document.createElement('option');
+      opt.value = c; opt.textContent = c;
+      sel.appendChild(opt);
+    }
+    if (cts.indexOf(keep) !== -1) { sel.value = keep; }
+    else { monthState.contract = ''; sel.value = ''; }
+  }
+  populateContracts();
 
   const tip = $('tooltip');
   let tipMap = {};   // cell id -> array of files
@@ -477,19 +512,38 @@
   }
   const hideTip = () => { tip.style.display = 'none'; };
 
+  let cid = 0;   // unique cell/tooltip id counter across a render
+  // Build the day cells for one row from a {day: [files]} map + a class prefix.
+  function dayCells(y, m, daysInMonth, dayMap, extraCls) {
+    let cells = '';
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dow = new Date(y, m - 1, d).getDay();
+      const wknd = (dow === 0 || dow === 6) ? ' wknd' : '';
+      const files = dayMap[d];
+      if (files && files.length) {
+        const id = 'x' + (cid++);
+        tipMap[id] = files;
+        cells += '<td class="day hit' + wknd + extraCls + '" data-tip="' + id + '">X</td>';
+      } else {
+        cells += '<td class="day' + wknd + extraCls + '"></td>';
+      }
+    }
+    return cells;
+  }
+
   function renderMatrix() {
     const ym = monthState.month;
     const head = $('matrix-head'), body = $('matrix-body');
-    head.innerHTML = ''; body.innerHTML = ''; tipMap = {};
+    head.innerHTML = ''; body.innerHTML = ''; tipMap = {}; cid = 0;
     if (!ym) { body.innerHTML = '<tr><td class="mx-empty">No data.</td></tr>'; return; }
 
     const [y, m] = ym.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
     const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
-    // Header: Client | Entity | 1..daysInMonth
+    // Header: Client | Contract | 1..daysInMonth
     const htr = document.createElement('tr');
-    let hh = '<th class="rowhdr c-client">Client</th><th class="rowhdr c-entity">Entity</th>';
+    let hh = '<th class="rowhdr c-client">Client</th><th class="rowhdr c-contract">Contract</th>';
     for (let d = 1; d <= daysInMonth; d++) {
       const dow = new Date(y, m - 1, d).getDay();
       const wknd = (dow === 0 || dow === 6) ? ' wknd' : '';
@@ -498,48 +552,55 @@
     htr.innerHTML = hh;
     head.appendChild(htr);
 
-    // Group rows by client + entity for the selected month (and client filter).
-    const groups = {};
+    // Group by client, then by contract, for the selected month + filters.
+    // clients[name] = { contracts: {ct: {day:[files]}}, agg: {day:[files]} }
+    const clients = {};
     for (const r of ROWS) {
       if (!r.loaded || r.loaded.slice(0, 7) !== ym) continue;
       if (monthState.client && r.client !== monthState.client) continue;
-      const key = r.client + '\u0000' + r.contract;
-      if (!groups[key]) groups[key] = { client: r.client, contract: r.contract, days: {} };
+      if (monthState.contract && r.contract !== monthState.contract) continue;
+      const c = clients[r.client] || (clients[r.client] = { contracts: {}, agg: {} });
+      const ct = c.contracts[r.contract] || (c.contracts[r.contract] = {});
       const day = Number(r.loaded.slice(8, 10));
-      (groups[key].days[day] = groups[key].days[day] || []).push(r);
+      (ct[day] = ct[day] || []).push(r);
+      (c.agg[day] = c.agg[day] || []).push(r);
     }
 
-    const keys = Object.keys(groups).sort((a, b) => {
-      const ga = groups[a], gb = groups[b];
-      return (ga.client || '').localeCompare(gb.client || '') ||
-             (ga.contract || '').localeCompare(gb.contract || '');
-    });
-
-    if (keys.length === 0) {
+    const clientNames = Object.keys(clients).sort((a, b) => a.localeCompare(b));
+    if (clientNames.length === 0) {
       body.innerHTML = '<tr><td class="mx-empty" colspan="' + (daysInMonth + 2) + '">No files loaded in ' + monthLabel(ym) + '.</td></tr>';
       return;
     }
 
-    let cid = 0;
-    for (const key of keys) {
-      const g = groups[key];
-      const tr = document.createElement('tr');
-      let cells = '<td class="rowhdr c-client">' + escT(g.client) + '</td>' +
-                  '<td class="rowhdr c-entity">' + escT(g.contract) + '</td>';
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dow = new Date(y, m - 1, d).getDay();
-        const wknd = (dow === 0 || dow === 6) ? ' wknd' : '';
-        const files = g.days[d];
-        if (files && files.length) {
-          const id = 'x' + (cid++);
-          tipMap[id] = files;
-          cells += '<td class="day hit' + wknd + '" data-tip="' + id + '">X</td>';
-        } else {
-          cells += '<td class="day' + wknd + '"></td>';
-        }
+    // A specific contract filter forces the matching client open.
+    const forceOpen = !!monthState.contract;
+
+    for (const name of clientNames) {
+      const c = clients[name];
+      const open = forceOpen || monthState.expanded.has(name);
+      const tri = open ? '&#9660;' : '&#9654;';   // ▼ / ▶
+
+      const ctr = document.createElement('tr');
+      ctr.className = 'client-row';
+      ctr.dataset.client = name;
+      ctr.innerHTML =
+        '<td class="rowhdr c-client"><span class="tri">' + tri + '</span>' + escT(name) + '</td>' +
+        '<td class="rowhdr c-contract"></td>' +
+        dayCells(y, m, daysInMonth, c.agg, '');
+      body.appendChild(ctr);
+
+      const contracts = Object.keys(c.contracts).sort((a, b) => a.localeCompare(b));
+      for (const ct of contracts) {
+        const rtr = document.createElement('tr');
+        rtr.className = 'contract-row';
+        rtr.dataset.client = name;
+        if (!open) rtr.style.display = 'none';
+        rtr.innerHTML =
+          '<td class="rowhdr c-client"></td>' +
+          '<td class="rowhdr c-contract">' + escT(ct) + '</td>' +
+          dayCells(y, m, daysInMonth, c.contracts[ct], '');
+        body.appendChild(rtr);
       }
-      tr.innerHTML = cells;
-      body.appendChild(tr);
     }
   }
 
@@ -555,8 +616,28 @@
     if (!to || !to.closest || !to.closest('td.hit')) hideTip();
   });
 
+  // Click a client row to expand/collapse its contracts.
+  $('matrix-body').addEventListener('click', (e) => {
+    const row = e.target.closest('tr.client-row');
+    if (!row) return;
+    const name = row.dataset.client;
+    if (monthState.expanded.has(name)) monthState.expanded.delete(name);
+    else monthState.expanded.add(name);
+    renderMatrix();
+  });
+
   $('m-month').addEventListener('change', () => { monthState.month = $('m-month').value; renderMatrix(); });
-  $('m-client').addEventListener('change', () => { monthState.client = $('m-client').value; renderMatrix(); });
+  $('m-client').addEventListener('change', () => {
+    monthState.client = $('m-client').value;
+    populateContracts();
+    renderMatrix();
+  });
+  $('m-contract').addEventListener('change', () => { monthState.contract = $('m-contract').value; renderMatrix(); });
+  $('m-expand').addEventListener('click', () => {
+    document.querySelectorAll('#matrix-body tr.client-row').forEach(r => monthState.expanded.add(r.dataset.client));
+    renderMatrix();
+  });
+  $('m-collapse').addEventListener('click', () => { monthState.expanded.clear(); renderMatrix(); });
 
   // Tab switching.
   document.querySelectorAll('.tab').forEach(t => {
