@@ -231,16 +231,19 @@ def sql_job(server, name):
 
     status, step = row[-7], row[-6]
     if status == '1':                        # Executing -> current step + ETA
-        detail = f"Step {step}"
+        eta = None
         m = re.match(r'\s*(\d+)', step)      # leading step number, e.g. "4 (Build Chimera)"
         if m:
             secs = remaining_secs(server, name, int(m.group(1)))
             if secs and secs > 0:
-                detail += f" | ETA ~{_clock(datetime.now() + timedelta(seconds=secs))}"
+                eta = _clock(datetime.now() + timedelta(seconds=secs))
+        detail = f"_Step {step}_"
+        if eta:
+            detail += f"   `ETA ~{eta}`"     # inline code -> standout color
         return ("Executing", detail)
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
-    return (st, f"last run {oc} ({fmt_dt(row[-13], row[-12])})")
+    return (st, f"_last run {oc} ({fmt_dt(row[-13], row[-12])})_")
 
 
 def _to_dt(v):
@@ -357,7 +360,7 @@ def main():
         head, detail = sql_job(server, name)
         lines.append(f"*{label}*  {head}")
         if detail:
-            lines.append(f"_{detail}_")
+            lines.append(detail)   # detail already carries its own _italic_ / `code`
         lines.append("")
     while lines and lines[-1] == "":
         lines.pop()
