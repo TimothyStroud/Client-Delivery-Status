@@ -70,9 +70,9 @@ def detect(runs, state):
     # failure carries a new QueueId.
     if hrp.get('EndDate') and hrp.get('Status') == 'Failed' \
             and hrp.get('QueueId') != state.get('hrp_last_completed_qid'):
-        txt = ("<!here> :x: *Aetna 0110 HRP Load* *FAILED* in RAMP.\n> QueueId "
-               f"{hrp['QueueId']} | started {fmt(hrp.get('StartDate'))} | "
-               f"ended {fmt(hrp.get('EndDate'))} | please investigate.")
+        txt = ("<!here> :x: *Aetna 0110 HRP Load - FAILED in RAMP*\n"
+               f"_QueueId {hrp['QueueId']} | started {fmt(hrp.get('StartDate'))} | "
+               f"ended {fmt(hrp.get('EndDate'))} - please investigate_")
         events.append(('hrp', txt))
     return events
 

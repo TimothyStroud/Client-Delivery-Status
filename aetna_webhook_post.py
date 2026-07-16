@@ -47,11 +47,9 @@ def read_url(path):
 
 
 def sanitize(text):
-    """Workflow renders emoji only -> drop markup the workflow shows literally."""
-    text = text.replace('<!here> ', '').replace('<!here>', '')
-    text = re.sub(r'(?m)^> ?', '', text)   # blockquote markers
-    text = text.replace('*', '').replace('`', '')
-    return text
+    """Workflow Builder renders mrkdwn (*bold* / _italic_) + :emoji: (confirmed
+    2026-07-16), but <!here> shows literally and does not ping -> drop only that."""
+    return text.replace('<!here> ', '').replace('<!here>', '')
 
 
 def post(url, text):

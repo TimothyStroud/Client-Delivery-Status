@@ -32,10 +32,9 @@ def log(msg):
 
 
 def sanitize(text):
-    text = text.replace('<!here> ', '').replace('<!here>', '')
-    text = re.sub(r'(?m)^> ?', '', text)
-    text = text.replace('*', '').replace('`', '')
-    return text
+    # Workflow Builder renders mrkdwn (*bold*/_italic_) + emoji; only <!here> must
+    # be dropped (shows literally, doesn't ping). Confirmed 2026-07-16.
+    return text.replace('<!here> ', '').replace('<!here>', '')
 
 
 def post(url, text):

@@ -111,21 +111,35 @@ def hrp_run():
 RAMP_OK = ('Successful', 'Resolved')
 
 
+EXEC_ICON = ':arrows_counterclockwise:'   # in-progress marker for the main line
+
+
 def ramp_line(jobid):
-    """Status body (no leading '- ') for a RAMP job's LatestJobRun. Green check
-    for Successful/Resolved, red X for Failed."""
+    """Return (head, detail) for a RAMP job's LatestJobRun. 'head' = emoji +
+    status word for the bold main line; 'detail' = the quiet italic sub-line.
+    A job that has NOT run today is shown Idle with its last-run outcome (per user
+    2026-07-16)."""
     lr = job_run(jobid)
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
+    if end and not _started_today(start):
+        oc = 'Succeeded' if status in RAMP_OK else ('Failed' if status == 'Failed' else status)
+        icon = ':x:' if status == 'Failed' else ':hourglass_flowing_sand:'
+        return (f"{icon} Idle", f"last run {oc} {fmt(end)}")
     if end and status in RAMP_OK:
-        return f":white_check_mark: *{status}* | started {fmt(start)} | *completed {fmt(end)}*"
+        return (f":white_check_mark: {status}", f"started {fmt(start)} | completed {fmt(end)}")
     if end and status == 'Failed':
-        return f":x: *FAILED* | started {fmt(start)} | ended {fmt(end)} - please investigate"
+        return (":x: FAILED", f"started {fmt(start)} | ended {fmt(end)} - please investigate")
     if end:
-        return f"*{status}* | started {fmt(start)} | *completed {fmt(end)}*"
+        return (status, f"started {fmt(start)} | completed {fmt(end)}")
     if not start:
-        return f"*{status}* (queued) | not yet started"
-    return f"*{status}* (running) | started {fmt(start)} | not yet complete"
+        return (":hourglass_flowing_sand: Queued", "not yet started")
+    return (":hourglass_flowing_sand: Running", f"started {fmt(start)} | not yet complete")
+
+
+def _started_today(start):
+    dt = _to_dt(start)
+    return bool(dt and dt.date() == datetime.now().date())
 
 
 def fmt_dt(d, t):
@@ -201,22 +215,23 @@ def sql_job(server, name):
     """
     row = _sp_help_job(server, name)
     if not row:
-        return "(no data)"
+        return ("(no data)", "")
 
     status, step = row[-7], row[-6]
     if status == '1':                        # Executing -> current step + ETA
-        line = f"*Executing*: {step}"
+        detail = step
         m = re.match(r'\s*(\d+)', step)      # leading step number
         if m:
             secs = remaining_secs(server, name, int(m.group(1)))
             if secs and secs > 0:
-                line += f" | ETA ~{_clock(datetime.now() + timedelta(seconds=secs))}"
-        return line
+                detail += f" | ETA ~{_clock(datetime.now() + timedelta(seconds=secs))}"
+        return (f"{EXEC_ICON} Executing", detail)
     st = EXEC_STATUS.get(status, f'State {status}')
     oc = RUN_OUTCOME.get(row[-11], row[-11])
     # Checkmark for a Succeeded last run, red X for Failed (per user 2026-07-14).
-    icon = ':white_check_mark: ' if oc == 'Succeeded' else (':x: ' if oc == 'Failed' else '')
-    return f"{icon}*{st}* | last run {oc} ({fmt_dt(row[-13], row[-12])})"
+    icon = ':white_check_mark:' if oc == 'Succeeded' else (':x:' if oc == 'Failed' else '')
+    head = f"{icon} {st}".strip()
+    return (head, f"last run {oc} ({fmt_dt(row[-13], row[-12])})")
 
 
 def _to_dt(v):
@@ -252,17 +267,17 @@ def snap_line(load_jobid, snap_jobid):
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
     if end and status in RAMP_OK and not snap_is_current(load_jobid, snap_jobid):
-        return (":hourglass_flowing_sand: *Waiting to snap current load* "
-                f"(last snap {status} {fmt(end)}, ran before this load completed)")
+        return (":hourglass_flowing_sand: Waiting to snap current load",
+                f"last snap {status} {fmt(end)}, ran before this load completed")
     if end and status in RAMP_OK:
-        return f":white_check_mark: *{status}* | started {fmt(start)} | *completed {fmt(end)}*"
+        return (f":white_check_mark: {status}", f"started {fmt(start)} | completed {fmt(end)}")
     if end and status == 'Failed':
-        return f":x: *FAILED* | started {fmt(start)} | ended {fmt(end)} - please investigate"
+        return (":x: FAILED", f"started {fmt(start)} | ended {fmt(end)} - please investigate")
     if end:
-        return f"*{status}* | started {fmt(start)} | *completed {fmt(end)}*"
+        return (status, f"started {fmt(start)} | completed {fmt(end)}")
     if not start:
-        return f"*{status}* (queued) | not yet started"
-    return f"*{status}* (running) | started {fmt(start)} | not yet complete"
+        return (":hourglass_flowing_sand: Queued", "not yet started")
+    return (":hourglass_flowing_sand: Running", f"started {fmt(start)} | not yet complete")
 
 
 def _ramp_succeeded_today(jobid, ok=('Successful',)):
@@ -414,19 +429,28 @@ def main():
         print('NO_POST: HRP load + snap Succeeded today (RAMP + SQL)')
         return
     now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
-    lines = [f"<!here> :bar_chart: *Aetna HRP - Status Update*  ({now})", ""]
+    # Bold job/section names carry the status (main line); timestamps drop to a
+    # quiet italic sub-line so the reader hones in on state (per user 2026-07-16).
+    lines = [f":bar_chart: *Aetna HRP - Status Update*   _{now}_", ""]
     lines.append("*RAMP*")
-    lines.append("- `Aetna 0110 HRP Load`: " + ramp_line(HRP_JOBID))
-    lines.append("- `Aetna 0120 HRP Snap`: " + snap_line(HRP_JOBID, SNAP_JOBID))
-    lines.append("")
+    for label, (head, detail) in [
+            ("Aetna 0110 HRP Load", ramp_line(HRP_JOBID)),
+            ("Aetna 0120 HRP Snap", snap_line(HRP_JOBID, SNAP_JOBID))]:
+        lines.append(f"*{label}*  {head}")
+        if detail:
+            lines.append(f"_{detail}_")
+        lines.append("")
     lines.append("*SQL Job Activity Monitor*")
     for server, name, label in SQL_JOBS:
-        lines.append(f"- `{label}` ({server}): " + sql_job(server, name))
-    lines.append("")
+        head, detail = sql_job(server, name)
+        lines.append(f"*{label}*  ({server})  {head}")
+        if detail:
+            lines.append(f"_{detail}_")
+        lines.append("")
     _stage_qid, stage_end, files = last_stage_batch()
     icon, state_label = batch_state(stage_end)
     staged_on = stage_end.strftime('%m/%d/%Y') if stage_end else '?'
-    lines.append(f"*Claim Files - last Aetna 0100 HRP Stage (staged {staged_on}, {state_label})*")
+    lines.append(f"*Claim Files - last Aetna 0100 HRP Stage*   _staged {staged_on}, {state_label}_")
     lines.extend(claim_file_lines(files, icon))
     msg = "\n".join(lines)
     print("SLACK|" + msg.replace("\n", "\\n"))
