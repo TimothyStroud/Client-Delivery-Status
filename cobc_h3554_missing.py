@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 
 
-EMAIL_TO = "timothy.stroud@machinify.com"
+EMAIL_TO = "timothy.stroud@machinify.com; RDPOperations@Machinify.com"
 SERVER = "TRGETL3"
 TODAY = date(2026, 6, 4)
 START = date(2025, 1, 1)

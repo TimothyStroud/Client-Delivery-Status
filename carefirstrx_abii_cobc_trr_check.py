@@ -25,7 +25,7 @@ import sys
 sys.path.insert(0, BASE)
 from send_via_outlook import send
 
-EMAIL_TO = "DataOperations@machinify.com"
+EMAIL_TO = "DataOperations@machinify.com; RDPOperations@Machinify.com"
 EMAIL_FROM = "DataOperations@machinify.com"
 YEAR = 2026
 

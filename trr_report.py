@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta
 sys.path.insert(0, r'C:\Users\tls2\.claude\projects\H--')
 import send_via_outlook
 
-TO      = 'Timothy.Stroud@machinify.com'
+TO      = 'Timothy.Stroud@machinify.com; RDPOperations@Machinify.com'
 FROM    = 'DataOperations@machinify.com'
 SUBJECT = 'WellcareRx TRR Missing Contracts Report (2025 & 2026)'
 

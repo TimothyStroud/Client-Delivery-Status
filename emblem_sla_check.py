@@ -27,7 +27,7 @@ ARCHIVE = r'\\trgllc\Shares\RawlingsOutbound\DIG\EmblemFacets\Archive'
 STATE_FILE = os.path.join(BASE, 'emblem_sla_state.json')
 
 FROM_ADDR = 'DataOperations@machinify.com'
-TO_ADDR   = 'DataOperations@machinify.com'
+TO_ADDR   = 'DataOperations@machinify.com; RDPOperations@Machinify.com'
 
 SLA_DAYS = 3
 LOAD_JOB_NAME = 'Emblem Facets 0110 Load'
