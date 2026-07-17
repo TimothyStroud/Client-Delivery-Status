@@ -38,21 +38,39 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           'ramp_aetnahrp_digest_post_state.json')
 
 
+def _load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 def _recent_emit():
     """Return the last-emit datetime if within DEDUPE_MINUTES, else None."""
     try:
-        with open(STATE_FILE) as f:
-            last = datetime.fromisoformat(json.load(f)['last_emit'])
+        last = datetime.fromisoformat(_load_state()['last_emit'])
     except Exception:
         return None
     return last if datetime.now() - last < timedelta(minutes=DEDUPE_MINUTES) else None
 
 
-def _claim_slot():
-    """Stamp now as the last-emit time (atomic replace), claiming this slot."""
+def _last_msg():
+    """Text of the digest we most recently POSTED (for content dedupe), or None."""
+    return _load_state().get('last_msg')
+
+
+def _claim_slot(msg=None):
+    """Stamp now as the last-emit time (atomic replace), claiming this slot. If
+    msg is given, also record it as the last-posted message so an identical later
+    digest is skipped (content dedupe)."""
+    st = _load_state()
+    st['last_emit'] = datetime.now().isoformat()
+    if msg is not None:
+        st['last_msg'] = msg
     tmp = STATE_FILE + '.tmp'
     with open(tmp, 'w') as f:
-        json.dump({'last_emit': datetime.now().isoformat()}, f)
+        json.dump(st, f)
     os.replace(tmp, STATE_FILE)
 
 # (server, SQL Agent job name, display label). AetnaHRP's ETL Load is the SQL
@@ -252,16 +270,13 @@ def sql_job(server, name):
                 # :white_check_mark: = success, :x: = failure.
                 detail.append(f":arrows_counterclockwise: ETA ~{eta}")
         return (f"Executing Step {step}", detail)
-    # Idle: reflect TODAY's last-run outcome (per user 2026-07-16) -- green
-    # checkmark + Successful + completion time, or red X + Failed + time. A run
-    # from a prior day (or never) stays "- Idle" with no icon.
+    # Idle: reflect the LAST completed run's outcome and KEEP showing it until the
+    # job next starts (per user 2026-07-17: "when a client finishes for the day,
+    # mark as Successful until the next load job starts"). Green checkmark +
+    # Successful + completion time, or red X + Failed + time -- regardless of what
+    # day that run was. Once the next load starts, status flips to Executing above.
     oc = RUN_OUTCOME.get(row[-11], row[-11])
-    try:
-        _d = int(row[-13]); _t = datetime.now()
-        ran_today = _d == _t.year * 10000 + _t.month * 100 + _t.day
-    except (ValueError, TypeError):
-        ran_today = False
-    if ran_today and oc in ('Succeeded', 'Failed'):
+    if oc in ('Succeeded', 'Failed'):
         comp = last_completion(server, name)
         ctext = comp.strftime('%m/%d/%Y %I:%M %p') if comp else fmt_dt(row[-13], row[-12])
         if oc == 'Succeeded':
@@ -456,16 +471,9 @@ def main():
             return
     _claim_slot()
 
-    # Once ETL AetnaHRP MasterLoad has SUCCEEDED today, the rest of the day's
-    # digests are redundant -> emit no SLACK line so nothing posts.
-    if not force and job_succeeded_today('TRGETL2', 'ETL AetnaHRP MasterLoad'):
-        print('NO_POST: ETL AetnaHRP MasterLoad Succeeded today')
-        return
-    now = datetime.now().strftime('%m/%d/%Y %I:%M %p')
     # Minimal PLAIN-TEXT format (per user 2026-07-16): ETL AetnaHRP MasterLoad step
     # & ETA + the claim file(s) loading from Aetna 0100 HRP Stage. The webhook
-    # renders only :emoji: (no markup/color), so the only standout is the
-    # :red_circle: on the ETA line.
+    # renders only :emoji: (no markup/color).
     lines = ["AETNA HRP - STATUS UPDATE", ""]
     for server, name, label in SQL_JOBS:
         status_text, detail = sql_job(server, name)
@@ -478,6 +486,14 @@ def main():
     lines.append(f"Claim Files - last Aetna 0100 HRP Stage   (staged {staged_on}, {state_label})")
     lines.extend(claim_file_lines(files, icon))
     msg = "\n".join(lines)
+
+    # Content dedupe (per user 2026-07-17): post only when the status text CHANGES,
+    # so the Successful line posts once when HRP finishes and then holds until the
+    # next load starts. Replaces the old "succeeded today -> go silent" skip.
+    if not force and msg == _last_msg():
+        print("NO_POST: status unchanged since last post")
+        return
+    _claim_slot(msg)
     print("SLACK|" + msg.replace("\n", "\\n"))
 
 
