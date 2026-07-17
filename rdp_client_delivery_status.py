@@ -356,11 +356,15 @@ WEEKLY_CLIENTS = {
 # 2026-06-08 — now treated as a normal monthly Kaiser_Amb cert feed (see
 # MONTHLY_CERT_ONLY_CLIENTS / SNAP_KIND_ONLY_CLIENTS).
 # Oscar (weekly Wed) was Inactive 7/1-7/8; reactivated 2026-07-15 (backfill
-# certified today covering 7/1 & 7/8, new week loads today) — removed from
-# FORCED_INACTIVE. See MANUAL_OVERRIDES for the 7/1/7/8/7/15 cells.
+# certified 7/15 covering 7/1 & 7/8). 2026-07-17: per user, the 7/15 cell shows
+# the 7/15 cert date and ALL FUTURE Oscar Medical dates are Inactive — Oscar
+# re-added to FORCED_INACTIVE. The 7/1/7/8/7/15 cells keep their MANUAL_OVERRIDES
+# (dates), so only future Wed cells (7/22+) render "Inactive".
 # ESIPBMRx (monthly, tape/snap-driven) added 2026-07-15 per user: mark Inactive
 # until loading resumes ("can go to 'L' once loading starts again").
-FORCED_INACTIVE = {"Tufts_PublicPlan", "TuftsRx", "HealthNetCA", "ESIPBMRx"}
+# Tufts_Audit_CIT (weekly Mon) added 2026-07-17 per user: mark Inactive.
+FORCED_INACTIVE = {"Tufts_PublicPlan", "TuftsRx", "HealthNetCA", "ESIPBMRx",
+                   "Oscar", "Tufts_Audit_CIT"}
 
 # Clients whose load is running but snap step is disabled in RAMP — show
 # marker "Snap" with pink shading on the expected delivery day. Mechanism kept
@@ -590,11 +594,11 @@ MANUAL_OVERRIDES = {
     ("HMSA_Rx",       date(2026, 7, 7)): "Empty",
     # 2026-07-09: Oscar (weekly Wed) — was Inactive 7/1 & 7/8. 2026-07-15: per
     # user a backfill certified today (7/15) covering BOTH the 7/1 and 7/8
-    # deliveries; the new week is active and loads today. Pin the 7/15 cert on
-    # the 7/1 & 7/8 cells and "L" on this week's 7/15 cell (loading today).
+    # deliveries. 2026-07-17: per user the 7/15 cell certified 7/15 (show the
+    # date); all future Oscar Medical dates are Inactive (Oscar re-added to FORCED_INACTIVE).
     ("Oscar",         date(2026, 7, 1)):  date(2026, 7, 15),
     ("Oscar",         date(2026, 7, 8)):  date(2026, 7, 15),
-    ("Oscar",         date(2026, 7, 15)): "L",
+    ("Oscar",         date(2026, 7, 15)): date(2026, 7, 15),
     # 2026-07-09: AetnaHRP (daily) was in a Load Failure state — the 7/5, 7/6,
     # 7/7 data had not loaded, and the 7/8 certification did NOT include those
     # files. 2026-07-15: per user the backlog loaded and certified; the last-week
@@ -618,6 +622,11 @@ MANUAL_OVERRIDES = {
     # 2026-07-13: BCBSARRx (weekly Tue) — certified today (7/13). Per user, pin
     # last week's Tue 7/7 cell with the 7/13 cert date.
     ("BCBSARRx",      date(2026, 7, 7)):  date(2026, 7, 13),
+    # 2026-07-17: Tufts_Audit_CIT (weekly Mon) → Inactive. Future cells render
+    # Inactive via FORCED_INACTIVE, but this week's Mon 7/13 cell (a past day in
+    # the current week) was showing "L" from active-load detection; pin it to
+    # "Inactive" so the whole client reads Inactive. Per user.
+    ("Tufts_Audit_CIT", date(2026, 7, 13)): "Inactive",
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -726,10 +735,10 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     # on its 6/25 expected day. Remove once the reload completes / certifies.
     "BCBSFLEligibilityLoad": (date(2026, 6, 25), "Load Failure"),
     # 2026-07-15: HumanaRx (monthly, snap/load-as-delivery) was auto-rendering ✓,
-    # but per user it is still in Staging and has NOT loaded — remove the
-    # checkmark. Pin "L" (in progress) on 7/15. Remove/replace once it actually
-    # loads and snaps.
-    "HumanaRx": (date(2026, 7, 15), "L"),
+    # but per user it is still in Staging and has NOT loaded. 2026-07-17: per user
+    # HumanaRx Stage is in RAMP, not loading — change to "No Data". Remove/replace
+    # once it actually loads and snaps.
+    "HumanaRx": (date(2026, 7, 15), "No Data"),
 }
 
 # Per-(client, year, month) marker override for monthly clients. Unlike
@@ -746,6 +755,12 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     ("ElixirRx", 2026, 5): "L",
     ("ElixirRx", 2026, 6): "L",
     ("ElixirRx", 2026, 7): "L",
+    # 2026-07-17: Kaiser_WARx (monthly cert-only) — per user, show "L" (loading,
+    # awaiting cert) on its expected day, NOT the auto "No Data". A DHT cert this
+    # month auto-wins (checked before this override). The Friday pink escalation
+    # is separately suppressed for Kaiser_WARx in alert_state. Remove once it
+    # certifies.
+    ("Kaiser_WARx", 2026, 7): "L",
 }
 
 # Extra rows injected into the calendar after standard placement runs. Use for
@@ -2942,11 +2957,18 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             # have their own per-client semantics — fall through to the
             # generic marker rules so a valid ✓ doesn't get shaded pink
             # just because it's Friday, and Inactive still shades correctly.
+            # Kaiser_WARx: per user 2026-07-17, do NOT escalate its uncertified
+            # "L" to a pink alert on/after Friday — show a plain "L". Exempt it
+            # from the Friday-pink rule (Load Failure / Inactive still shade via
+            # the problem-state check above).
             if (client not in SNAP_KIND_ONLY_CLIENTS
                     and client not in LOAD_AS_DELIVERY_CLIENTS
-                    and client not in FORCED_INACTIVE):
+                    and client not in FORCED_INACTIVE
+                    and client != "Kaiser_WARx"):
                 if is_friday_or_later_in_week(today, day) and not isinstance(marker, date):
                     return True
+                return False
+            if client == "Kaiser_WARx":
                 return False
         if marker == "No Data":
             if client in FORCE_SHADE_NO_DATA:
