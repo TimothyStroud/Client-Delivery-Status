@@ -386,6 +386,23 @@ def job_succeeded_today(server, name):
     return status == '4' and outcome == '1' and d == t.year * 10000 + t.month * 100 + t.day
 
 
+def _active_today():
+    """True if any primary SQL job is currently Executing or finished (Succeeded/
+    Failed) today -- i.e. a real load cycle happened today to report on. Gates the
+    --evening extension so evening ticks stay silent on no-load days (weekends,
+    days the feed didn't run); the daytime 8/12/16 slots aren't gated by this."""
+    for server, name, _label in SQL_JOBS:
+        row = _sp_help_job(server, name)
+        if not row:
+            continue
+        if row[-7] == '1':                       # Executing right now
+            return True
+        comp = last_completion(server, name)
+        if comp and comp.date() == datetime.now().date():
+            return True
+    return False
+
+
 def main():
     # Cross-session dedupe (added 2026-06-26): bail if another session/run already
     # emitted a digest within the last DEDUPE_MINUTES. Claim the slot up front so a
@@ -400,6 +417,14 @@ def main():
     # Claim the slot (both normal and --force) so any near-simultaneous run dedupes
     # against this one. Done before the slow SQL/curl work to shrink the race window.
     _claim_slot()
+
+    # Evening extension (per user 2026-07-17): outside the normal 8/12/16 slots the
+    # tick calls this with --evening so a load finishing after the last daytime slot
+    # still gets its Executing->Successful transition posted. Stay silent unless a
+    # load actually ran today (else no-load evenings would post a stale idle line).
+    if '--evening' in sys.argv and not force and not _active_today():
+        print("NO_POST: evening extension, no load active/completed today")
+        return
 
     # Minimal PLAIN-TEXT format (per user 2026-07-16): the webhook renders only
     # :emoji: -- *bold*/_italic_/`code` show literally + Slack has no text color --

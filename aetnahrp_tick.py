@@ -24,6 +24,12 @@ DIGEST = BASE + r'\ramp_aetnahrp_status_digest.py'
 
 DIGEST_HOURS = {8, 12, 16}        # 8am / 12pm / 4pm
 DIGEST_DOW = {1, 2, 3, 4}         # Tue-Fri (Mon=0 .. Sun=6)
+EVENING_FROM = 17                 # 5pm+: evening extension (per user 2026-07-17).
+                                  # Past the last normal slot, keep running the
+                                  # digest --evening ANY day so a load finishing
+                                  # after 4pm still gets its Successful post. The
+                                  # digest self-gates on a real load being active/
+                                  # done today, so no-load evenings stay silent.
 
 
 def run(args):
@@ -45,10 +51,17 @@ def main():
             print('POST_SUPPORT|' + line[len('SLACK|'):])
             posted_any = True
 
-    # 2) Status digest — only at a digest slot (hour 8/12/16, Tue-Fri).
+    # 2) Status digest — at a normal slot (hour 8/12/16, Tue-Fri) or, on any day,
+    #    as an evening extension (>= 5pm) so a load finishing after the last daytime
+    #    slot still posts its Successful line. The digest gates --evening itself.
     now = datetime.now()
+    digest_args = None
     if now.hour in DIGEST_HOURS and now.weekday() in DIGEST_DOW:
-        rd = run([DIGEST])
+        digest_args = [DIGEST]
+    elif now.hour >= EVENING_FROM:
+        digest_args = [DIGEST, '--evening']
+    if digest_args:
+        rd = run(digest_args)
         for line in rd.stdout.splitlines():
             if line.startswith('SLACK|'):
                 print('POST_DIGEST|' + line[len('SLACK|'):])
