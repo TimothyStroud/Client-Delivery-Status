@@ -627,6 +627,11 @@ MANUAL_OVERRIDES = {
     # the current week) was showing "L" from active-load detection; pin it to
     # "Inactive" so the whole client reads Inactive. Per user.
     ("Tufts_Audit_CIT", date(2026, 7, 13)): "Inactive",
+    # 2026-07-17: WebTPA (weekly Fri) certified today (7/17); per user this cert
+    # covers BOTH the 7/10 and 7/17 weeks. Pin the 7/17 cert date on each Friday
+    # cell (the single cert would otherwise land on only one week).
+    ("WebTPA",        date(2026, 7, 10)): date(2026, 7, 17),
+    ("WebTPA",        date(2026, 7, 17)): date(2026, 7, 17),
 }
 
 # --- Sticky certifications --------------------------------------------------
