@@ -270,18 +270,21 @@ def sql_job(server, name):
                 # :white_check_mark: = success, :x: = failure.
                 detail.append(f":arrows_counterclockwise: ETA ~{eta}")
         return (f"Executing Step {step}", detail)
-    # Idle: reflect the LAST completed run's outcome and KEEP showing it until the
-    # job next starts (per user 2026-07-17: "when a client finishes for the day,
-    # mark as Successful until the next load job starts"). Green checkmark +
-    # Successful + completion time, or red X + Failed + time -- regardless of what
-    # day that run was. Once the next load starts, status flips to Executing above.
+    # Idle: show the last run's outcome as Successful/Failed ONLY while its
+    # COMPLETION falls on today's date; at the start of the next day it reverts to
+    # "- Idle" (per user 2026-07-17: "only show as Successful until the start of
+    # the next day"). Gate on the completion time, NOT sp_help_job's last_run_date
+    # (= the START date): an overnight run that started yesterday but finished
+    # early today, like AetnaRx, must still count as today. NCStateAetna, which
+    # both started and finished yesterday, shows Idle.
     oc = RUN_OUTCOME.get(row[-11], row[-11])
     if oc in ('Succeeded', 'Failed'):
         comp = last_completion(server, name)
         ctext = comp.strftime('%m/%d/%Y %I:%M %p') if comp else fmt_dt(row[-13], row[-12])
-        if oc == 'Succeeded':
-            return ("", [f":white_check_mark: Successful {ctext}"])
-        return ("", [f":x: Failed {ctext}"])
+        if comp and comp.date() == datetime.now().date():
+            if oc == 'Succeeded':
+                return ("", [f":white_check_mark: Successful {ctext}"])
+            return ("", [f":x: Failed {ctext}"])
     st = EXEC_STATUS.get(status, f'State {status}')
     return (f"- {st}", [])
 
