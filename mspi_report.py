@@ -19,7 +19,7 @@ Client and Contract are parsed out of the FileName path, e.g.
                                     leading routing 'R' is dropped, so
                                     RH3890 -> H3890 and RR6694 -> R6694)
 
-Filterable: Client, Type (DET / MSP / PRM by record presence), Contract,
+Filterable: Client, Type (DET / PRM by record presence), Contract,
 File Name, and load-date range.  A single "Records" column shows the count for
 the selected Type (native file count when Type is "All").
 
@@ -330,15 +330,16 @@ HTML_TEMPLATE = """<!doctype html>
     border-right: 2px solid var(--border);
   }
 
-  /* Month value cells + the "X" load badge */
-  table.matrix td.day { text-align: center; padding: 6px; min-width: 44px; }
+  /* Month value cells + the record-count load badge */
+  table.matrix td.day { text-align: center; padding: 6px; min-width: 64px; }
   table.matrix td.day.hit { cursor: pointer; }
   .mk {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 22px; height: 22px; border-radius: 6px;
-    background: #e3f4ea; color: #1c7a44; font-weight: 800; font-size: 12px;
+    min-width: 22px; height: 22px; border-radius: 6px; padding: 0 8px;
+    background: #e3f4ea; color: #1c7a44; font-weight: 700; font-size: 12px;
     box-shadow: inset 0 0 0 1px rgba(28,122,68,.28);
     transition: transform .08s ease;
+    font-variant-numeric: tabular-nums;
   }
   table.matrix td.day.hit:hover .mk { background: #cdecd8; transform: scale(1.12); }
   .mx-empty { padding: 28px; text-align: center; color: var(--muted); }
@@ -405,7 +406,7 @@ HTML_TEMPLATE = """<!doctype html>
       <button class="secondary" id="m-collapse">Collapse all</button>
       <div class="field" style="justify-content:flex-end">
         <label>&nbsp;</label>
-        <span style="font-size:12px;color:var(--muted)">Click a client to expand its contracts &middot; hover an <b>X</b> for date extracted, file name &amp; record count.</span>
+        <span style="font-size:12px;color:var(--muted)">Click a client to expand its contracts &middot; hover a <b>count</b> for date extracted, file name &amp; record count.</span>
       </div>
     </section>
     <div class="matrix-wrap">
@@ -436,7 +437,6 @@ HTML_TEMPLATE = """<!doctype html>
       <select id="f-type">
         <option value="">All types</option>
         <option value="DET">DET</option>
-        <option value="MSP">MSP</option>
         <option value="PRM">PRM</option>
       </select>
     </div>
@@ -714,7 +714,7 @@ HTML_TEMPLATE = """<!doctype html>
   const hideTip = () => { tip.style.display = 'none'; };
 
   // All-time universe of client -> [contracts], so every client/contract is
-  // listed each month whether or not it loaded (the X is the load indicator).
+  // listed each month whether or not it loaded (a record count = it loaded).
   const ALL_PAIRS = {};
   {
     const tmp = {};
@@ -731,7 +731,8 @@ HTML_TEMPLATE = """<!doctype html>
       if (files && files.length) {
         const id = 'x' + (cid++);
         tipMap[id] = files;
-        cells += '<td class="day hit" data-tip="' + id + '"><span class="mk">X</span></td>';
+        const total = files.reduce((s, f) => s + fileRecords(f), 0);
+        cells += '<td class="day hit" data-tip="' + id + '"><span class="mk">' + total.toLocaleString('en-US') + '</span></td>';
       } else {
         cells += '<td class="day"></td>';
       }
@@ -765,7 +766,7 @@ HTML_TEMPLATE = """<!doctype html>
     }
 
     // Render the FULL universe of clients+contracts (loaded or not) for the
-    // year, applying the client/contract filters. Blank X cells = not loaded.
+    // year, applying the client/contract filters. Blank cells = not loaded.
     let clientNames = Object.keys(ALL_PAIRS);
     if (monthState.client) clientNames = clientNames.filter(n => n === monthState.client);
     if (monthState.contract) clientNames = clientNames.filter(n => ALL_PAIRS[n].indexOf(monthState.contract) !== -1);
