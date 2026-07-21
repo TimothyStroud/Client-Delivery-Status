@@ -1959,6 +1959,77 @@ def fetch_cvspbm_adhoc(since):
     return rows
 
 
+# Regular weekly CVSPBMRx eligibility file: RAW_MEMBR_ELIG_YYYYMMDD.TXT. The
+# 8-digit token is the file's DATA date (a Saturday); the file is expected to
+# load the FOLLOWING Monday (e.g. 20260627 Sat -> the 6/29 Mon cell). GCP/backfill
+# files (RAW_MEMBR_ELIG_GCP_YYYYMMDD) don't match this pattern and are handled as
+# Ad Hoc by fetch_cvspbm_adhoc.
+CVSPBMRX_WEEKLY_RE = re.compile(r"RAW_MEMBR_ELIG_(\d{8})\.txt", re.I)
+
+
+def _cvspbmrx_cell_monday(data_date):
+    """Delivery cell (Monday) for a CVSPBMRx weekly file's data date.
+    The data date is a Saturday; delivery is the next Monday (0-day offset if the
+    date already lands on a Monday)."""
+    return data_date + timedelta(days=(0 - data_date.weekday()) % 7)
+
+
+def fetch_cvspbmrx_weekly(since):
+    """Return regular (non-Ad-Hoc) CVSPBMRx weekly eligibility tape files.
+
+    Scans TRGETL3 CVSPBMRx.etl.Tape for RAW_MEMBR_ELIG_YYYYMMDD files below the
+    Ad Hoc FileSize threshold. Each file's 8-digit DATA date maps to the next
+    Monday's weekly cell (see _cvspbmrx_cell_monday), so a load that arrives late
+    still lands on the correct week rather than the week it happened to load.
+    Per user 2026-07-21: the 20260627 file loaded 7/19 (3 weeks late) but belongs
+    on the 6/29 cell — the giveaway is which claims file the '0100 Stage' job
+    loaded (its FileName carries the data date, same as the tape FileName here).
+    Returns list of dicts: {filename, data_date: date, cell_monday: date,
+    loaded: bool, load_date: datetime|None}.
+    """
+    q = (
+        "SET NOCOUNT ON; SELECT FileName, FileSize, ProcessStatus, "
+        "CONVERT(varchar(19), FileLoadDate, 121) "
+        "FROM [etl].[Tape] "
+        f"WHERE FileLoadDate >= '{since:%Y-%m-%d}' "
+        "ORDER BY FileLoadDate"
+    )
+    SEP = "\x1f"
+    r = subprocess.run(
+        ["sqlcmd", "-S", "TRGETL3", "-d", "CVSPBMRx", "-E", "-Q", q,
+         "-W", "-s", SEP, "-h", "-1"],
+        capture_output=True, text=True, check=False,
+    )
+    rows = []
+    for line in r.stdout.splitlines():
+        p = line.split(SEP)
+        if len(p) < 4:
+            continue
+        fn = (p[0] or "").strip()
+        m = CVSPBMRX_WEEKLY_RE.search(fn)
+        if not m:
+            continue
+        try:
+            size = int(p[1].strip())
+            status = int(p[2].strip())
+        except ValueError:
+            continue
+        if size >= CVSPBMRX_ADHOC_MIN_FILESIZE:
+            continue   # oversized backfill -> Ad Hoc, not a weekly cell
+        try:
+            dd = datetime.strptime(m.group(1), "%Y%m%d").date()
+        except ValueError:
+            continue
+        rows.append({
+            "filename":    fn,
+            "data_date":   dd,
+            "cell_monday": _cvspbmrx_cell_monday(dd),
+            "loaded":      status == 50,
+            "load_date":   parse_dt(p[3].strip()),
+        })
+    return rows
+
+
 # JHHC Passfile: the four monthly passfiles (Trauma/Subro × Active/Closed) all
 # carry TableID = 5000 in TRGETL4.JohnsHopkins.etl.Tape. FileName looks like
 # …\RawlingsGroup_PassFile_TraumaClosed_SSA_20260604.txt — capture the file
@@ -2908,7 +2979,8 @@ def is_friday_or_later_in_week(today, scheduled_day):
 def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_placements,
                   ramp_jobs, ramp_queue, esipbmrx_tape=None, multi_week_loads=None,
                   aetna_nmsp_loads=None, optumpbmrx_tape=None, evernorth_claims_pending=False,
-                  optum_raw_instances=None, cvspbm_adhoc=None, jhhc_passfile_loads=None):
+                  optum_raw_instances=None, cvspbm_adhoc=None, jhhc_passfile_loads=None,
+                  cvspbm_weekly=None):
     """Return ((sections, weeks)) layout.
 
     sections: dict {kind: dict {date: [(label, marker, alert)] }}
@@ -2927,6 +2999,39 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     # the backfill on its own "CVSPBMRx (Ad Hoc)" row instead. Per user 2026-07-06.
     cvspbm_adhoc = cvspbm_adhoc or []
     cvspbm_adhoc_loading = any(not a.get("loaded") for a in cvspbm_adhoc)
+
+    # CVSPBMRx weekly ✓ is attributed by the file's DATA date (from the FileName /
+    # '0100 Stage' job), NOT by when the load/snap finished — so a late load lands
+    # on the correct week. Build {cell_monday: snap_dt} for each weekly file that
+    # has both loaded (tape ProcessStatus 50) AND snapped (a CVSPBMRx snap-kind
+    # completion at/after the file's FileLoadDate). Per user 2026-07-21: the
+    # 20260627 file loaded 7/19 but must ✓ on 6/29, not 7/20. cvspbm_delivered
+    # overrides snap_in_week for CVSPBMRx in resolve_marker.
+    cvspbm_weekly = cvspbm_weekly or []
+    cvspbm_snap_dts = sorted(
+        e[1]
+        for d in snap_idx
+        for e in snap_idx[d]
+        if len(e) > 3 and e[3] == "snap" and _src_matches_client(e[0], ["cvspbmrx"])
+    )
+    cvspbm_delivered = {}   # cell_monday(date) -> ✓ snap datetime
+    for f in cvspbm_weekly:
+        if not f.get("loaded") or not f.get("load_date"):
+            continue
+        # This file's snap = the first CVSPBMRx snap at/after its load, within a
+        # 7-day window (the snap always follows the load within a day or two; the
+        # cap prevents an old file — whose real snap predates the snap-history
+        # window — from matching an unrelated later snap and over-marking a stale
+        # cell). Weekly cadence is 7 days, so the window can't bleed into the
+        # next file's snap.
+        ld = f["load_date"]
+        snap_dt = next((s for s in cvspbm_snap_dts
+                        if ld <= s <= ld + timedelta(days=7)), None)
+        if snap_dt is None:
+            continue
+        cell = f["cell_monday"]
+        if cell not in cvspbm_delivered or snap_dt > cvspbm_delivered[cell]:
+            cvspbm_delivered[cell] = snap_dt
 
     daily   = defaultdict(list)
     weekly  = defaultdict(list)
@@ -3141,7 +3246,17 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 return "L"
             if has_recent_failure(client, ramp_queue, ramp_jobs, today):
                 return "Load Failure"
-        if allow_checkmark:
+        # CVSPBMRx: ✓ is driven by the weekly file's DATA date (cvspbm_delivered,
+        # built above from the tape FileName), NOT the snap completion date — so
+        # a late load stays on its correct week (20260627 -> 6/29 cell, not the
+        # 7/20 week it finally loaded). Do NOT fall back to snap_in_week here;
+        # that back-attribution is exactly what put the ✓ on the wrong cell.
+        # Per user 2026-07-21. Current-week "L" while loading is handled above.
+        if client == "CVSPBMRx":
+            cell_mon = day - timedelta(days=day.weekday())
+            if allow_checkmark and cell_mon in cvspbm_delivered:
+                return "✓"
+        elif allow_checkmark:
             if snap_in_week(client, day, snap_idx):
                 return "✓"
         elif in_current_week:
@@ -5032,6 +5147,13 @@ def main():
     cvspbm_adhoc = fetch_cvspbm_adhoc(since=date(year, month, 1) - timedelta(days=14))
     print(f"[info]   CVSPBMRx Ad Hoc instances: {len(cvspbm_adhoc)}")
 
+    print("[info] Fetching CVSPBMRx weekly eligibility files (data-date cells)…")
+    # Wide window: the report renders every month of the year, and a late load
+    # (e.g. the 6/27 file loaded 7/19) must still ✓ on its data-date week.
+    cvspbm_weekly = fetch_cvspbmrx_weekly(since=date(year, 1, 1))
+    print(f"[info]   CVSPBMRx weekly files: {len(cvspbm_weekly)} "
+          f"(loaded={sum(1 for r in cvspbm_weekly if r['loaded'])})")
+
     print("[info] Fetching JHHC Passfile loads (TRGETL4 TableID=5000)…")
     # Widest window: the report renders every month of the year in one run, and
     # the JHHCPassfile ✓ for a past month (e.g. June) is anchored to that
@@ -5091,7 +5213,8 @@ def main():
                                         evernorth_claims_pending=evernorth_claims_pending,
                                         optum_raw_instances=optum_raw_instances,
                                         cvspbm_adhoc=cvspbm_adhoc,
-                                        jhhc_passfile_loads=jhhc_passfile_loads)
+                                        jhhc_passfile_loads=jhhc_passfile_loads,
+                                        cvspbm_weekly=cvspbm_weekly)
 
         tab_name = f"{_cal_mod.month_name[m]} {year}"
         ws_m = wb.create_sheet(tab_name)
