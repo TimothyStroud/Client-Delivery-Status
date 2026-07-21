@@ -199,28 +199,114 @@ def _sp_help_job(server, name):
     return None
 
 
-def remaining_secs(server, name, cur_step):
-    """Estimated seconds left = sum of avg historical durations of steps
-    cur_step..end (avg over the last 8 successful runs per step)."""
+# ---- ETA (anchored to the actual run start) ----------------------------------
+# The OLD approach (remaining_secs) estimated "now + avg remaining duration" and
+# NEVER subtracted the time the current run had already been executing, so every
+# tick (2 h apart) it re-added the same estimate onto a fresh 'now' and the ETA
+# marched forward ~2 h every 2 h without ever converging (reported by user
+# 2026-07-21). AetnaHRP MasterLoad also has genuinely bimodal runtimes (5 min to
+# ~38 h in recent history), so a single point estimate is false precision. We now
+# anchor to the live run's start and show a typical (p25-p75) RANGE + elapsed +
+# an overdue flag.
+
+
+def _recent_full_durations(server, name, n=8):
+    """Durations (seconds) of the last n SUCCESSFUL full runs (step_id=0)."""
     q = ("SET NOCOUNT ON; "
          f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
-         ";WITH h AS (SELECT step_id, "
-         "(run_duration/10000)*3600+((run_duration/100)%100)*60+(run_duration%100) AS dur_sec, "
-         "ROW_NUMBER() OVER (PARTITION BY step_id ORDER BY run_date DESC, run_time DESC) rn "
-         f"FROM msdb.dbo.sysjobhistory WITH (NOLOCK) WHERE @jid=job_id AND step_id>={cur_step} "
-         "AND step_id<50 AND run_status=1) "
-         "SELECT ISNULL(SUM(a),0) FROM (SELECT AVG(dur_sec) a FROM h WHERE rn<=8 GROUP BY step_id) y;")
+         f"SELECT TOP {n} run_duration FROM msdb.dbo.sysjobhistory WITH (NOLOCK) "
+         "WHERE job_id=@jid AND step_id=0 AND run_status=1 ORDER BY run_date DESC, run_time DESC;")
+    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
+                         capture_output=True, text=True, timeout=120)
+    durs = []
+    for line in out.stdout.splitlines():
+        s = line.strip()
+        if s.isdigit():
+            v = int(s)
+            durs.append((v // 10000) * 3600 + ((v // 100) % 100) * 60 + (v % 100))
+    return durs
+
+
+def _current_run_start(server, name):
+    """Start datetime of the CURRENTLY-executing run from sysjobactivity (the row
+    on the latest Agent session with no stop time), or None if not executing /
+    unreadable."""
+    # NB: don't join msdb.dbo.syssessions to find the latest Agent session -- SELECT
+    # on it is permission-denied here. Ordering sysjobactivity by session_id DESC
+    # (then newest start) picks the current run's row directly.
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         "SELECT TOP 1 CONVERT(varchar(19), ja.start_execution_date, 120) "
+         "FROM msdb.dbo.sysjobactivity ja WITH (NOLOCK) "
+         "WHERE ja.job_id=@jid AND ja.start_execution_date IS NOT NULL "
+         "AND ja.stop_execution_date IS NULL "
+         "ORDER BY ja.session_id DESC, ja.start_execution_date DESC;")
     out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
                          capture_output=True, text=True, timeout=120)
     for line in out.stdout.splitlines():
-        s = line.strip()
-        if s.lstrip('-').isdigit():
-            return int(s)
+        dt = _to_dt(line.strip())
+        if dt:
+            return dt
     return None
 
 
-def _clock(dt):
-    return dt.strftime('%I:%M %p').lstrip('0')
+def _pct(sorted_vals, p):
+    """Nearest-rank percentile of an ascending list (None if empty)."""
+    if not sorted_vals:
+        return None
+    import math
+    k = max(1, math.ceil(p / 100.0 * len(sorted_vals)))
+    return sorted_vals[k - 1]
+
+
+def _dur_h(sec):
+    """Compact elapsed: 'Xh YYm' / 'Xh' / 'Ym'."""
+    m = int(round(sec / 60.0))
+    h, m = divmod(m, 60)
+    if h and m:
+        return f"{h}h {m:02d}m"
+    if h:
+        return f"{h}h"
+    return f"{m}m"
+
+
+def _dur_hr_label(sec):
+    """Coarse duration label for the typical band: whole hours, or minutes < 1 h."""
+    if sec < 3600:
+        return f"{int(round(sec / 60.0))}m"
+    return f"{int(round(sec / 3600.0))}h"
+
+
+def _eta_stamp(dt):
+    """Clock time; prefixed with mm/dd when the ETA is not today."""
+    if dt.date() == datetime.now().date():
+        return dt.strftime('%I:%M %p').lstrip('0')
+    return dt.strftime('%m/%d %I:%M %p').lstrip('0')
+
+
+def eta_detail(server, name):
+    """Anchored ETA lines for the in-flight run: run_start + typical (p25-p75)
+    historical duration, plus elapsed and an overdue flag. Anchoring to the real
+    run start (not 'now') is what stops the old 2-h-per-tick drift. Degrades to a
+    plain typical-range note if the live run start can't be read."""
+    durs = sorted(_recent_full_durations(server, name))
+    if not durs:
+        return [f"{EXEC_ICON} in progress"]
+    lo, hi = _pct(durs, 25), _pct(durs, 75)
+    typ = f"typical {_dur_hr_label(lo)}-{_dur_hr_label(hi)}"
+    start = _current_run_start(server, name)
+    if not start:
+        return [f"{EXEC_ICON} in progress ({typ})"]
+    elapsed = (datetime.now() - start).total_seconds()
+    run = _dur_h(elapsed)
+    if elapsed > hi:
+        return [f"{EXEC_ICON} running {run} - over {typ}; still processing"]
+    eta_lo, eta_hi = start + timedelta(seconds=lo), start + timedelta(seconds=hi)
+    if elapsed < lo:
+        return [f"{EXEC_ICON} running {run} - {typ}",
+                f"ETA ~{_eta_stamp(eta_lo)} - {_eta_stamp(eta_hi)}"]
+    return [f"{EXEC_ICON} running {run} - {typ}",
+            f"ETA by ~{_eta_stamp(eta_hi)}"]
 
 
 def last_completion(server, name):
@@ -260,16 +346,9 @@ def sql_job(server, name):
 
     status, step = row[-7], row[-6]
     if status == '1':                        # Executing -> "Executing Step N (name)" + ETA line
-        detail = []
-        m = re.match(r'\s*(\d+)', step)      # leading step number
-        if m:
-            secs = remaining_secs(server, name, int(m.group(1)))
-            if secs and secs > 0:
-                eta = _clock(datetime.now() + timedelta(seconds=secs))
-                # Icon set (per user 2026-07-16): cycling-arrows = loading,
-                # :white_check_mark: = success, :x: = failure.
-                detail.append(f":arrows_counterclockwise: ETA ~{eta}")
-        return (f"Executing Step {step}", detail)
+        # ETA anchored to the live run's start (see eta_detail); the icon set is
+        # cycling-arrows = loading, :white_check_mark: = success, :x: = failure.
+        return (f"Executing Step {step}", eta_detail(server, name))
     # Idle: show the last run's outcome as Successful/Failed ONLY while its
     # COMPLETION falls on today's date; at the start of the next day it reverts to
     # "- Idle" (per user 2026-07-17: "only show as Successful until the start of
