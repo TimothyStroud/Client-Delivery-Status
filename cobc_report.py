@@ -71,6 +71,8 @@ CONTRACT_SEG_RE = re.compile(r"^R?[A-Z]\d{3,5}$")
 LEAD_R_RE = re.compile(r"^R(?=[A-Z]\d)")
 # Data-date token in the leaf name, e.g. D260508 -> 2026-05-08 (Date Extracted).
 DATE_TOKEN_RE = re.compile(r"^D(\d{2})(\d{2})(\d{2})$")
+# Older BCBSNC files carry a YYYYMMDDHHMMSS stamp instead, e.g. 20240416090707.
+DATE_TS_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})\d{6}$")
 # Leading routing token on the Client column, e.g. "2-AetnaHMO" -> "AetnaHMO".
 CLIENT_PREFIX_RE = re.compile(r"^\d+-")
 
@@ -95,6 +97,9 @@ def parse_extracted(path: str) -> str:
         m = DATE_TOKEN_RE.match(seg)
         if m:
             return f"20{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        m = DATE_TS_RE.match(seg)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
     return ""
 
 
