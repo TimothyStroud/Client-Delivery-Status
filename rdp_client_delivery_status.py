@@ -1373,7 +1373,7 @@ CLIENT_OWNERS = {
 # ============================================================
 def curl_json(url):
     r = subprocess.run(
-        ["curl", "-s", "--ntlm", "-u", ":", url],
+        ["curl", "-s", "--negotiate", "-u", ":", url],
         capture_output=True, text=True, check=False,
     )
     return json.loads(r.stdout)
@@ -1385,7 +1385,7 @@ def curl_post_json(url, body):
         path = f.name
     try:
         r = subprocess.run(
-            ["curl", "-s", "--ntlm", "-u", ":",
+            ["curl", "-s", "--negotiate", "-u", ":",
              "-H", "Content-Type: application/json",
              "--data-binary", f"@{path}", url],
             capture_output=True, text=True, check=False,

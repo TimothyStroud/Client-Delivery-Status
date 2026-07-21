@@ -1,4 +1,4 @@
-"""
+﻿"""
 Every-few-hours (weekday) status digest -> Slack #data-operations-aetna-updates.
 
 Mirrors ramp_aetnahrp_status_digest.py. Combines:
@@ -88,7 +88,7 @@ def _all_jobs():
     global _JOBS_CACHE
     if _JOBS_CACHE is not None:
         return _JOBS_CACHE
-    out = subprocess.run(['curl', '-s', '--ntlm', '-u', ':',
+    out = subprocess.run(['curl', '-s', '--negotiate', '-u', ':',
                           'http://ramp/api/Ramp/Job/List'],
                          capture_output=True, text=True, timeout=180)
     try:

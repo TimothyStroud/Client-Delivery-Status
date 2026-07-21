@@ -1,4 +1,4 @@
-import json, subprocess
+﻿import json, subprocess
 from datetime import datetime
 import sys, os
 sys.path.insert(0, r'C:\Users\tls2\.claude\projects\H--')
@@ -8,7 +8,7 @@ STATE_FILE = r'C:\Users\tls2\.claude\projects\H--\known_unconfigured.json'
 TO_ADDRESS = 'DataOperations@machinify.com; RDPOperations@machinify.com'
 
 result = subprocess.run(
-    ['curl', '-s', '--ntlm', '-u', ':', 'http://ramp/api/Ramp/ConfiguredFiles'],
+    ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/ConfiguredFiles'],
     capture_output=True, text=True
 )
 data = json.loads(result.stdout)

@@ -1,4 +1,4 @@
-import json, subprocess, sys
+﻿import json, subprocess, sys
 from datetime import datetime
 
 STATE_FILE = r'C:\Users\tls2\.claude\projects\H--\known_unconfigured.json'
@@ -7,7 +7,7 @@ FROM_ADDRESS = 'DataOperations@machinify.com'
 
 # Fetch current unconfigured files
 result = subprocess.run(
-    ['curl', '-s', '--ntlm', '-u', ':', 'http://ramp/api/Ramp/ConfiguredFiles'],
+    ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/ConfiguredFiles'],
     capture_output=True, text=True
 )
 

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Email report of all inactive RAMP jobs, grouped by Last Run Date.
 Columns: Job Name, Last Updated On, Last Updated By, Last Run, Toggle Notes
 """
@@ -16,15 +16,15 @@ ADO_URL = 'https://devops.ado.rawlingslou.prod/TFS2012/AppDev/_workitems/edit/{}
 
 GROUPS = [
     ('Past Week',         0,   7),
-    ('Past 1–4 Weeks',    7,   28),
-    ('Past 1–3 Months',   28,  90),
+    ('Past 1â€“4 Weeks',    7,   28),
+    ('Past 1â€“3 Months',   28,  90),
     ('Older than 3 Months', 90, None),
 ]
 
 
 def curl_json(url):
     result = subprocess.run(
-        ['curl', '-s', '--ntlm', '-u', ':', url],
+        ['curl', '-s', '--negotiate', '-u', ':', url],
         capture_output=True, text=True
     )
     return json.loads(result.stdout)

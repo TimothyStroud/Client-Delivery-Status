@@ -1,4 +1,4 @@
-"""
+﻿"""
 Every-3-hours (weekday) status digest -> Slack #team-rdp-operations-support.
 
 Combines:
@@ -103,7 +103,7 @@ def _all_jobs():
     global _JOBS_CACHE
     if _JOBS_CACHE is not None:
         return _JOBS_CACHE
-    out = subprocess.run(['curl', '-s', '--ntlm', '-u', ':',
+    out = subprocess.run(['curl', '-s', '--negotiate', '-u', ':',
                           'http://ramp/api/Ramp/Job/List'],
                          capture_output=True, text=True, timeout=180)
     try:
@@ -128,7 +128,7 @@ def rce_run():
 
 
 # RAMP terminal-good statuses: mining/load jobs report 'Successful'; snap jobs
-# report 'Resolved' (a full snap run resolves its queue item — e.g. the RCE 330
+# report 'Resolved' (a full snap run resolves its queue item â€” e.g. the RCE 330
 # Weekly Snap sits at 'Resolved' after a ~1h run). Both get a green check.
 RAMP_OK = ('Successful', 'Resolved')
 
@@ -315,7 +315,7 @@ def _to_dt(v):
 
 
 def snap_is_current(load_jobid, snap_jobid):
-    """True if the snap's latest run belongs to the CURRENT load — i.e. the snap
+    """True if the snap's latest run belongs to the CURRENT load â€” i.e. the snap
     STARTED at/after the load's latest completion. A load that hasn't completed
     yet has no current snap (returns False). Per user 2026-07-14: don't credit a
     snap that ran for a prior load cycle."""

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Load-Completion SLA monitor (RAMP) -> email from DataOperations to RDPOperations.
 
 Reports Success / Failed SLA when a monitored RAMP load job COMPLETES.
@@ -93,7 +93,7 @@ def _ok_status(s):
 def load_jobruns():
     """Return {jobid: LatestJobRun dict} from RAMP Job/List."""
     out = subprocess.run(
-        ['curl', '-s', '--ntlm', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
+        ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
         capture_output=True, text=True)
     data = json.loads(out.stdout)
     d = data['Data']

@@ -1,4 +1,4 @@
-"""
+﻿"""
 RAMP -> Slack fail-only monitor for the AetnaRx Claim pipeline.
 
 Mirrors ramp_aetnahrp_slack_monitor.py but watches EVERY RAMP job whose name
@@ -29,7 +29,7 @@ DONE_STATUSES = ('Successful', 'Resolved', 'Failed')
 
 def all_jobs():
     out = subprocess.run(
-        ['curl', '-s', '--ntlm', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
+        ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
         capture_output=True, text=True, timeout=180)
     data = json.loads(out.stdout)
     d = data['Data']

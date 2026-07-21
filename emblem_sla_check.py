@@ -1,4 +1,4 @@
-"""
+﻿"""
 EmblemFacets Response-File SLA monitor.
 
 Monthly process (~15th). Pipeline in RAMP:
@@ -54,7 +54,7 @@ MATCH_BUFFER = timedelta(hours=6)
 def get_load_start():
     """Return datetime of the most recent 'Emblem Facets 0110 Load' start."""
     out = subprocess.run(
-        ['curl', '-s', '--ntlm', '-u', ':', 'http://ramp/api/Ramp/Queue/List'],
+        ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Queue/List'],
         capture_output=True, text=True)
     data = json.loads(out.stdout)
     d = data['Data']

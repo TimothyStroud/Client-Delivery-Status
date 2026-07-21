@@ -1,4 +1,4 @@
-"""
+﻿"""
 RAMP -> Slack monitor for the Aetna RCE 310 ETL Load job.
 
 Event posted to #team-rdp-operations-support (C09EPLQL2D9):
@@ -29,7 +29,7 @@ DONE_STATUSES = ('Successful', 'Failed')
 
 def jobruns():
     out = subprocess.run(
-        ['curl', '-s', '--ntlm', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
+        ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
         capture_output=True, text=True, timeout=180)
     data = json.loads(out.stdout)
     d = data['Data']
