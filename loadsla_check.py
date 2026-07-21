@@ -91,11 +91,26 @@ def _ok_status(s):
 
 
 def load_jobruns():
-    """Return {jobid: LatestJobRun dict} from RAMP Job/List."""
-    out = subprocess.run(
-        ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
-        capture_output=True, text=True)
-    data = json.loads(out.stdout)
+    """Return {jobid: LatestJobRun dict} from RAMP Job/List.
+
+    RAMP intermittently returns an empty / non-JSON body (seen at the 8am fire
+    time). Retry a few times so a transient blip doesn't crash the whole run.
+    """
+    import time
+    data = None
+    last_err = None
+    for attempt in range(5):
+        out = subprocess.run(
+            ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
+            capture_output=True, text=True)
+        try:
+            data = json.loads(out.stdout)
+            break
+        except json.JSONDecodeError as e:
+            last_err = e
+            time.sleep(5)
+    if data is None:
+        raise RuntimeError('RAMP Job/List returned no valid JSON after retries: %s' % last_err)
     d = data['Data']
     jobs = d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else d
     runs = {}

@@ -406,7 +406,7 @@ HTML_TEMPLATE = """<!doctype html>
       <button class="secondary" id="m-collapse">Collapse all</button>
       <div class="field" style="justify-content:flex-end">
         <label>&nbsp;</label>
-        <span style="font-size:12px;color:var(--muted)">Click a client to expand its contracts &middot; hover a <b>count</b> for date extracted, file name &amp; record count.</span>
+        <span style="font-size:12px;color:var(--muted)">Cell = files loaded that month &middot; click a client to expand its contracts &middot; hover a <b>count</b> for date extracted, file name &amp; record count.</span>
       </div>
     </section>
     <div class="matrix-wrap">
@@ -731,8 +731,7 @@ HTML_TEMPLATE = """<!doctype html>
       if (files && files.length) {
         const id = 'x' + (cid++);
         tipMap[id] = files;
-        const total = files.reduce((s, f) => s + fileRecords(f), 0);
-        cells += '<td class="day hit" data-tip="' + id + '"><span class="mk">' + total.toLocaleString('en-US') + '</span></td>';
+        cells += '<td class="day hit" data-tip="' + id + '"><span class="mk">' + files.length.toLocaleString('en-US') + '</span></td>';
       } else {
         cells += '<td class="day"></td>';
       }

@@ -1,20 +1,30 @@
-﻿import json, subprocess, sys
+﻿import json, subprocess, sys, time
 from datetime import datetime
 
 STATE_FILE = r'C:\Users\tls2\.claude\projects\H--\known_unconfigured.json'
 TO_ADDRESS   = 'DataOperations@machinify.com; RDPOperations@Machinify.com'
 FROM_ADDRESS = 'DataOperations@machinify.com'
 
-# Fetch current unconfigured files
-result = subprocess.run(
-    ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/ConfiguredFiles'],
-    capture_output=True, text=True
-)
+# Fetch current unconfigured files. RAMP intermittently returns an empty /
+# non-JSON body (seen at the scheduled fire times); retry a few times so a
+# transient blip doesn't cause a silent no-op run.
+data = None
+for attempt in range(5):
+    result = subprocess.run(
+        ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/ConfiguredFiles'],
+        capture_output=True, text=True
+    )
+    try:
+        data = json.loads(result.stdout)
+        break
+    except json.JSONDecodeError:
+        time.sleep(5)
 
-try:
-    data = json.loads(result.stdout)
-except json.JSONDecodeError:
-    sys.exit(0)
+if data is None:
+    # Still no valid JSON after retries -- RAMP is down. Exit non-zero so the
+    # scheduled task surfaces the failure instead of masking it as success.
+    sys.stderr.write('RAMP ConfiguredFiles returned no valid JSON after retries\n')
+    sys.exit(1)
 
 items = data.get('Data', [[]])[0]
 current = [i for i in items if not i.get('IsConfigured')]
