@@ -113,7 +113,9 @@ CLIENT_ALIASES = {
     "AetnaQNXTRx":          ["aetnaqnxtrx"],
     "ElixirRx":             ["elixirrx"],
     "Tufts_PublicPlan":     ["tuftspublicplan"],
-    "MedicalMutualMHS":     ["medicalmutualmhs"],
+    # MMOH MHS jobs ('MMOH MHS 0100 Stage' / '… 0120 Snap') derive the snap_idx
+    # prefix "mmohmhs" — alias it so the stage-file ✓ snap match reaches them.
+    "MedicalMutualMHS":     ["medicalmutualmhs", "mmohmhs"],
     # WellpointEdwardRx — RAMP jobs are named "Wellpoint RX Claims …" /
     # "Wellpoint RX Claims HealthSun …" so we need the prefix-derived
     # snap_idx keys to be reachable via strict-equality aliases. Per user
@@ -2030,6 +2032,142 @@ def fetch_cvspbmrx_weekly(since):
     return rows
 
 
+# ------------------------------------------------------------------
+# Generalized "stage-file → data-date cell" attribution (per user 2026-07-21).
+#
+# Same principle proven for CVSPBMRx: a client's delivery CELL is driven by the
+# DATA-THROUGH date parsed from its staged CLAIMS file (the '…0100 …Stage' job's
+# file — its FileName == the tape FileName), NOT by when the load/snap happened,
+# so a LATE/missed load still lands on the correct week/month. Target cell = the
+# client's next scheduled delivery slot ON/AFTER the data-through date (weekly:
+# next scheduled weekday; monthly: the expected day of the data-through month).
+#
+# On that target cell the DHT cert still wins (the existing cert lookup runs
+# first in resolve_marker / determine_monthly); this only fixes the ✓ FALLBACK
+# and its placement for a delivery that loaded+snapped but isn't yet certified —
+# per user: "add the cert date on the next scheduled day ≥ the file's data-
+# through date; only use the checkmark if the client doesn't get certified."
+#
+# DORMANT: all of these are FORCED_INACTIVE today (no current loads), so this is
+# inert until they reactivate — VALIDATE against live output on the first real
+# late load. NOT included (can't be done safely off the tape yet):
+#   • HealthNetCA — legacy etl.Tape (rows back to 2007, no clean ProcessStatus/
+#     FileLoadDate) + each delivery fans into many sub-files (XA…XZ). Needs a
+#     RAMP-based load-status source; Stage job 'HealthNet 0100 Claims Stage'.
+WEEKDAY_NAME_NUM = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
+                    "Friday": 4, "Saturday": 5, "Sunday": 6}
+
+STAGE_FILE_CELL_CLIENTS = {
+    # Stage job 'Tufts RX Claims 0100 Stage'. Weekly Monday. Claims file
+    # Point32Health_Rawlings_6072_YYYYMMDD_hhmmss_RXECHF70CL.txt — YYYYMMDD is
+    # the Monday itself (single date).
+    "TuftsRx": dict(
+        server="TRGETL3", db="TuftsRx", schedule="weekly",
+        claim_re=re.compile(r"Point32Health_Rawlings_\d+_(\d{8})_\d+_RXECHF70CL", re.I),
+        date_fmt="%Y%m%d",
+    ),
+    # Stage job 'Oscar Medical 0100 Stage'. Weekly Wednesday. Claims file
+    # Oscar_Weekly_Claims_MMDDYYYY_MMDDYYYY.txt — a date RANGE; use the END
+    # (through) date. Skip wide (>21d) ranges: the current loads are quarter-long
+    # backfills, not the weekly cadence.
+    "Oscar": dict(
+        server="TRGETL2", db="Oscar", schedule="weekly",
+        claim_re=re.compile(r"Oscar_Weekly_Claims_(\d{8})_(\d{8})", re.I),
+        date_fmt="%m%d%Y", use_end=True, max_span_days=21,
+    ),
+    # Stage job 'Tufts PublicPlan 0100 Stage'. Monthly. Claims file
+    # THPP_Rawlings_Claim_Provider_Extract_YYYYMMDD.txt (data date the 10th).
+    "Tufts_PublicPlan": dict(
+        server="TRGETL3", db="Tufts_PublicPlan", schedule="monthly",
+        claim_re=re.compile(r"Claim_Provider_Extract_(\d{8})", re.I),
+        date_fmt="%Y%m%d",
+    ),
+    # Stage job 'MMOH MHS 0100 Stage'. Monthly. Claim file GB391F.MMDDYYYY.txt
+    # (GB390F is eligibility; date is MM DD YYYY, not YYYYMMDD).
+    "MedicalMutualMHS": dict(
+        server="TRGETL4", db="MedicalMutualMHS", schedule="monthly",
+        claim_re=re.compile(r"GB391F\.(\d{8})", re.I),
+        date_fmt="%m%d%Y",
+    ),
+}
+
+
+def _stage_file_data_date(filename, cfg):
+    """Parse the data-through date from a staged claims FileName per `cfg`.
+    Returns (data_date, span_days) or (None, None). For a date RANGE the END
+    date is the data-through date (per user) and span_days is end-start."""
+    m = cfg["claim_re"].search(filename or "")
+    if not m:
+        return None, None
+    try:
+        if cfg.get("use_end"):
+            start = datetime.strptime(m.group(1), cfg["date_fmt"]).date()
+            end = datetime.strptime(m.group(2), cfg["date_fmt"]).date()
+            return end, (end - start).days
+        return datetime.strptime(m.group(1), cfg["date_fmt"]).date(), 0
+    except (ValueError, IndexError):
+        return None, None
+
+
+def _next_scheduled_weekday(client, d):
+    """The client's next scheduled delivery weekday ON/AFTER date `d` (0-day
+    offset if `d` already lands on a scheduled weekday). Reproduces CVSPBMRx
+    (Sat 6/27 → Mon 6/29) and TuftsRx (Mon 7/13 → Mon 7/13)."""
+    wanted = {WEEKDAY_NAME_NUM[n] for n in WEEKLY_CLIENTS.get(client, [])}
+    if not wanted:
+        return d
+    for delta in range(7):
+        cand = d + timedelta(days=delta)
+        if cand.weekday() in wanted:
+            return cand
+    return d
+
+
+def fetch_stage_file_loads(client, cfg, since):
+    """Loaded claims files for a STAGE_FILE_CELL_CLIENTS client, from its tape.
+    Returns list of dicts: {filename, data_date, load_date, loaded, cell} where
+    `cell` is the weekly Monday-week target for weekly clients (next scheduled
+    weekday ≥ data date) or the (year, month) tuple for monthly clients."""
+    q = (
+        "SET NOCOUNT ON; SELECT FileName, ProcessStatus, "
+        "CONVERT(varchar(19), FileLoadDate, 121) "
+        "FROM [etl].[Tape] "
+        f"WHERE FileLoadDate >= '{since:%Y-%m-%d}' ORDER BY FileLoadDate"
+    )
+    SEP = "\x1f"
+    r = subprocess.run(
+        ["sqlcmd", "-S", cfg["server"], "-d", cfg["db"], "-E", "-Q", q,
+         "-W", "-s", SEP, "-h", "-1"],
+        capture_output=True, text=True, check=False,
+    )
+    rows = []
+    for line in r.stdout.splitlines():
+        p = line.split(SEP)
+        if len(p) < 3:
+            continue
+        fn = (p[0] or "").strip()
+        dd, span = _stage_file_data_date(fn, cfg)
+        if dd is None:
+            continue
+        max_span = cfg.get("max_span_days")
+        if max_span is not None and span is not None and span > max_span:
+            continue   # backfill / catch-up range, not the normal cadence
+        try:
+            status = int(p[1].strip())
+        except ValueError:
+            continue
+        cell = (_next_scheduled_weekday(client, dd) if cfg["schedule"] == "weekly"
+                else (dd.year, dd.month))
+        rows.append({
+            "filename":  fn,
+            "data_date": dd,
+            "loaded":    status == 50,
+            "load_date": parse_dt(p[2].strip()),
+            "cell":      cell,
+        })
+    return rows
+
+
 # JHHC Passfile: the four monthly passfiles (Trauma/Subro × Active/Closed) all
 # carry TableID = 5000 in TRGETL4.JohnsHopkins.etl.Tape. FileName looks like
 # …\RawlingsGroup_PassFile_TraumaClosed_SSA_20260604.txt — capture the file
@@ -2980,7 +3118,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                   ramp_jobs, ramp_queue, esipbmrx_tape=None, multi_week_loads=None,
                   aetna_nmsp_loads=None, optumpbmrx_tape=None, evernorth_claims_pending=False,
                   optum_raw_instances=None, cvspbm_adhoc=None, jhhc_passfile_loads=None,
-                  cvspbm_weekly=None):
+                  cvspbm_weekly=None, stage_file_loads=None):
     """Return ((sections, weeks)) layout.
 
     sections: dict {kind: dict {date: [(label, marker, alert)] }}
@@ -3032,6 +3170,33 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         cell = f["cell_monday"]
         if cell not in cvspbm_delivered or snap_dt > cvspbm_delivered[cell]:
             cvspbm_delivered[cell] = snap_dt
+
+    # General stage-file ✓ FALLBACK for STAGE_FILE_CELL_CLIENTS (TuftsRx, Oscar,
+    # Tufts_PublicPlan, MedicalMutualMHS). {client: {cell: snap_dt}} where cell is
+    # the scheduled weekday date (weekly) or (year, month) (monthly). Same load+
+    # snap-within-7-days rule as CVSPBMRx; cert still wins upstream. Per user
+    # 2026-07-21. Dormant until these clients leave FORCED_INACTIVE.
+    stage_file_loads = stage_file_loads or {}
+    stage_delivered = {}
+    for sf_client, rows in stage_file_loads.items():
+        keys = [k for k in _keys_for_client(sf_client) if k]
+        sf_snap_dts = sorted(
+            e[1] for d in snap_idx for e in snap_idx[d]
+            if len(e) > 3 and e[3] == "snap" and _src_matches_client(e[0], keys)
+        )
+        cells = {}
+        for f in rows:
+            if not f.get("loaded") or not f.get("load_date"):
+                continue
+            ld = f["load_date"]
+            snap_dt = next((s for s in sf_snap_dts
+                            if ld <= s <= ld + timedelta(days=7)), None)
+            if snap_dt is None:
+                continue
+            cell = f["cell"]
+            if cell not in cells or snap_dt > cells[cell]:
+                cells[cell] = snap_dt
+        stage_delivered[sf_client] = cells
 
     daily   = defaultdict(list)
     weekly  = defaultdict(list)
@@ -3256,6 +3421,18 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             cell_mon = day - timedelta(days=day.weekday())
             if allow_checkmark and cell_mon in cvspbm_delivered:
                 return "✓"
+        elif (client in STAGE_FILE_CELL_CLIENTS
+              and STAGE_FILE_CELL_CLIENTS[client]["schedule"] == "weekly"):
+            # Weekly stage-file clients (TuftsRx, Oscar): ✓ FALLBACK driven by the
+            # claims file's DATA date (stage_delivered), placed on the scheduled
+            # weekday cell — NOT the load/snap date. NOT gated on allow_checkmark:
+            # cert clients like Oscar aren't in SNAP_ONLY_CLIENTS, but the user
+            # wants a ✓ when snapped-but-not-certified. Cert already won upstream
+            # (returns before this), so this only fires when uncertified. No
+            # snap_in_week fallback (that would misplace a late load). Per user
+            # 2026-07-21.
+            if day in stage_delivered.get(client, {}):
+                return "✓"
         elif allow_checkmark:
             if snap_in_week(client, day, snap_idx):
                 return "✓"
@@ -3374,6 +3551,16 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             d = c_latest.date()
             d = next_monday_if_weekend(d) if d.weekday() >= 5 else d
             return d, c_latest.date()
+
+        # 1-stage) Monthly stage-file clients (Tufts_PublicPlan, MedicalMutualMHS):
+        # ✓ FALLBACK on the expected day of the data-through MONTH, driven by the
+        # claims file's data date (stage_delivered) rather than the load/snap
+        # month — so a late load stays in its correct month. Cert (step 1) already
+        # won; this only shows when snapped-but-not-certified. Per user 2026-07-21.
+        if (client in STAGE_FILE_CELL_CLIENTS
+                and STAGE_FILE_CELL_CLIENTS[client]["schedule"] == "monthly"
+                and (year, month) in stage_delivered.get(client, {})):
+            return expected_date, "✓"
 
         # 1a) Per-month marker override (e.g. force "L" until cert) — placed on
         # the client's expected day. A cert this month (handled above) always
@@ -5154,6 +5341,20 @@ def main():
     print(f"[info]   CVSPBMRx weekly files: {len(cvspbm_weekly)} "
           f"(loaded={sum(1 for r in cvspbm_weekly if r['loaded'])})")
 
+    print("[info] Fetching stage-file data-date loads (TuftsRx/Oscar/Tufts_PublicPlan/MedicalMutualMHS)…")
+    # Data-date-driven delivery cells for late/missed loads (see
+    # STAGE_FILE_CELL_CLIENTS). Whole-year window like CVSPBMRx.
+    stage_file_loads = {}
+    for sf_client, sf_cfg in STAGE_FILE_CELL_CLIENTS.items():
+        try:
+            stage_file_loads[sf_client] = fetch_stage_file_loads(
+                sf_client, sf_cfg, since=date(year, 1, 1))
+        except Exception as e:
+            print(f"[warn]   {sf_client} stage-file fetch failed: {e}")
+            stage_file_loads[sf_client] = []
+    print("[info]   stage-file loads: "
+          + ", ".join(f"{c}={len(r)}" for c, r in stage_file_loads.items()))
+
     print("[info] Fetching JHHC Passfile loads (TRGETL4 TableID=5000)…")
     # Widest window: the report renders every month of the year in one run, and
     # the JHHCPassfile ✓ for a past month (e.g. June) is anchored to that
@@ -5214,7 +5415,8 @@ def main():
                                         optum_raw_instances=optum_raw_instances,
                                         cvspbm_adhoc=cvspbm_adhoc,
                                         jhhc_passfile_loads=jhhc_passfile_loads,
-                                        cvspbm_weekly=cvspbm_weekly)
+                                        cvspbm_weekly=cvspbm_weekly,
+                                        stage_file_loads=stage_file_loads)
 
         tab_name = f"{_cal_mod.month_name[m]} {year}"
         ws_m = wb.create_sheet(tab_name)
