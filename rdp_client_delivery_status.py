@@ -548,6 +548,10 @@ MANUAL_OVERRIDES = {
     ("WellCareRx",    date(2026, 6, 12)): date(2026, 6, 24),
     ("WellCareRx",    date(2026, 6, 19)): date(2026, 6, 24),
     ("WellCareRx",    date(2026, 6, 26)): date(2026, 6, 24),
+    # 2026-07-21: the current WellCareRx load is a Reload, not the normal Friday
+    # delivery (per user). Show this Friday's cell as pending "No Data"; the
+    # reload appears on its own "WellCareRx (Reload)" row (ADDITIONAL_ENTRIES).
+    ("WellCareRx",    date(2026, 7, 24)): "No Data",
     # 2026-06-24: CenteneRx/OscarRx 6/22 certs land on the 6/19 cell
     # automatically via the StatTimestamp system. The 6/26 blank overrides were
     # REMOVED 2026-06-24 — OscarRx & CenteneRx are now LOADING their 6/26
@@ -737,10 +741,9 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     "AetnaQNXT":  (date(2026, 5, 19), "AUTO"),
     # Kaiser_AmbM override removed 2026-06-08 — snap re-enabled; it now follows
     # the standard Kaiser_Amb cert-only placement (Thursday anchor).
-    # 2026-06-29: BCBSFL Elig (monthly, 6/25) was auto-rendering ✓, but per user
-    # it is in a Load Failure status — not completed. Pin "Load Failure" (pink)
-    # on its 6/25 expected day. Remove once the reload completes / certifies.
-    "BCBSFLEligibilityLoad": (date(2026, 6, 25), "Load Failure"),
+    # BCBSFL Elig moved to MONTHLY_MONTH_MARKER_OVERRIDES 2026-07-21 (the old
+    # 2026-06-29 "Load Failure" pin is gone — June's file reloaded and delivered
+    # late on 7/6, now shown as a "BCBSFL Elig (June)" row in ADDITIONAL_ENTRIES).
     # 2026-07-15: HumanaRx (monthly, snap/load-as-delivery) was auto-rendering ✓,
     # but per user it is still in Staging and has NOT loaded. 2026-07-17: per user
     # HumanaRx Stage is in RAMP, not loading — change to "No Data". Remove/replace
@@ -768,6 +771,15 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     # is separately suppressed for Kaiser_WARx in alert_state. Remove once it
     # certifies.
     ("Kaiser_WARx", 2026, 7): "L",
+    # 2026-07-21: BCBSSC RX — only the '0100 Stage' is running, not the '0110
+    # Load' (per user). Force "No Data" on the expected day for July; a real DHT
+    # cert this month still auto-wins (checked before this). Remove after it loads.
+    ("BCBSSCRx", 2026, 7): "No Data",
+    # 2026-07-21: BCBSFL Elig — June's file delivered LATE on 7/6 (shown as a
+    # separate "BCBSFL Elig (June)" row). That stray 7/6 snap was pulling July's
+    # auto-placement onto 7/6; force "No Data" on July's 25th slot (renders Fri
+    # 7/24) until July's own file arrives. Remove after July delivers.
+    ("BCBSFLEligibilityLoad", 2026, 7): "No Data",
 }
 
 # Extra rows injected into the calendar after standard placement runs. Use for
@@ -780,6 +792,14 @@ ADDITIONAL_ENTRIES = [
     ("weekly", date(2026, 5, 18), "Medica (5/1/26)", date(2026, 5, 18), False, None),
     # EverNorthRx backsweep files 21, 22, 23 certified 2026-05-22 per user.
     ("weekly", date(2026, 5, 22), "EverNorthRx (21,22,23 BS)", date(2026, 5, 22), False, None),
+    # 2026-07-21: BCBSFL Elig June cycle delivered late on 7/6 (per user — the
+    # 7/6 Elig activity was June's, not July's). Show it as a labeled ✓ row so
+    # the late delivery is recorded; July's own row sits on 7/24 (No Data).
+    ("monthly", date(2026, 7, 6), "BCBSFL Elig (June)", "✓", False, None),
+    # 2026-07-21: WellCareRx current load is a Reload, NOT the normal Friday
+    # delivery (per user). Surface it as its own labeled "L" row; the normal
+    # 7/24 Friday cell is separately forced to "No Data" (MANUAL_OVERRIDES).
+    ("weekly", date(2026, 7, 24), "WellCareRx (Reload)", "L", False, None),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
@@ -901,6 +921,14 @@ MONTHLY_CLIENTS = {
     "OptumPBMRx",                       # monthly, tape-driven
     "PremeraMedAdvRx", "PremeraMedAdvVIS",
     "SamaritanHealth", "Tufts_PublicPlan", "TuftsRx",
+}
+
+# Monthly clients retired mid-year: drop from the report starting the given
+# (year, month) — kept on earlier month tabs where they were still active.
+# Per user 2026-07-21: EDW_ASE retired; the EDW feeds now pull under
+# 'Wellpoint 0100 EDW Pull …' jobs and ASE is no longer delivered.
+MONTHLY_RETIRED_FROM = {
+    "EDW_ASE": (2026, 7),
 }
 
 # Ad-hoc MONTHLY snap-driven clients (per user 2026-06-25): appear ONCE per
@@ -1127,6 +1155,14 @@ SNAP_KIND_ONLY_CLIENTS = {
 LOAD_AS_DELIVERY_CLIENTS = {
     "OptumPBMRx", "HumanaRx", "BCBSKSMedAdv",
     "AetnaRCE", "AetnaRx", "NCStateAetna",
+}
+
+# Clients whose LOAD step uses a non-standard verb ("Pull" instead of "Load")
+# in the JobName. Per user 2026-07-21: the EDW feeds load via
+# 'Wellpoint 0100 EDW Pull <feed>' jobs — treat "pull" as a load token so
+# is_loading_today surfaces "L" while the pull is running.
+PULL_AS_LOAD_CLIENTS = {
+    "EDW_ASE", "EDW_C_FAC", "EDW_C_NAS", "EDW_Empire", "EDW_WGS",
 }
 
 # Clients whose "L" is driven ONLY by the LOAD step — a running snap/mine step
@@ -2615,6 +2651,11 @@ def is_loading_today(client, queue, jobs):
         if any(kw in jn for kw in ("stage", "logfile", "sftp", "upload")):
             continue
         is_load = "load" in jn and "snap" not in jn and "mine" not in jn
+        # EDW feeds load via 'Wellpoint 0100 EDW Pull <feed>' — treat "pull" as
+        # a load verb for those clients so the running pull surfaces "L".
+        if (not is_load and client in PULL_AS_LOAD_CLIENTS
+                and "pull" in jn and "snap" not in jn and "mine" not in jn):
+            is_load = True
         is_snap = ("snap" in jn or "mine" in jn) and "load" not in jn
         # Per-client JobName whitelist (e.g. Rx clients where only MasterLoad
         # or Claims Load jobs should signal "loading"; COBC/IHP/ABII do not).
@@ -3877,6 +3918,10 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     for c in sorted(MONTHLY_CLIENTS):
         # OptumPBMRx is special — placed twice/month (early-month + end-month sets).
         if c == "OptumPBMRx":
+            continue
+        # Clients retired mid-year drop off starting their retirement month.
+        retired = MONTHLY_RETIRED_FROM.get(c)
+        if retired and (year, month) >= retired:
             continue
         d, marker = determine_monthly(c)
         if d.month != month:
