@@ -638,6 +638,28 @@ MANUAL_OVERRIDES = {
     # cell (the single cert would otherwise land on only one week).
     ("WebTPA",        date(2026, 7, 10)): date(2026, 7, 17),
     ("WebTPA",        date(2026, 7, 17)): date(2026, 7, 17),
+    # 2026-07-22: Kaiser_NW (Kaiser Pareo NW, weekly Thu) was rendering
+    # "Load Failure" on its 7/23 cell — but per user it is CLEAR. The failure
+    # is a spurious trailing card in RAMP: 'Kaiser Pareo NW 0110 Load' (JobId
+    # 2160) logged a 4-second Failed (QueueId 1406222, 7/21 13:19:43) created
+    # right AFTER two Resolved recovery cards (7/20 14:35, 7/21 13:17). Because
+    # has_recent_failure isn't day-specific it pinned onto the only current-week
+    # Kaiser_NW cell (Thu 7/23). Last full load certified 7/16; the 7/17 batch is
+    # "Ready for Certification review" (last week's data); this week's 7/23
+    # delivery is genuinely pending. Blank the 7/23 cell so it reads pending, not
+    # failed. Remove/replace with the cert date once this week's cycle certifies
+    # (or once the stray RAMP Failed card is marked Resolved — then it self-heals).
+    ("Kaiser_NW",     date(2026, 7, 23)): "",
+    # 2026-07-22: HealthNetCA (weekly Mon, FORCED_INACTIVE) was rendering "L" on
+    # this week's Mon 7/20 cell. HealthNetCA is NOT loading — the only live job is
+    # 'Healthnet 0200 Eligibility Stage' (JobId 1809, Ready), i.e. the HealthNet
+    # Elig file staging, which per user "isn't something that needs to be tracked."
+    # is_loading_today already excludes stage jobs, but the weekly snap_in_week
+    # activity path (uncertified cert client -> "L") picks up the Elig staging
+    # activity and beats the FORCED_INACTIVE fallback. Pin the past-day-in-current-
+    # week Mon cell to "Inactive" (same fix as Tufts_Audit_CIT 7/13). Future Mondays
+    # render Inactive automatically via FORCED_INACTIVE.
+    ("HealthNetCA",   date(2026, 7, 20)): "Inactive",
 }
 
 # --- Sticky certifications --------------------------------------------------
