@@ -27,6 +27,17 @@ PREPAY_URL_FILE  = r"H:\slack_wf_kaiserprepay.txt"
 STATE_FILE = r"H:\kaiserprepay_monitor_state.json"
 LOG_FILE   = r"H:\kaiserprepay_monitor.log"
 SEP = "\x1f"
+
+# --- Auto-certification (DHTStats on TRGUTIL10) -----------------------------
+# After the daily Slack update + a successful snap, certify each KaiserPrePayCOB
+# CertID that is READY (not yet certified). "Ready for Certification review" only
+# occurs after snap+stats+validation succeed, so it doubles as the "snapped
+# successfully" gate. Back-certify within the past 3 days if a day was missed.
+DHT_DB            = "DHTStats"
+CERT_DBNAME       = "KaiserPrePayCOB"
+CERT_READY_STATUS = "Email sent, Ready for Certification review"
+CERT_BACKFILL_DAYS = 3
+CERT_LOG_FILE     = r"H:\kaiserprepaycob_certify.log"
 # If a Load succeeded but its Snap is still not terminal this long after the
 # Load finished, post anyway (flagging the snap) instead of stalling forever.
 SNAP_WAIT_HOURS = 3
@@ -44,9 +55,9 @@ def log(msg):
     print(line)
 
 
-def run_sql(query):
+def run_sql(query, db="RAMP"):
     r = subprocess.run(
-        ["sqlcmd", "-S", SQL_SERVER, "-d", "RAMP", "-E", "-Q", query,
+        ["sqlcmd", "-S", SQL_SERVER, "-d", db, "-E", "-Q", query,
          "-W", "-s", SEP, "-h", "-1"],
         capture_output=True, text=True, check=False,
     )
@@ -57,6 +68,28 @@ def run_sql(query):
             continue
         out.append(s.split(SEP))
     return out
+
+
+def exec_sql(query, db="RAMP"):
+    """Run a statement (no result parsing). -b => nonzero exit on SQL error."""
+    r = subprocess.run(
+        ["sqlcmd", "-S", SQL_SERVER, "-d", db, "-E", "-b", "-Q", query],
+        capture_output=True, text=True, check=False,
+    )
+    return r.returncode, (r.stdout or ""), (r.stderr or "")
+
+
+def clog(msg):
+    """Log a certification event to both the monitor log and a dedicated
+    audit log."""
+    line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] CERT: {msg}"
+    for path in (LOG_FILE, CERT_LOG_FILE):
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+    print(line)
 
 
 def parse_dt(s):
@@ -220,7 +253,55 @@ def build_message(stage, load, snap, files, load_date):
     return "\n".join(lines)
 
 
-def main():
+def certify_eligible():
+    """Certify each KaiserPrePayCOB CertID that is READY but not yet certified.
+
+    Eligible = CertTimestamp IS NULL AND CurrentStatus = the ready-for-review
+    status AND ValidationTimestamp within the last CERT_BACKFILL_DAYS days
+    (today plus a back-certify window for missed days). Idempotent: once a
+    CertID is certified it drops out of the query, so this is safe to run on
+    every monitor invocation.
+    """
+    q = (
+        "SET NOCOUNT ON; SELECT DISTINCT CAST(CertID AS varchar(30)) "
+        "FROM [DHTStats].[DHT].[TableList] "
+        f"WHERE DatabaseName='{CERT_DBNAME}' AND isActive=1 "
+        "AND CertID IS NOT NULL AND CertTimestamp IS NULL "
+        f"AND CurrentStatus='{CERT_READY_STATUS}' "
+        f"AND ValidationTimestamp >= DATEADD(day,-{CERT_BACKFILL_DAYS}, CAST(GETDATE() AS date)) "
+        "ORDER BY CAST(CertID AS varchar(30))"
+    )
+    rows = run_sql(q, db=DHT_DB)
+    certids = [r[0].strip() for r in rows if r and r[0].strip()]
+    if not certids:
+        clog("no eligible KaiserPrePayCOB CertIDs to certify")
+        return
+    clog(f"eligible CertIDs (ready, uncertified, ValidationTimestamp <= {CERT_BACKFILL_DAYS}d): "
+         + ", ".join(certids))
+    for cid in certids:
+        if DRY:
+            clog(f"  [dry-run] would EXEC [Util].[spMarkCertified] @CertID={cid}")
+            continue
+        exec_q = (
+            "EXEC [Util].[spMarkCertified] "
+            f"@DBName='{CERT_DBNAME}', @CertID='{cid}', @Division='ALL', "
+            "@SignoffDate=NULL, @MineTicket=NULL, @Comment=NULL, @SendAlert=1;"
+        )
+        rc, out, err = exec_sql(exec_q, db=DHT_DB)
+        if rc != 0 or err.strip():
+            clog(f"  ERROR certifying CertID={cid}: rc={rc} {err.strip()[:300]}")
+            continue
+        chk = run_sql(
+            "SET NOCOUNT ON; SELECT TOP 1 CurrentStatus FROM [DHTStats].[DHT].[TableList] "
+            f"WHERE DatabaseName='{CERT_DBNAME}' AND CertID={cid} AND isActive=1", db=DHT_DB)
+        st = chk[0][0].strip() if chk and chk[0] else "?"
+        if st == "Certified":
+            clog(f"  CERTIFIED CertID={cid} (status now 'Certified')")
+        else:
+            clog(f"  WARNING CertID={cid}: proc ran but status is '{st}' (expected 'Certified')")
+
+
+def run_monitor():
     state = load_state()
     watermark = int(state.get("last_load_queueid", 0))
 
@@ -276,6 +357,20 @@ def main():
         state["last_load_queueid"] = load_qid
         save_state(state)
 
+    return 0
+
+
+def main():
+    # Post the Load/Snap update first, then always attempt certification. Each
+    # step is isolated so a failure in one does not block the other.
+    try:
+        run_monitor()
+    except Exception as e:
+        log(f"ERROR in run_monitor: {e}")
+    try:
+        certify_eligible()
+    except Exception as e:
+        clog(f"ERROR in certify_eligible: {e}")
     return 0
 
 
