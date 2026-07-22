@@ -27,18 +27,21 @@ $action = New-ScheduledTaskAction -Execute "powershell.exe" `
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
 $trigger.EndBoundary = $null
 $principal = New-ScheduledTaskPrincipal -UserId $Env:USERNAME -LogonType Interactive
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit "00:01:00"
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit "00:05:00"
 Register-ScheduledTask -TaskName "{TASK_NAME}" -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings -Force | Out-Null
 """
     subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps],
                    capture_output=True)
 
-    # Wait up to 55s for result. The helper task fires at +3s and must launch
-    # Outlook COM, send, and write the result within its 60s ExecutionTimeLimit;
-    # a cold Outlook can take >15s to spin up, so give it the full window
-    # (previously 15s, which timed out on the first unattended send of the day).
-    for _ in range(55):
+    # Wait for the result. The helper task fires at +3s, launches Outlook COM,
+    # sends, then WAITS for the Outbox to actually drain (up to 150s) before
+    # writing "Sent." -- so the result can legitimately take a few minutes,
+    # especially on the first unattended send of the day when classic OUTLOOK.EXE
+    # is cold-started (the user's open app is New Outlook / olk.exe, which has no
+    # COM interface, so COM always spins up its own throwaway classic instance).
+    # Poll longer than the helper's 5-min ExecutionTimeLimit floor.
+    for _ in range(210):
         time.sleep(1)
         if os.path.exists(RESULT_FILE):
             result = open(RESULT_FILE, encoding='utf-16').read().strip()
