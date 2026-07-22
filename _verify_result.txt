@@ -1,0 +1,5 @@
+﻿[timothy.stroud@machinify.com / Sent Items] total=12227 matches=4
+    HIT SentOn=07/15/2026 08:00:22 To=DataOperations Subj=SLA Update - Caresource 0200 Load - SUCCESS
+    HIT SentOn=06/23/2026 07:00:21 To=RDPOperations Subj=SLA Update - Caresource 0200 Load - SUCCESS
+    HIT SentOn=06/16/2026 12:36:11 To=RDPOperations Subj=SLA Update - Caresource 0200 Load - SUCCESS
+    HIT SentOn=06/16/2026 12:14:03 To=Timothy L. Stroud Subj=[REVIEW] SLA Update - Caresource 0200 Load - SUCCESS
