@@ -1,4 +1,8 @@
 {
+  "caresource": {
+    "last_qid": 1406007,
+    "last_period": "2026-W30"
+  },
   "healthspring_fwa": {
     "last_qid": 1396476,
     "last_period": "2026-07"
@@ -10,9 +14,5 @@
   "optum_pbm": {
     "last_qid": 1394802,
     "last_period": "2026-07"
-  },
-  "caresource": {
-    "last_qid": 1406007,
-    "last_period": "2026-W30"
   }
 }
