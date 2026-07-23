@@ -493,7 +493,9 @@ HTML_TEMPLATE = """<!doctype html>
 </header>
 <main>
   <div class="tabs">
-    <div class="tab active" data-view="monthly">Monthly</div>
+    <div class="tab active" data-view="monthly" data-ftype="COBC">COBC</div>
+    <div class="tab" data-view="monthly" data-ftype="TRR">TRR</div>
+    <div class="tab" data-view="monthly" data-ftype="ABII">ABII</div>
     <div class="tab" data-view="detail">Detail</div>
   </div>
 
@@ -502,10 +504,6 @@ HTML_TEMPLATE = """<!doctype html>
       <div class="field">
         <label for="m-year">Year</label>
         <select id="m-year"></select>
-      </div>
-      <div class="field">
-        <label for="m-type">File Type</label>
-        <select id="m-type"><option value="">All types</option><option>COBC</option><option>TRR</option><option>ABII</option></select>
       </div>
       <div class="field">
         <label for="m-client">Client</label>
@@ -751,7 +749,7 @@ HTML_TEMPLATE = """<!doctype html>
   render();
 
   // ===================== Monthly matrix view =====================
-  const monthState = { year: '', ftype: '', client: '', contract: '', expanded: new Set() };
+  const monthState = { year: '', ftype: 'COBC', client: '', contract: '', expanded: new Set() };
 
   const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -934,11 +932,6 @@ HTML_TEMPLATE = """<!doctype html>
   });
 
   $('m-year').addEventListener('change', () => { monthState.year = $('m-year').value; renderMatrix(); });
-  $('m-type').addEventListener('change', () => {
-    monthState.ftype = $('m-type').value;
-    populateContracts();
-    renderMatrix();
-  });
   $('m-client').addEventListener('change', () => {
     monthState.client = $('m-client').value;
     populateContracts();
@@ -959,6 +952,12 @@ HTML_TEMPLATE = """<!doctype html>
       t.classList.add('active');
       $('view-' + t.dataset.view).classList.add('active');
       hideTip();
+      if (t.dataset.view === 'monthly') {
+        monthState.ftype = t.dataset.ftype || '';
+        monthState.expanded.clear();
+        populateContracts();
+        renderMatrix();
+      }
     });
   });
 
