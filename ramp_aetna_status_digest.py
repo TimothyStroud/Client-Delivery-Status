@@ -203,30 +203,144 @@ def _sp_help_job(server, name):
     return None
 
 
-def remaining_secs(server, name, cur_step):
-    """Estimated seconds left = sum of avg historical durations of steps
-    cur_step..end (avg over the last 8 successful runs per step). Counts the
-    current step in full (slight overestimate) and skips step 1's variable
-    upstream 'Wait' (it logs ~0 duration). Returns int seconds or None."""
+# ---- ETA (step-anchored progress; multi-step analog of the HRP/Rx method) -----
+# ANCHORING FIX 2026-07-23 (per user "can AetnaRCE/NCState follow the same method"):
+# HRP/Rx are single SSIS packages, so they anchor to run start + median full-run
+# duration and tighten via a live SSISDB milestone. RCE/NCState DON'T fit that: the
+# 'SSIS AetnaRCE Daily Process' job is genuinely multi-step (12 steps -- the SSIS
+# package is only step 2 of 12; the bulk is stored-proc steps 3-11 like Build
+# Chimera / Loop Claims / DHTStats), and NCState is a dominant SSIS step 1 + a small
+# stored-proc tail. So the "same method" here is applied to the SQL Agent STEP
+# progression instead of SSISDB: anchor to the CURRENT step's start + the historical
+# average of the current and remaining steps. This (a) fixes the OLD `remaining_secs`
+# bug -- it summed avg(step >= current) onto a fresh 'now' EVERY tick, re-adding the
+# current step's full average even when we were already hours into it -- and (b)
+# tightens naturally as steps complete (the multi-step analog of HRP/Rx's SSISDB
+# 'final stage'). Falls back to run_start + median full-run duration if step
+# progress can't be read.
+
+
+def _recent_full_durations(server, name, n=8):
+    """Durations (seconds) of the last n SUCCESSFUL full runs (step_id=0)."""
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         f"SELECT TOP {n} run_duration FROM msdb.dbo.sysjobhistory WITH (NOLOCK) "
+         "WHERE job_id=@jid AND step_id=0 AND run_status=1 ORDER BY run_date DESC, run_time DESC;")
+    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
+                         capture_output=True, text=True, timeout=120)
+    durs = []
+    for line in out.stdout.splitlines():
+        s = line.strip()
+        if s.isdigit():
+            v = int(s)
+            durs.append((v // 10000) * 3600 + ((v // 100) % 100) * 60 + (v % 100))
+    return durs
+
+
+def _run_progress(server, name):
+    """(run_start, current_step_start, current_step_id) for the currently-executing
+    run from sysjobactivity, or (None, None, None). A live run has
+    stop_execution_date NULL; ordering by session_id DESC picks the current Agent
+    session's row (older orphaned NULL rows sort below it)."""
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         "SELECT TOP 1 CONVERT(varchar(19),start_execution_date,120), "
+         "  CONVERT(varchar(19),last_executed_step_date,120), last_executed_step_id "
+         "FROM msdb.dbo.sysjobactivity WITH (NOLOCK) "
+         "WHERE job_id=@jid AND start_execution_date IS NOT NULL AND stop_execution_date IS NULL "
+         "ORDER BY session_id DESC, start_execution_date DESC;")
+    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
+                         capture_output=True, text=True, timeout=120)
+    for line in out.stdout.splitlines():
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) >= 3 and _to_dt(parts[0]):
+            try:
+                sid = int(parts[2])
+            except Exception:
+                sid = None
+            return _to_dt(parts[0]), _to_dt(parts[1]), sid
+    return None, None, None
+
+
+def _step_hist(server, name, n=6):
+    """{step_id: avg duration seconds} over the last n successful runs per real
+    step (1..49; excludes the step_id=0 job-outcome row)."""
     q = ("SET NOCOUNT ON; "
          f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
          ";WITH h AS (SELECT step_id, "
-         "(run_duration/10000)*3600+((run_duration/100)%100)*60+(run_duration%100) AS dur_sec, "
+         "(run_duration/10000)*3600+((run_duration/100)%100)*60+(run_duration%100) AS s, "
          "ROW_NUMBER() OVER (PARTITION BY step_id ORDER BY run_date DESC, run_time DESC) rn "
-         f"FROM msdb.dbo.sysjobhistory WITH (NOLOCK) WHERE @jid=job_id AND step_id>={cur_step} "
-         "AND step_id<50 AND run_status=1) "
-         "SELECT ISNULL(SUM(a),0) FROM (SELECT AVG(dur_sec) a FROM h WHERE rn<=8 GROUP BY step_id) y;")
-    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
+         "FROM msdb.dbo.sysjobhistory WITH (NOLOCK) WHERE job_id=@jid AND step_id BETWEEN 1 AND 49 "
+         "AND run_status=1) "
+         f"SELECT step_id, AVG(s) FROM h WHERE rn<={n} GROUP BY step_id ORDER BY step_id;")
+    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
                          capture_output=True, text=True, timeout=120)
+    hist = {}
     for line in out.stdout.splitlines():
-        s = line.strip()
-        if s.lstrip('-').isdigit():
-            return int(s)
-    return None
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].lstrip('-').isdigit():
+            hist[int(parts[0])] = int(parts[1])
+    return hist
 
 
-def _clock(dt):
-    return dt.strftime('%I:%M %p').lstrip('0')
+def _pct(sorted_vals, p):
+    """Nearest-rank percentile of an ascending list (None if empty)."""
+    if not sorted_vals:
+        return None
+    import math
+    k = max(1, math.ceil(p / 100.0 * len(sorted_vals)))
+    return sorted_vals[k - 1]
+
+
+def _dur_h(sec):
+    """Compact elapsed: 'Xh YYm' / 'Xh' / 'Ym'."""
+    m = int(round(sec / 60.0))
+    h, m = divmod(m, 60)
+    if h and m:
+        return f"{h}h {m:02d}m"
+    if h:
+        return f"{h}h"
+    return f"{m}m"
+
+
+def _eta_stamp(dt):
+    """Clock time; prefixed with mm/dd when the ETA is not today."""
+    if dt.date() == datetime.now().date():
+        return dt.strftime('%I:%M %p').lstrip('0')
+    return dt.strftime('%m/%d %I:%M %p').lstrip('0')
+
+
+def eta_detail(server, name):
+    """Progressive expected-completion ETA for the in-flight run. Primary estimate
+    anchors to the CURRENT step's start + the historical average duration of the
+    current and remaining steps (so it never re-adds time already spent in earlier
+    steps, and tightens as the job advances). Falls back to run_start + MEDIAN
+    full-run duration (p50->p75->'running longer than usual') when step progress
+    can't be read."""
+    now = datetime.now()
+    start, step_start, sid = _run_progress(server, name)
+    hist = _step_hist(server, name)
+    if step_start and sid is not None and hist:
+        rem_incl = sum(v for s, v in hist.items() if s >= sid)   # current + later steps
+        rem_after = sum(v for s, v in hist.items() if s > sid)   # later steps only
+        eta = step_start + timedelta(seconds=rem_incl)
+        if eta <= now:                       # current step already overran its average
+            eta = now + timedelta(seconds=rem_after)
+        if eta <= now:                       # on/after the last step -> essentially done
+            return [f"{EXEC_ICON} final stage - wrapping up"]
+        return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
+    # Fallback: anchored full-run median (mirrors HRP/Rx).
+    durs = sorted(_recent_full_durations(server, name))
+    if not durs:
+        return [f"{EXEC_ICON} in progress"]
+    est, hi = _pct(durs, 50), _pct(durs, 75)
+    if not start:
+        return [f"{EXEC_ICON} ETA ~{_eta_stamp(now + timedelta(seconds=est))}"]
+    elapsed = (now - start).total_seconds()
+    if elapsed > hi:
+        return [f"{EXEC_ICON} running {_dur_h(elapsed)} - longer than usual, still processing"]
+    eta = start + timedelta(seconds=(est if elapsed < est else hi))
+    return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
 
 
 def last_completion(server, name):
@@ -272,16 +386,9 @@ def sql_job(server, name):
 
     status, step = row[-7], row[-6]
     if status == '1':                        # Executing -> "Executing Step N (name)" + ETA line
-        detail = []
-        m = re.match(r'\s*(\d+)', step)      # leading step number, e.g. "4 (Build Chimera)"
-        if m:
-            secs = remaining_secs(server, name, int(m.group(1)))
-            if secs and secs > 0:
-                eta = _clock(datetime.now() + timedelta(seconds=secs))
-                # Icon set (per user 2026-07-16): cycling-arrows = loading,
-                # :white_check_mark: = success, :x: = failure.
-                detail.append(f":arrows_counterclockwise: ETA ~{eta}")
-        return (f"Executing Step {step}", detail)
+        # Step-anchored progressive ETA (see eta_detail); the label keeps the live
+        # step name from sp_help_job, e.g. "Executing Step 4 (Build Chimera)".
+        return (f"Executing Step {step}", eta_detail(server, name))
     # Idle: show the last run's outcome as Successful/Failed ONLY while its
     # COMPLETION falls on today's date; at the start of the next day it reverts to
     # "- Idle" (per user 2026-07-17: "only show as Successful until the start of
