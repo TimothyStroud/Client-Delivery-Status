@@ -644,12 +644,14 @@ MANUAL_OVERRIDES = {
     # 2160) logged a 4-second Failed (QueueId 1406222, 7/21 13:19:43) created
     # right AFTER two Resolved recovery cards (7/20 14:35, 7/21 13:17). Because
     # has_recent_failure isn't day-specific it pinned onto the only current-week
-    # Kaiser_NW cell (Thu 7/23). Last full load certified 7/16; the 7/17 batch is
-    # "Ready for Certification review" (last week's data); this week's 7/23
-    # delivery is genuinely pending. Blank the 7/23 cell so it reads pending, not
-    # failed. Remove/replace with the cert date once this week's cycle certifies
-    # (or once the stray RAMP Failed card is marked Resolved — then it self-heals).
-    ("Kaiser_NW",     date(2026, 7, 23)): "",
+    # Kaiser_NW cell (Thu 7/23). Last full load certified 7/16; the 7/17 batch was
+    # "Ready for Certification review". 2026-07-23: DHT certified Kaiser_NW today
+    # (CertID 1297227-9, CertTimestamp 2026-07-23 07:29:51). Per user "Kaiser_NW
+    # for today can be marked as certified" → show the 7/23 cert date on the Thu
+    # cell. (The cert's StatTimestamp is 7/17, so cert_in_week attributes it to the
+    # prior week's band; this override surfaces it on the current Thu 7/23 cell to
+    # match the sibling Kaiser feeds. Remove once next week's cycle certifies.)
+    ("Kaiser_NW",     date(2026, 7, 23)): date(2026, 7, 23),
     # 2026-07-22: HealthNetCA (weekly Mon, FORCED_INACTIVE) was rendering "L" on
     # this week's Mon 7/20 cell. HealthNetCA is NOT loading — the only live job is
     # 'Healthnet 0200 Eligibility Stage' (JobId 1809, Ready), i.e. the HealthNet
