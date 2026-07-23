@@ -284,6 +284,100 @@ def _eta_stamp(dt):
     return dt.strftime('%m/%d %I:%M %p').lstrip('0')
 
 
+# ---- Live final-stage signal from SSISDB (per user 2026-07-23) ----------------
+# The MasterLoad's duration is genuinely unpredictable up front (a ~6 GB batch has
+# run anywhere from 2 h to 30 h; input volume does NOT predict it), and the SQL
+# Agent job is a single step, so there's no mid-run progress to extrapolate. BUT
+# the underlying SSIS package (run via SSISDB on TRGETLPROD2) fans out ~75 tasks,
+# and while most launch in parallel up front, a handful of late tasks reliably
+# COMPLETE at a stable fraction of the run's wall-clock. We pick the latest such
+# stable milestone from recent history and, once the live run has completed it,
+# project ETA = run_start + elapsed / that_fraction. This can't help early/mid-run
+# but gives a real "we're in the final stretch, ~X left" once ~90% done. The
+# milestone task is chosen dynamically each call (not a hardcoded id) so it
+# self-heals if the package is redeployed; any read error -> None -> the anchored
+# median below is used instead.
+SSIS_SERVER = 'TRGETLPROD2'
+SSIS_PKG = 'AetnaHRP_MasterLoad.dtsx'
+FS_MAX_FRAC = 0.95   # ignore terminal cleanup tasks pinned at ~99-100% (no lead time)
+FS_MAX_SD = 0.08     # milestone must complete at a stable fraction across runs
+FS_MIN_ELAPSED = 600  # don't project off a run that just started
+
+
+def _ssis_sql(query):
+    """Run a query against SSISDB on TRGETLPROD2; rows as lists of stripped fields."""
+    try:
+        out = subprocess.run(
+            ['sqlcmd', '-S', SSIS_SERVER, '-d', 'SSISDB', '-E', '-W',
+             '-h', '-1', '-s', '|', '-Q', 'SET NOCOUNT ON; ' + query],
+            capture_output=True, text=True, timeout=120)
+    except Exception:
+        return []
+    rows = []
+    for line in out.stdout.splitlines():
+        line = line.rstrip()
+        if not line or set(line) <= set('-|') or 'rows affected' in line:
+            continue
+        rows.append([c.strip() for c in line.split('|')])
+    return rows
+
+
+def _ssis_milestone():
+    """(executable_id, avg_end_fraction) of the latest STABLE late milestone task
+    over the last 6 successful runs, or (None, None). 'Stable' = completes at a
+    consistent fraction (sd <= FS_MAX_SD) and not later than FS_MAX_FRAC so there's
+    still lead time when we detect it."""
+    rows = _ssis_sql(
+        f"DECLARE @pkg sysname=N'{SSIS_PKG}'; "
+        ";WITH ex AS (SELECT TOP 6 execution_id, start_time, "
+        "  DATEDIFF(second,start_time,end_time) AS total_sec "
+        "  FROM catalog.executions WHERE package_name=@pkg AND status=7 "
+        "  AND end_time IS NOT NULL ORDER BY execution_id DESC), "
+        "f AS (SELECT es.executable_id, "
+        "  CAST(DATEDIFF(second,ex.start_time,es.end_time) AS float)"
+        "  /NULLIF(ex.total_sec,0) AS frac "
+        "  FROM catalog.executable_statistics es "
+        "  JOIN ex ON ex.execution_id=es.execution_id WHERE ex.total_sec>600) "
+        "SELECT TOP 1 executable_id, AVG(frac) FROM f GROUP BY executable_id "
+        f"HAVING COUNT(*)>=4 AND AVG(frac)<={FS_MAX_FRAC} "
+        f"AND ISNULL(STDEV(frac),1)<={FS_MAX_SD} ORDER BY AVG(frac) DESC;")
+    if rows and len(rows[0]) >= 2:
+        try:
+            return int(rows[0][0]), float(rows[0][1])
+        except Exception:
+            pass
+    return None, None
+
+
+def _ssis_final_stage_eta():
+    """If the SSIS package is running AND has already completed its stable ~90%
+    milestone task, return the projected completion datetime (run_start + elapsed /
+    milestone_fraction). Else None. Elapsed is measured on the SSISDB server clock
+    (GETDATE) to avoid host/server skew."""
+    mid, frac = _ssis_milestone()
+    if not mid or not frac or frac <= 0:
+        return None
+    rows = _ssis_sql(
+        f"DECLARE @pkg sysname=N'{SSIS_PKG}'; DECLARE @mid bigint={mid}; "
+        "SELECT TOP 1 CONVERT(varchar(19),e.start_time,120), "
+        "  DATEDIFF(second,e.start_time,GETDATE()), "
+        "  CASE WHEN EXISTS(SELECT 1 FROM catalog.executable_statistics s "
+        "    WHERE s.execution_id=e.execution_id AND s.executable_id=@mid) "
+        "  THEN 1 ELSE 0 END "
+        "FROM catalog.executions e WHERE e.package_name=@pkg AND e.status=2 "
+        "ORDER BY e.execution_id DESC;")
+    if not rows or len(rows[0]) < 3 or rows[0][2] != '1':
+        return None
+    start = _to_dt(rows[0][0])
+    try:
+        elapsed = int(rows[0][1])
+    except Exception:
+        return None
+    if not start or elapsed < FS_MIN_ELAPSED:
+        return None
+    return start + timedelta(seconds=elapsed / frac)
+
+
 def eta_detail(server, name):
     """Single expected-completion ETA for the in-flight run, matching the RCE/RX
     digests' one-line 'ETA ~<time>' look (per user 2026-07-23). The estimate is
@@ -295,7 +389,13 @@ def eta_detail(server, name):
     Once the run passes its median the shown ETA steps up to the p75 (slower-case)
     time so the clock value is never already in the past; only when it also runs
     past p75 do we drop the time and simply note it's running long. Degrades to a
-    'now + median' estimate if the live run start can't be read."""
+    'now + median' estimate if the live run start can't be read.
+
+    Before all of that, if the SSIS package has reached its stable ~90% milestone
+    task, show the tighter live 'final stage' ETA instead (per user 2026-07-23)."""
+    fs = _ssis_final_stage_eta()
+    if fs:
+        return [f"{EXEC_ICON} final stage - ETA ~{_eta_stamp(fs)}"]
     durs = sorted(_recent_full_durations(server, name))
     if not durs:
         return [f"{EXEC_ICON} in progress"]

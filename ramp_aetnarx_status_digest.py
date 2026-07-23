@@ -204,26 +204,194 @@ def _sp_help_job(server, name):
     return None
 
 
-def remaining_secs(server, name, cur_step):
+# ---- ETA (anchored to the actual run start, mirrors the HRP digest) ----------
+# ANCHORING FIX 2026-07-23 (per user): the OLD step-based `remaining_secs` added
+# the FULL historical average of every step >= the current step onto 'now'. But
+# this job is effectively a SINGLE dominant step ('Load Claims And Eligibility
+# files' is ~99% of the run; the other two steps are seconds/minutes), so at any
+# tick it was Executing step 1 and the ETA became now + avg(step 1 duration) --
+# ignoring the hours already spent IN step 1. That's why a run already ~13 h deep
+# showed an ETA ~5.5 h further out (the reported 5:39 PM). We now anchor to the
+# live run's START + the MEDIAN of recent successful FULL-run durations (step_id=0)
+# exactly like HRP: it accounts for elapsed time, stays fixed across ticks, bumps
+# median->p75->'running longer than usual' as the run outlasts history, and is
+# superseded by the live SSISDB final-stage ETA once the run is ~90% done.
+
+
+def _recent_full_durations(server, name, n=8):
+    """Durations (seconds) of the last n SUCCESSFUL full runs (step_id=0)."""
     q = ("SET NOCOUNT ON; "
          f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
-         ";WITH h AS (SELECT step_id, "
-         "(run_duration/10000)*3600+((run_duration/100)%100)*60+(run_duration%100) AS dur_sec, "
-         "ROW_NUMBER() OVER (PARTITION BY step_id ORDER BY run_date DESC, run_time DESC) rn "
-         f"FROM msdb.dbo.sysjobhistory WITH (NOLOCK) WHERE @jid=job_id AND step_id>={cur_step} "
-         "AND step_id<50 AND run_status=1) "
-         "SELECT ISNULL(SUM(a),0) FROM (SELECT AVG(dur_sec) a FROM h WHERE rn<=8 GROUP BY step_id) y;")
+         f"SELECT TOP {n} run_duration FROM msdb.dbo.sysjobhistory WITH (NOLOCK) "
+         "WHERE job_id=@jid AND step_id=0 AND run_status=1 ORDER BY run_date DESC, run_time DESC;")
+    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
+                         capture_output=True, text=True, timeout=120)
+    durs = []
+    for line in out.stdout.splitlines():
+        s = line.strip()
+        if s.isdigit():
+            v = int(s)
+            durs.append((v // 10000) * 3600 + ((v // 100) % 100) * 60 + (v % 100))
+    return durs
+
+
+def _current_run_start(server, name):
+    """Start datetime of the CURRENTLY-executing run from sysjobactivity (the row
+    on the latest Agent session with no stop time), or None. Don't join syssessions
+    (SELECT is permission-denied); ordering by session_id DESC picks the current
+    run's row directly."""
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         "SELECT TOP 1 CONVERT(varchar(19), ja.start_execution_date, 120) "
+         "FROM msdb.dbo.sysjobactivity ja WITH (NOLOCK) "
+         "WHERE ja.job_id=@jid AND ja.start_execution_date IS NOT NULL "
+         "AND ja.stop_execution_date IS NULL "
+         "ORDER BY ja.session_id DESC, ja.start_execution_date DESC;")
     out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
                          capture_output=True, text=True, timeout=120)
     for line in out.stdout.splitlines():
-        s = line.strip()
-        if s.lstrip('-').isdigit():
-            return int(s)
+        dt = _to_dt(line.strip())
+        if dt:
+            return dt
     return None
 
 
-def _clock(dt):
-    return dt.strftime('%I:%M %p').lstrip('0')
+def _pct(sorted_vals, p):
+    """Nearest-rank percentile of an ascending list (None if empty)."""
+    if not sorted_vals:
+        return None
+    import math
+    k = max(1, math.ceil(p / 100.0 * len(sorted_vals)))
+    return sorted_vals[k - 1]
+
+
+def _dur_h(sec):
+    """Compact elapsed: 'Xh YYm' / 'Xh' / 'Ym'."""
+    m = int(round(sec / 60.0))
+    h, m = divmod(m, 60)
+    if h and m:
+        return f"{h}h {m:02d}m"
+    if h:
+        return f"{h}h"
+    return f"{m}m"
+
+
+def _eta_stamp(dt):
+    """Clock time; prefixed with mm/dd when the ETA is not today."""
+    if dt.date() == datetime.now().date():
+        return dt.strftime('%I:%M %p').lstrip('0')
+    return dt.strftime('%m/%d %I:%M %p').lstrip('0')
+
+
+# ---- Live final-stage signal from SSISDB (per user 2026-07-23) ----------------
+# Mirrors the HRP digest: input volume does NOT predict this load's duration and
+# the Agent job is a single dominant step, so there's no reliable early/mid-run
+# ETA. But the underlying SSIS package (SSISDB on TRGETLPROD2) has a late task that
+# reliably COMPLETES at a stable ~88% of wall-clock; once the live run passes it we
+# project ETA = run_start + elapsed / that_fraction. The milestone is chosen
+# dynamically each call so it self-heals across redeploys; any error -> None -> the
+# anchored median is used instead.
+SSIS_SERVER = 'TRGETLPROD2'
+SSIS_PKG = 'AetnaRx_MasterLoad_Claims_And_Eligibility.dtsx'
+FS_MAX_FRAC = 0.95   # ignore terminal cleanup tasks pinned at ~99-100% (no lead time)
+FS_MAX_SD = 0.08     # milestone must complete at a stable fraction across runs
+FS_MIN_ELAPSED = 600  # don't project off a run that just started
+
+
+def _ssis_sql(query):
+    """Run a query against SSISDB on TRGETLPROD2; rows as lists of stripped fields."""
+    try:
+        out = subprocess.run(
+            ['sqlcmd', '-S', SSIS_SERVER, '-d', 'SSISDB', '-E', '-W',
+             '-h', '-1', '-s', '|', '-Q', 'SET NOCOUNT ON; ' + query],
+            capture_output=True, text=True, timeout=120)
+    except Exception:
+        return []
+    rows = []
+    for line in out.stdout.splitlines():
+        line = line.rstrip()
+        if not line or set(line) <= set('-|') or 'rows affected' in line:
+            continue
+        rows.append([c.strip() for c in line.split('|')])
+    return rows
+
+
+def _ssis_milestone():
+    """(executable_id, avg_end_fraction) of the latest STABLE late milestone task
+    over the last 6 successful runs, or (None, None)."""
+    rows = _ssis_sql(
+        f"DECLARE @pkg sysname=N'{SSIS_PKG}'; "
+        ";WITH ex AS (SELECT TOP 6 execution_id, start_time, "
+        "  DATEDIFF(second,start_time,end_time) AS total_sec "
+        "  FROM catalog.executions WHERE package_name=@pkg AND status=7 "
+        "  AND end_time IS NOT NULL ORDER BY execution_id DESC), "
+        "f AS (SELECT es.executable_id, "
+        "  CAST(DATEDIFF(second,ex.start_time,es.end_time) AS float)"
+        "  /NULLIF(ex.total_sec,0) AS frac "
+        "  FROM catalog.executable_statistics es "
+        "  JOIN ex ON ex.execution_id=es.execution_id WHERE ex.total_sec>600) "
+        "SELECT TOP 1 executable_id, AVG(frac) FROM f GROUP BY executable_id "
+        f"HAVING COUNT(*)>=4 AND AVG(frac)<={FS_MAX_FRAC} "
+        f"AND ISNULL(STDEV(frac),1)<={FS_MAX_SD} ORDER BY AVG(frac) DESC;")
+    if rows and len(rows[0]) >= 2:
+        try:
+            return int(rows[0][0]), float(rows[0][1])
+        except Exception:
+            pass
+    return None, None
+
+
+def _ssis_final_stage_eta():
+    """If the SSIS package is running AND has completed its stable ~88% milestone
+    task, return projected completion (run_start + elapsed / milestone_fraction),
+    else None. Elapsed measured on the SSISDB server clock (GETDATE) to avoid skew."""
+    mid, frac = _ssis_milestone()
+    if not mid or not frac or frac <= 0:
+        return None
+    rows = _ssis_sql(
+        f"DECLARE @pkg sysname=N'{SSIS_PKG}'; DECLARE @mid bigint={mid}; "
+        "SELECT TOP 1 CONVERT(varchar(19),e.start_time,120), "
+        "  DATEDIFF(second,e.start_time,GETDATE()), "
+        "  CASE WHEN EXISTS(SELECT 1 FROM catalog.executable_statistics s "
+        "    WHERE s.execution_id=e.execution_id AND s.executable_id=@mid) "
+        "  THEN 1 ELSE 0 END "
+        "FROM catalog.executions e WHERE e.package_name=@pkg AND e.status=2 "
+        "ORDER BY e.execution_id DESC;")
+    if not rows or len(rows[0]) < 3 or rows[0][2] != '1':
+        return None
+    start = _to_dt(rows[0][0])
+    try:
+        elapsed = int(rows[0][1])
+    except Exception:
+        return None
+    if not start or elapsed < FS_MIN_ELAPSED:
+        return None
+    return start + timedelta(seconds=elapsed / frac)
+
+
+def eta_detail(server, name):
+    """Single expected-completion ETA for the in-flight run (mirrors HRP). If the
+    SSIS package has reached its stable ~88% milestone, show the tighter live
+    'final stage' ETA; otherwise anchor to the live run START + MEDIAN (p50) of
+    recent successful full-run durations, bumping median->p75->'running longer than
+    usual' as the run outlasts history. Degrades to 'now + median' if the live run
+    start can't be read."""
+    fs = _ssis_final_stage_eta()
+    if fs:
+        return [f"{EXEC_ICON} final stage - ETA ~{_eta_stamp(fs)}"]
+    durs = sorted(_recent_full_durations(server, name))
+    if not durs:
+        return [f"{EXEC_ICON} in progress"]
+    est, hi = _pct(durs, 50), _pct(durs, 75)
+    start = _current_run_start(server, name)
+    if not start:
+        eta = datetime.now() + timedelta(seconds=est)
+        return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
+    elapsed = (datetime.now() - start).total_seconds()
+    if elapsed > hi:
+        return [f"{EXEC_ICON} running {_dur_h(elapsed)} - longer than usual, still processing"]
+    eta = start + timedelta(seconds=(est if elapsed < est else hi))
+    return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
 
 
 def last_completion(server, name):
@@ -260,16 +428,9 @@ def sql_job(server, name):
         return ("(no data)", "")
     status, step = row[-7], row[-6]
     if status == '1':                        # Executing -> "Executing Step N (name)" + ETA line
-        detail = []
-        m = re.match(r'\s*(\d+)', step)
-        if m:
-            secs = remaining_secs(server, name, int(m.group(1)))
-            if secs and secs > 0:
-                eta = _clock(datetime.now() + timedelta(seconds=secs))
-                # Icon set (per user 2026-07-16): cycling-arrows = loading,
-                # :white_check_mark: = success, :x: = failure.
-                detail.append(f":arrows_counterclockwise: ETA ~{eta}")
-        return (f"Executing Step {step}", detail)
+        # ETA anchored to the live run's start (see eta_detail), superseded by the
+        # live SSISDB final-stage ETA once ~88% done. Icon = cycling-arrows.
+        return (f"Executing Step {step}", eta_detail(server, name))
     # Idle: show the last run's outcome as Successful/Failed ONLY while its
     # COMPLETION falls on today's date; at the start of the next day it reverts to
     # "- Idle" (per user 2026-07-17: "only show as Successful until the start of
