@@ -22,7 +22,7 @@ PY = sys.executable
 MONITOR = BASE + r'\ramp_aetnahrp_slack_monitor.py'
 DIGEST = BASE + r'\ramp_aetnahrp_status_digest.py'
 
-DIGEST_HOURS = {4, 6, 8, 12, 16}  # 4/6/8am, 12/4pm (per user 2026-07-19)
+DIGEST_HOURS = {4, 6, 8, 10, 12, 14, 16, 18, 20, 22}  # every 2h 4am-10pm (per user 2026-07-23; content-dedupe suppresses repeats)
 DIGEST_DOW = {0, 1, 2, 3, 4, 5, 6}  # every day incl. weekends (per user 2026-07-19)
 EVENING_FROM = 17                 # 5pm+: evening extension (per user 2026-07-17).
                                   # Past the last normal slot, keep running the
