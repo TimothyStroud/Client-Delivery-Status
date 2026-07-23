@@ -127,7 +127,7 @@
 <body>
 <header>
   <h1>CAQH Traffic Report</h1>
-  <div class="meta">Generated 2026-07-23 10:12 &middot; sqlutilmine3 / CAQH3 &middot; loads since 2026-01-01 &middot; 100 rows total</div>
+  <div class="meta">Generated 2026-07-23 10:38 &middot; sqlutilmine3 / CAQH3 &middot; loads since 2026-01-01 &middot; 100 rows total</div>
 </header>
 <main>
   <section class="kpis">
@@ -207,9 +207,9 @@
         <tr>
           <th data-key="client">Client<span class="arrow">&#8597;</span></th>
           <th data-key="reid">Reporting Entity<span class="arrow">&#8597;</span></th>
+          <th data-key="filename">File Name<span class="arrow">&#8597;</span></th>
           <th data-key="extracted">Date Extracted<span class="arrow">&#8597;</span></th>
           <th data-key="loaded">Date Loaded<span class="arrow">&#8597;</span></th>
-          <th data-key="filename">File Name<span class="arrow">&#8597;</span></th>
         </tr>
       </thead>
       <tbody id="grid2-body"></tbody>
@@ -287,9 +287,10 @@
     });
   }
 
-  // Traffic Report view: one row per Client + Reporting Entity, showing the
-  // most-recent Date Extracted and Date Loaded. The Date Loaded cell carries a
-  // hover tooltip listing each file loaded on that latest load date + its count.
+  // Traffic Report view: grouped by Client + Reporting Entity, showing the most
+  // recent load. When multiple files loaded on that latest date, each file is
+  // broken out into its own row. The File Name cell carries a hover tooltip with
+  // that file's record count.
   function buildSummary(rows) {
     const groups = new Map();
     for (const r of rows) {
@@ -300,31 +301,29 @@
     }
     const out = [];
     for (const g of groups.values()) {
-      let maxExtracted = '', maxLoaded = '';
+      let maxLoaded = '';
       for (const r of g.rows) {
-        if (r.extracted && r.extracted > maxExtracted) maxExtracted = r.extracted;
         if (r.loaded && r.loaded > maxLoaded) maxLoaded = r.loaded;
       }
       const latestLoadDate = maxLoaded ? maxLoaded.slice(0, 10) : '';
       const files = g.rows
         .filter(r => latestLoadDate && (r.loaded ? r.loaded.slice(0, 10) : '') === latestLoadDate)
-        .sort((a, b) => (b.loaded || '').localeCompare(a.loaded || ''));
-      let tip = '', filename = '';
-      if (files.length) {
-        const hdr = files.length + ' file' + (files.length === 1 ? '' : 's') + ' loaded on ' + latestLoadDate + ':';
-        tip = hdr + '\n' + files.map(f => f.filename + ' — ' + (f.count || 0).toLocaleString()).join('\n');
-        filename = files.length === 1
-          ? files[0].filename
-          : files[0].filename + ' (+' + (files.length - 1) + ' more)';
+        .sort((a, b) => (a.filename || '').localeCompare(b.filename || ''));
+      if (!files.length) {
+        out.push({ client: g.client, reid: g.reid, filename: '', extracted: '', loaded: '', tip: '' });
+        continue;
       }
-      out.push({
-        client: g.client,
-        reid: g.reid,
-        extracted: maxExtracted,
-        loaded: latestLoadDate,
-        filename: filename,
-        tip: tip,
-      });
+      // Break out one row per file loaded on the latest load date.
+      for (const f of files) {
+        out.push({
+          client: g.client,
+          reid: g.reid,
+          filename: f.filename,
+          extracted: f.extracted,
+          loaded: latestLoadDate,
+          tip: (f.count || 0).toLocaleString() + ' record' + (f.count === 1 ? '' : 's'),
+        });
+      }
     }
     return out;
   }
@@ -402,9 +401,9 @@
         tr.innerHTML =
           '<td>' + esc(r.client) + '</td>' +
           '<td>' + esc(r.reid) + '</td>' +
+          fileCell +
           '<td>' + esc(r.extracted) + '</td>' +
-          '<td>' + esc(r.loaded) + '</td>' +
-          fileCell;
+          '<td>' + esc(r.loaded) + '</td>';
         body.appendChild(tr);
       }
     }
