@@ -1,26 +1,34 @@
-"""Generate a static HTML COBC File Report dashboard.
+"""Generate a static HTML COBC / TRR / ABII File Report dashboard.
 
 Self-contained single .html file: embedded JSON data + vanilla JS filtering.
 No external dependencies, no server, no auth. Styled to match the
 MissingPayDates / CAQH Traffic / MSPI reports. Drop it on a shared drive and
 users open it in a browser.
 
-Data source: TRGUtil10 / COBC.  One row per COBC (MARXCOB) file loaded to
-COBC.dbo.tblTape since 2023-12-31:
+Data source: TRGUtil10 / Ramp.ramp.FileLog.  This is the RAMP file-movement
+log, so a single physical file is logged once per pipeline stage
+(Completed / Staged / Downloaded / ...).  We therefore DEDUPE to one row per
+file (one canonical row per FileName + received-date, preferring the
+"Completed" stage) and keep only INBOUND CLIENT files (SourcePath under a
+``\\Clients\\`` folder), which is where the client name is derivable.
 
-    SELECT * FROM [COBC].[dbo].[tblTape]
-    WHERE inserted > '2023-12-31 19:16:46.303'
+    SELECT ... FROM ramp.FileLog
+    WHERE DateCreated > '2024-12-31 23:59:00.000'
+      AND ([FileName] LIKE '%MARX%'   -- COBC (MARXCOB)
+        OR [FileName] LIKE '%TRR%'    -- TRR
+        OR [FileName] LIKE '%ABII%')  -- ABII
+      AND SourcePath LIKE '%\\Clients\\%'
 
-There are no record-count tables here (unlike MSPI); each tape row carries the
-FileSize in bytes.  Client comes from the Client column (a leading routing
-token like "2-" is stripped: 2-AetnaHMO -> AetnaHMO).  Contract and the data
-date are parsed out of the leaf file name, e.g.
-    \\\\etl3\\Clients\\WellPoint_Edward\\Data\\COBC\\Fixed\\LOCL.NDM.RH1607.MARXCOB.D260508.T2333490.txt
-      Contract  = H1607   (letter+digits token, leading routing 'R' dropped:
-                           RH1607->H1607, RS5540->S5540, RR6694->R6694, H5521 stays)
-      Extracted = 2026-05-08   (D260508 data-date token)
+Note: the OR group is parenthesised on purpose.  Written flat
+(``... AND a OR b OR c``) SQL binds it as ``(AND a) OR b OR c`` and the date
+filter would silently not apply to the TRR/ABII arms.
 
-Filterable: Client, Contract, File Name, and load-date range.
+Each row carries FileSize (bytes).  Client comes from the SourcePath (the
+segment after ``\\Clients\\``, skipping a ``users\\`` level, with staging
+suffixes like ``_Temp`` / ``_Decrypt`` stripped and a few known aliases
+folded, e.g. ``Machinify\\Inbound\\UHC_COBC`` -> UHC, ``BCBSArkansas`` ->
+BCBSARRx).  File Type (COBC / TRR / ABII) is derived from the FileName.
+Contract and the data date are parsed out of the leaf file name where present.
 
 Output paths (overwritten each run):
 - \\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Delivery Schedule\\Daily Status Reports\\COBCReport.html
@@ -39,22 +47,41 @@ import subprocess
 from datetime import datetime
 
 SERVER = "TRGUtil10"
-DATABASE = "COBC"
-SINCE = "2023-12-31 19:16:46.303"
+DATABASE = "Ramp"
+SINCE = "2024-12-31 23:59:00.000"
 
 # sqlcmd's -s only honors a single character, so use a tab (never present in
-# these numeric / filename / date fields).
+# these path / filename / date fields).
 SEP = "\t"
 
+# One canonical row per (FileName, received-date): prefer the Completed stage,
+# then Staged/Downloaded, then anything else; tie-break on FileLogId.  Only
+# inbound client files (SourcePath under \Clients\) so the client parses out.
 SQL = """SET NOCOUNT ON;
-SELECT  tapeid,
-        CONVERT(varchar(19), inserted, 120) AS Loaded,
-        Client,
-        FileSize,
-        [File]
-FROM COBC.dbo.tblTape
-WHERE inserted > '{since}'
-ORDER BY tapeid DESC;
+WITH F AS (
+  SELECT  FileName,
+          SourcePath,
+          FileSize,
+          CONVERT(varchar(19), DateCreated, 120) AS Received,
+          Status,
+          ROW_NUMBER() OVER (
+            PARTITION BY FileName, CAST(DateCreated AS date)
+            ORDER BY CASE Status
+                       WHEN 'Completed'  THEN 0
+                       WHEN 'Staged'     THEN 1
+                       WHEN 'Downloaded' THEN 2
+                       ELSE 3 END,
+                     FileLogId
+          ) AS rn
+  FROM ramp.FileLog
+  WHERE DateCreated > '{since}'
+    AND ([FileName] LIKE '%MARX%' OR [FileName] LIKE '%TRR%' OR [FileName] LIKE '%ABII%')
+    AND SourcePath LIKE '%\\Clients\\%'
+)
+SELECT FileName, SourcePath, FileSize, Received, Status
+FROM F
+WHERE rn = 1
+ORDER BY Received DESC;
 """.format(since=SINCE)
 
 OUTPUT_PATHS = [
@@ -63,48 +90,149 @@ OUTPUT_PATHS = [
     r"C:\Users\tls2\OneDrive - Machinify\Documents\Reports\COBCReport.html",
 ]
 
-# A contract dot-segment: optional routing 'R', a letter, then 3-5 digits
-# (anchored so date/time segments like D260622 / T0858590 don't match).
+# ---- File-name parsing --------------------------------------------------
+
+# A contract dot/underscore-segment: optional routing 'R', a letter, then 3-5
+# digits (anchored so date/time segments like D260622 / T0858590 don't match).
 CONTRACT_SEG_RE = re.compile(r"^R?[A-Z]\d{3,5}$")
 # Drop a single leading routing 'R' only when a real contract (letter+digit)
 # follows it: RH1607 -> H1607, RR6694 -> R6694, but R6694 stays R6694.
 LEAD_R_RE = re.compile(r"^R(?=[A-Z]\d)")
-# Data-date token in the leaf name, e.g. D260508 -> 2026-05-08 (Date Extracted).
-DATE_TOKEN_RE = re.compile(r"^D(\d{2})(\d{2})(\d{2})$")
-# Older BCBSNC files carry a YYYYMMDDHHMMSS stamp instead, e.g. 20240416090707.
-DATE_TS_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})\d{6}$")
-# Leading routing token on the Client column, e.g. "2-AetnaHMO" -> "AetnaHMO".
-CLIENT_PREFIX_RE = re.compile(r"^\d+-")
+
+# Data-date tokens, tried in priority order against filename segments.
+DATE_D_RE   = re.compile(r"^D(\d{2})(\d{2})(\d{2})$")          # D260508      -> 2026-05-08
+DATE_DTRR_RE = re.compile(r"DTRRD_(\d{2})(\d{2})(\d{2})")      # DTRRD_260721 -> 2026-07-21 (YYMMDD)
+DATE_TRR_RE = re.compile(r"TRR(\d{2})(\d{2})(\d{4})")          # TRR07232026  -> 2026-07-23 (MMDDYYYY)
+DATE_YMD_RE = re.compile(r"(20\d{2})(\d{2})(\d{2})")           # 20260722     -> 2026-07-22 (YYYYMMDD)
+DATE_MDY_RE = re.compile(r"^(\d{2})(\d{2})(20\d{2})$")         # 01282026     -> 2026-01-28 (MMDDYYYY)
+DATE_YM_RE  = re.compile(r"^(20\d{2})(\d{2})$")                # 202501       -> 2025-01-01 (YYYYMM)
+
+# Leaf-name wrappers that are pure encryption layers over an otherwise
+# identical file; strip them so encrypted+decrypted twins dedupe to one file.
+ENC_EXT_RE = re.compile(r"\.(pgp|gpg)$", re.IGNORECASE)
+
+# Client-folder staging suffixes to strip (case-insensitive), e.g.
+# BCBSNC_Decrypt -> BCBSNC, bcbsks_TempDecrypt -> bcbsks, MMOH_Temp -> MMOH.
+CLIENT_SUFFIX_RE = re.compile(r"(?:_?Temp)?(?:_?Decrypt)?$", re.IGNORECASE)
+
+# Fold folder tokens (lowercased key) to a clean display name.  Merges case
+# variants and known same-client folder aliases; keeps genuinely distinct
+# medical/Rx feed lines separate.
+CLIENT_ALIASES = {
+    "coventry": "Coventry",
+    "anthem": "Anthem",
+    "aetna": "Aetna",
+    "aetnarx": "AetnaRx",
+    "aetnaqnxt": "AetnaQNXT",
+    "aetnaqnxtrx": "AetnaQNXTRx",
+    "cigna": "Cigna",
+    "healthnet": "HealthNet",
+    "healthnow": "HealthNow",
+    "wellpointrx": "WellpointRx",
+    "wellcarerx": "WellcareRx",
+    "centene": "Centene",
+    "centenerx": "CenteneRx",
+    "centenefidelis": "CenteneFidelis",
+    "centenefidelisrx": "CenteneFidelisRx",
+    "hip_facets": "HIP_Facets",
+    "emblemrx": "EmblemRx",
+    "evernorth": "Evernorth",
+    "mmoh": "MMOH",
+    "mmohrx": "MMOHRx",
+    "bcbsnc": "BCBSNC",
+    "bcbsnc_rx": "BCBSNC_RX",
+    "bcbsks": "BCBSKS",
+    "excellus": "Excellus",
+    "excellusrx": "ExcellusRx",
+    "hap": "HAP",
+    "bcbsarkansas": "BCBSARRx",   # DMZ folder for the same client as BCBSARRx
+    "bcbsarrx": "BCBSARRx",
+    "mcs": "MCS",
+    "carefirst": "CareFirst",
+    "elixir": "ElixirSolutions",
+    "elixirsolutions": "ElixirSolutions",
+    "elevancemmmrx": "ElevanceMMMRx",
+    "premera": "Premera",
+    "premera_medadvrx": "Premera_MedAdvRx",
+}
 
 
-def parse_client(client: str) -> str:
-    return CLIENT_PREFIX_RE.sub("", (client or "").strip())
+def leaf_name(path: str) -> str:
+    return re.split(r"[\\/]", path or "")[-1]
 
 
-def parse_contract(path: str) -> str:
+def dedup_key(fname: str) -> str:
+    """Filename with an encryption wrapper (.pgp/.gpg) stripped, upper-cased."""
+    return ENC_EXT_RE.sub("", (fname or "")).upper()
+
+
+def file_type(fname: str) -> str:
+    u = (fname or "").upper()
+    if "MARX" in u:
+        return "COBC"
+    if "ABII" in u:
+        return "ABII"
+    if "TRR" in u:
+        return "TRR"
+    return "Other"
+
+
+def parse_client(source_path: str) -> str:
+    """Client from the SourcePath: the segment after \\Clients\\ (skipping a
+    users\\ level), staging suffix stripped, known aliases folded."""
+    parts = [p for p in re.split(r"[\\/]", source_path or "") if p]
+    lower = [p.lower() for p in parts]
+    if "clients" not in lower:
+        return "Unknown"
+    i = lower.index("clients")
+    seg = parts[i + 1] if i + 1 < len(parts) else ""
+    if seg.lower() == "users" and i + 2 < len(parts):
+        seg = parts[i + 2]
+    if not seg:
+        return "Unknown"
+    # \Clients\Machinify\Inbound\UHC_COBC -> UHC (the deepest token, minus _COBC)
+    if seg.lower() == "machinify":
+        tail = parts[-1]
+        tail = re.sub(r"_?COBC$", "", tail, flags=re.IGNORECASE)
+        return (tail or "Machinify").upper()
+    seg = CLIENT_SUFFIX_RE.sub("", seg) or seg
+    return CLIENT_ALIASES.get(seg.lower(), seg)
+
+
+def parse_contract(fname: str) -> str:
     """Contract token in the leaf file name, leading routing 'R' dropped."""
-    leaf = re.split(r"[\\/]", path or "")[-1]
-    for seg in re.split(r"[._ ]", leaf.upper()):
+    for seg in re.split(r"[._ ]", (fname or "").upper()):
         if CONTRACT_SEG_RE.match(seg):
             return LEAD_R_RE.sub("", seg)
     return ""
 
 
-def parse_extracted(path: str) -> str:
-    """Data date parsed from the D-token in the leaf name (Date Extracted)."""
-    leaf = re.split(r"[\\/]", path or "")[-1]
-    for seg in leaf.upper().split("."):
-        m = DATE_TOKEN_RE.match(seg)
+def parse_extracted(fname: str) -> str:
+    """Best-effort data (extracted) date from the leaf name; '' if none."""
+    up = (fname or "").upper()
+    segs = re.split(r"[._ ]", up)
+    for seg in segs:                       # D260508 style
+        m = DATE_D_RE.match(seg)
         if m:
             return f"20{m.group(1)}-{m.group(2)}-{m.group(3)}"
-        m = DATE_TS_RE.match(seg)
+    m = DATE_DTRR_RE.search(up)            # DTRRD_260721 (YYMMDD)
+    if m:
+        return f"20{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = DATE_TRR_RE.search(up)             # TRR07232026 (MMDDYYYY)
+    if m:
+        return f"{m.group(3)}-{m.group(1)}-{m.group(2)}"
+    for seg in segs:                       # 01282026 (MMDDYYYY)
+        m = DATE_MDY_RE.match(seg)
         if m:
-            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+            return f"{m.group(3)}-{m.group(1)}-{m.group(2)}"
+    m = DATE_YMD_RE.search(up)             # 20260722 (YYYYMMDD)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    for seg in segs:                       # 202501 (YYYYMM) -> month, day=01
+        m = DATE_YM_RE.match(seg)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-01"
     return ""
-
-
-def leaf_name(path: str) -> str:
-    return re.split(r"[\\/]", path or "")[-1]
 
 
 def fetch_rows():
@@ -113,7 +241,7 @@ def fetch_rows():
         "-h", "-1", "-W", "-s", SEP, "-Q", SQL,
     ]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    rows = []
+    seen = {}          # dedup_key(name) + received-date -> row (keep first / Completed)
     for line in out.splitlines():
         line = line.rstrip("\r\n")
         if not line.strip():
@@ -121,26 +249,34 @@ def fetch_rows():
         parts = line.split(SEP)
         if len(parts) != 5:
             continue
-        tape, loaded, client, size, fname = [p.strip() for p in parts]
-        if not tape.isdigit():  # skip sqlcmd footer / noise
+        fname, spath, size, received, status = [p.strip() for p in parts]
+        if not fname or fname.lower() == "filename":
             continue
-        rows.append({
-            "tape": tape,
-            "client": parse_client(client),
+        ftype = file_type(fname)
+        if ftype == "Other":
+            continue
+        rec = received if received and received != "NULL" else ""
+        key = dedup_key(fname) + "|" + rec[:10]
+        if key in seen:
+            continue                       # keep the first (Completed-first from SQL order)
+        seen[key] = {
+            "client": parse_client(spath),
+            "ftype": ftype,
             "contract": parse_contract(fname),
             "filename": leaf_name(fname),
             "extracted": parse_extracted(fname),
-            "loaded": loaded if loaded and loaded != "NULL" else "",
+            "received": rec,
+            "status": status,
             "size": int(size) if size.isdigit() else 0,
-        })
-    return rows
+        }
+    return list(seen.values())
 
 
 HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>COBC File Report</title>
+<title>COBC / TRR / ABII File Report</title>
 <style>
   :root {
     --bg: #f4f6f9;
@@ -264,6 +400,13 @@ HTML_TEMPLATE = """<!doctype html>
   .pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; justify-content: flex-end; font-size: 13px; color: var(--muted); }
   .empty { padding: 24px; text-align: center; color: var(--muted); }
 
+  /* File-type pills */
+  .ft { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700;
+        letter-spacing: .4px; }
+  .ft-COBC { background: #e3f0fb; color: #1f5b8a; }
+  .ft-TRR  { background: #eae6fb; color: #5b3a9e; }
+  .ft-ABII { background: #e4f6ea; color: #1c7a44; }
+
   /* ---- Monthly matrix ---- */
   .matrix-wrap {
     overflow: auto; max-height: calc(100vh - 230px);
@@ -345,8 +488,8 @@ HTML_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <header>
-  <h1>COBC File Report</h1>
-  <div class="meta">Generated __GENERATED__ &middot; TRGUtil10 / COBC &middot; dbo.tblTape since __SINCE__ &middot; __ROW_COUNT__ files</div>
+  <h1>COBC / TRR / ABII File Report</h1>
+  <div class="meta">Generated __GENERATED__ &middot; TRGUtil10 / Ramp.ramp.FileLog &middot; inbound client files since __SINCE__ &middot; __ROW_COUNT__ files (deduped)</div>
 </header>
 <main>
   <div class="tabs">
@@ -361,6 +504,10 @@ HTML_TEMPLATE = """<!doctype html>
         <select id="m-year"></select>
       </div>
       <div class="field">
+        <label for="m-type">File Type</label>
+        <select id="m-type"><option value="">All types</option><option>COBC</option><option>TRR</option><option>ABII</option></select>
+      </div>
+      <div class="field">
         <label for="m-client">Client</label>
         <select id="m-client"><option value="">All clients</option></select>
       </div>
@@ -372,7 +519,7 @@ HTML_TEMPLATE = """<!doctype html>
       <button class="secondary" id="m-collapse">Collapse all</button>
       <div class="field" style="justify-content:flex-end">
         <label>&nbsp;</label>
-        <span style="font-size:12px;color:var(--muted)">Cell = files loaded that month &middot; click a client to expand its contracts &middot; hover a <b>count</b> for date extracted, file name &amp; size.</span>
+        <span style="font-size:12px;color:var(--muted)">Cell = files received that month &middot; click a client to expand its contracts &middot; hover a <b>count</b> for file details.</span>
       </div>
     </section>
     <div class="matrix-wrap">
@@ -389,10 +536,14 @@ HTML_TEMPLATE = """<!doctype html>
     <div class="kpi"><div class="label">Clients</div><div class="value" id="kpi-clients">&mdash;</div></div>
     <div class="kpi"><div class="label">Contracts</div><div class="value" id="kpi-contracts">&mdash;</div></div>
     <div class="kpi"><div class="label">Total Size</div><div class="value" id="kpi-size">&mdash;</div></div>
-    <div class="kpi"><div class="label">Latest Load</div><div class="value" id="kpi-latest">&mdash;</div></div>
+    <div class="kpi"><div class="label">Latest Received</div><div class="value" id="kpi-latest">&mdash;</div></div>
   </section>
 
   <section class="filters">
+    <div class="field">
+      <label for="f-type">File Type</label>
+      <select id="f-type"><option value="">All types</option><option>COBC</option><option>TRR</option><option>ABII</option></select>
+    </div>
     <div class="field">
       <label for="f-client">Client</label>
       <select id="f-client"><option value="">All clients</option></select>
@@ -406,11 +557,11 @@ HTML_TEMPLATE = """<!doctype html>
       <input type="text" id="f-filename" placeholder="contains&hellip;">
     </div>
     <div class="field">
-      <label for="f-ldfrom">Loaded From</label>
+      <label for="f-ldfrom">Received From</label>
       <input type="date" id="f-ldfrom">
     </div>
     <div class="field">
-      <label for="f-ldto">Loaded To</label>
+      <label for="f-ldto">Received To</label>
       <input type="date" id="f-ldto">
     </div>
     <button class="secondary" id="btn-reset">Reset</button>
@@ -420,11 +571,12 @@ HTML_TEMPLATE = """<!doctype html>
     <thead>
       <tr>
         <th data-key="client">Client<span class="arrow">&#8597;</span></th>
+        <th data-key="ftype">Type<span class="arrow">&#8597;</span></th>
         <th data-key="contract">Contract<span class="arrow">&#8597;</span></th>
         <th data-key="filename">File Name<span class="arrow">&#8597;</span></th>
-        <th data-key="tape">TapeID<span class="arrow">&#8597;</span></th>
         <th data-key="extracted">Extracted<span class="arrow">&#8597;</span></th>
-        <th data-key="loaded">Loaded<span class="arrow">&#8597;</span></th>
+        <th data-key="received">Received<span class="arrow">&#8597;</span></th>
+        <th data-key="status">Status<span class="arrow">&#8597;</span></th>
         <th data-key="size" class="num">File Size<span class="arrow">&#8597;</span></th>
       </tr>
     </thead>
@@ -445,13 +597,12 @@ HTML_TEMPLATE = """<!doctype html>
   const ROWS = JSON.parse(document.getElementById('data').textContent);
   const PAGE_SIZE = 100;
   let state = {
-    client: '', contract: '', filename: '',
+    ftype: '', client: '', contract: '', filename: '',
     ldfrom: '', ldto: '',
-    sortKey: 'loaded', sortDir: 'desc', page: 0,
+    sortKey: 'received', sortDir: 'desc', page: 0,
   };
 
   const $ = (id) => document.getElementById(id);
-  const fmtInt = (v) => (v == null ? '' : v.toLocaleString('en-US'));
   const fmtSize = (b) => {
     if (b == null || b === 0) return '0 B';
     const u = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -459,6 +610,7 @@ HTML_TEMPLATE = """<!doctype html>
     while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
     return (i === 0 ? n : n.toFixed(n < 10 ? 2 : 1)) + ' ' + u[i];
   };
+  const ftPill = (t) => '<span class="ft ft-' + t + '">' + t + '</span>';
 
   const fillSelect = (id, values) => {
     for (const v of values) {
@@ -473,10 +625,11 @@ HTML_TEMPLATE = """<!doctype html>
   function applyFilters() {
     const fnQ = state.filename.trim().toLowerCase();
     return ROWS.filter(r => {
+      if (state.ftype && r.ftype !== state.ftype) return false;
       if (state.client && r.client !== state.client) return false;
       if (state.contract && r.contract !== state.contract) return false;
       if (fnQ && r.filename.toLowerCase().indexOf(fnQ) === -1) return false;
-      const ld = r.loaded ? r.loaded.slice(0, 10) : '';
+      const ld = r.received ? r.received.slice(0, 10) : '';
       if (state.ldfrom && (!ld || ld < state.ldfrom)) return false;
       if (state.ldto && (!ld || ld > state.ldto)) return false;
       return true;
@@ -486,7 +639,7 @@ HTML_TEMPLATE = """<!doctype html>
   function sortRows(rows) {
     const k = state.sortKey;
     const dir = state.sortDir === 'asc' ? 1 : -1;
-    const numeric = (k === 'size' || k === 'tape');
+    const numeric = (k === 'size');
     return rows.slice().sort((a, b) => {
       let av = a[k], bv = b[k];
       if (numeric) { av = Number(av); bv = Number(bv); }
@@ -509,7 +662,7 @@ HTML_TEMPLATE = """<!doctype html>
       size += r.size || 0;
       if (r.client) cset.add(r.client);
       if (r.contract) ctset.add(r.contract);
-      if (r.loaded && r.loaded > latest) latest = r.loaded;
+      if (r.received && r.received > latest) latest = r.received;
     }
     $('kpi-files').textContent = filtered.length.toLocaleString();
     $('kpi-clients').textContent = cset.size.toLocaleString();
@@ -528,7 +681,7 @@ HTML_TEMPLATE = """<!doctype html>
     body.innerHTML = '';
     if (slice.length === 0) {
       const tr = document.createElement('tr');
-      tr.innerHTML = '<td colspan="7" class="empty">No files match the current filters.</td>';
+      tr.innerHTML = '<td colspan="8" class="empty">No files match the current filters.</td>';
       body.appendChild(tr);
     } else {
       const esc = (s) => (s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
@@ -536,11 +689,12 @@ HTML_TEMPLATE = """<!doctype html>
         const tr = document.createElement('tr');
         tr.innerHTML =
           '<td>' + esc(r.client) + '</td>' +
+          '<td>' + ftPill(r.ftype) + '</td>' +
           '<td>' + esc(r.contract) + '</td>' +
           '<td>' + esc(r.filename) + '</td>' +
-          '<td>' + esc(r.tape) + '</td>' +
           '<td>' + esc(r.extracted) + '</td>' +
-          '<td>' + esc(r.loaded) + '</td>' +
+          '<td>' + esc(r.received) + '</td>' +
+          '<td>' + esc(r.status) + '</td>' +
           '<td class="num' + (r.size ? '' : ' zero') + '">' + fmtSize(r.size) + '</td>';
         body.appendChild(tr);
       }
@@ -563,8 +717,8 @@ HTML_TEMPLATE = """<!doctype html>
   }
 
   function bindFilters() {
-    const ids = ['f-client', 'f-contract', 'f-filename', 'f-ldfrom', 'f-ldto'];
-    const keys = ['client', 'contract', 'filename', 'ldfrom', 'ldto'];
+    const ids = ['f-type', 'f-client', 'f-contract', 'f-filename', 'f-ldfrom', 'f-ldto'];
+    const keys = ['ftype', 'client', 'contract', 'filename', 'ldfrom', 'ldto'];
     ids.forEach((id, i) => {
       $(id).addEventListener('input', () => {
         state[keys[i]] = $(id).value;
@@ -574,17 +728,17 @@ HTML_TEMPLATE = """<!doctype html>
     });
     $('btn-reset').addEventListener('click', () => {
       ids.forEach(id => $(id).value = '');
-      Object.assign(state, { client: '', contract: '', filename: '', ldfrom: '', ldto: '', page: 0 });
+      Object.assign(state, { ftype: '', client: '', contract: '', filename: '', ldfrom: '', ldto: '', page: 0 });
       render();
     });
-    document.querySelectorAll('th[data-key]').forEach(th => {
+    document.querySelectorAll('#grid th[data-key]').forEach(th => {
       th.addEventListener('click', () => {
         const k = th.dataset.key;
         if (state.sortKey === k) {
           state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
         } else {
           state.sortKey = k;
-          state.sortDir = (k === 'size' || k === 'loaded' || k === 'extracted') ? 'desc' : 'asc';
+          state.sortDir = (k === 'size' || k === 'received' || k === 'extracted') ? 'desc' : 'asc';
         }
         render();
       });
@@ -597,12 +751,12 @@ HTML_TEMPLATE = """<!doctype html>
   render();
 
   // ===================== Monthly matrix view =====================
-  const monthState = { year: '', client: '', contract: '', expanded: new Set() };
+  const monthState = { year: '', ftype: '', client: '', contract: '', expanded: new Set() };
 
   const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-  // Distinct load-years (YYYY), newest first.
-  const years = [...new Set(ROWS.map(r => r.loaded).filter(Boolean).map(s => s.slice(0, 4)))].sort().reverse();
+  // Distinct received-years (YYYY), newest first.
+  const years = [...new Set(ROWS.map(r => r.received).filter(Boolean).map(s => s.slice(0, 4)))].sort().reverse();
   for (const yy of years) {
     const opt = document.createElement('option');
     opt.value = yy; opt.textContent = yy;
@@ -612,12 +766,14 @@ HTML_TEMPLATE = """<!doctype html>
   if (monthState.year) $('m-year').value = monthState.year;
   fillSelect('m-client', [...new Set(ROWS.map(r => r.client).filter(Boolean))].sort());
 
-  // Contract dropdown is scoped to the selected client (cascading filter).
+  // Contract dropdown is scoped to the selected client + type (cascading).
   function populateContracts() {
     const sel = $('m-contract');
     const keep = monthState.contract;
     sel.innerHTML = '<option value="">All contracts</option>';
-    const src = monthState.client ? ROWS.filter(r => r.client === monthState.client) : ROWS;
+    let src = ROWS;
+    if (monthState.client) src = src.filter(r => r.client === monthState.client);
+    if (monthState.ftype) src = src.filter(r => r.ftype === monthState.ftype);
     const cts = [...new Set(src.map(r => r.contract).filter(Boolean))].sort();
     for (const c of cts) {
       const opt = document.createElement('option');
@@ -639,8 +795,9 @@ HTML_TEMPLATE = """<!doctype html>
     tip.innerHTML = files.map(f =>
       '<div class="tt-file">' +
         '<div class="tt-name">' + escT(f.filename) + '</div>' +
+        '<div><span class="tt-label">Type:</span> ' + escT(f.ftype) + '</div>' +
         '<div><span class="tt-label">Date Extracted:</span> ' + (escT(f.extracted) || '&mdash;') + '</div>' +
-        '<div><span class="tt-label">Date Loaded:</span> ' + escT((f.loaded || '').slice(0, 10)) + '</div>' +
+        '<div><span class="tt-label">Date Received:</span> ' + escT((f.received || '').slice(0, 10)) + '</div>' +
         '<div><span class="tt-label">File Size:</span> ' + fmtSize(f.size) + '</div>' +
       '</div>'
     ).join('');
@@ -657,13 +814,17 @@ HTML_TEMPLATE = """<!doctype html>
   }
   const hideTip = () => { tip.style.display = 'none'; };
 
-  // All-time universe of client -> [contracts], so every client/contract is
-  // listed each month whether or not it loaded (a count = it loaded).
-  const ALL_PAIRS = {};
-  {
+  // Universe of client -> [contracts] for the current type filter, so every
+  // client/contract is listed each month whether or not it received a file.
+  function buildPairs() {
+    const pairs = {};
     const tmp = {};
-    for (const r of ROWS) (tmp[r.client] = tmp[r.client] || new Set()).add(r.contract);
-    for (const k of Object.keys(tmp)) ALL_PAIRS[k] = [...tmp[k]].sort((a, b) => a.localeCompare(b));
+    for (const r of ROWS) {
+      if (monthState.ftype && r.ftype !== monthState.ftype) continue;
+      (tmp[r.client] = tmp[r.client] || new Set()).add(r.contract);
+    }
+    for (const k of Object.keys(tmp)) pairs[k] = [...tmp[k]].sort((a, b) => a.localeCompare(b));
+    return pairs;
   }
 
   let cid = 0;   // unique cell/tooltip id counter across a render
@@ -695,13 +856,16 @@ HTML_TEMPLATE = """<!doctype html>
     htr.innerHTML = hh;
     head.appendChild(htr);
 
+    const ALL_PAIRS = buildPairs();
+
     // clients[name] = { contracts: {ct: {month:[files]}}, agg: {month:[files]} }
     const clients = {};
     for (const r of ROWS) {
-      if (!r.loaded || r.loaded.slice(0, 4) !== yr) continue;
+      if (!r.received || r.received.slice(0, 4) !== yr) continue;
+      if (monthState.ftype && r.ftype !== monthState.ftype) continue;
       const c = clients[r.client] || (clients[r.client] = { contracts: {}, agg: {} });
       const ct = c.contracts[r.contract] || (c.contracts[r.contract] = {});
-      const mo = Number(r.loaded.slice(5, 7));
+      const mo = Number(r.received.slice(5, 7));
       (ct[mo] = ct[mo] || []).push(r);
       (c.agg[mo] = c.agg[mo] || []).push(r);
     }
@@ -770,6 +934,11 @@ HTML_TEMPLATE = """<!doctype html>
   });
 
   $('m-year').addEventListener('change', () => { monthState.year = $('m-year').value; renderMatrix(); });
+  $('m-type').addEventListener('change', () => {
+    monthState.ftype = $('m-type').value;
+    populateContracts();
+    renderMatrix();
+  });
   $('m-client').addEventListener('change', () => {
     monthState.client = $('m-client').value;
     populateContracts();
@@ -810,9 +979,12 @@ def generate_html(rows) -> str:
 
 
 def main():
-    print(f"[info] Fetching COBC files from {SERVER}/{DATABASE} (inserted > {SINCE})")
+    print(f"[info] Fetching COBC/TRR/ABII files from {SERVER}/{DATABASE} (DateCreated > {SINCE})")
     rows = fetch_rows()
-    print(f"[info] {len(rows)} files")
+    by_type = {}
+    for r in rows:
+        by_type[r["ftype"]] = by_type.get(r["ftype"], 0) + 1
+    print(f"[info] {len(rows)} files (deduped) — " + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items())))
     html = generate_html(rows)
 
     primary = OUTPUT_PATHS[0]
