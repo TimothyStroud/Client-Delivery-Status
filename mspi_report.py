@@ -422,8 +422,8 @@ HTML_TEMPLATE = """<!doctype html>
     <div class="kpi"><div class="label">Files</div><div class="value" id="kpi-files">&mdash;</div></div>
     <div class="kpi"><div class="label">Clients</div><div class="value" id="kpi-clients">&mdash;</div></div>
     <div class="kpi"><div class="label">DET Records</div><div class="value" id="kpi-det">&mdash;</div></div>
-    <div class="kpi"><div class="label">MSP Records</div><div class="value" id="kpi-msp">&mdash;</div></div>
     <div class="kpi"><div class="label">PRM Records</div><div class="value" id="kpi-prm">&mdash;</div></div>
+    <div class="kpi"><div class="label">Total Records</div><div class="value" id="kpi-total">&mdash;</div></div>
     <div class="kpi"><div class="label">Latest Load</div><div class="value" id="kpi-latest">&mdash;</div></div>
   </section>
 
@@ -554,18 +554,18 @@ HTML_TEMPLATE = """<!doctype html>
     const sorted = sortRows(filtered);
 
     // KPIs
-    let det = 0, msp = 0, prm = 0, latest = '';
+    let det = 0, prm = 0, latest = '';
     const cset = new Set();
     for (const r of filtered) {
-      det += r.det || 0; msp += r.msp || 0; prm += r.prm || 0;
+      det += r.det || 0; prm += r.prm || 0;
       if (r.client) cset.add(r.client);
       if (r.loaded && r.loaded > latest) latest = r.loaded;
     }
     $('kpi-files').textContent = filtered.length.toLocaleString();
     $('kpi-clients').textContent = cset.size.toLocaleString();
     $('kpi-det').textContent = det.toLocaleString();
-    $('kpi-msp').textContent = msp.toLocaleString();
     $('kpi-prm').textContent = prm.toLocaleString();
+    $('kpi-total').textContent = (det + prm).toLocaleString();
     $('kpi-latest').textContent = latest ? latest.slice(0, 10) : '—';
 
     // Pagination
