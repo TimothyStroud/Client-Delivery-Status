@@ -172,8 +172,13 @@ CLIENT_ALIASES = {
     # load indicators — exclude their snap_idx keys from matching so that a
     # successful COBC load this week does not trip the "loaded this week" L.
     "WellCareRx":           ["wellcarerx", "wellcarerxmasterload"],
-    # Oscar / OscarRx job prefixes
-    "Oscar":                ["oscar", "oscarmedical"],
+    # Oscar / OscarRx job prefixes. NOTE: the bare "oscar" alias was REMOVED
+    # 2026-07-23 — it substring-matched "oscarrx..." in find_matching_jobs and
+    # put a false "L" on Oscar Medical from a Ready 'Oscar RX 0110 Load'. Only
+    # "oscarmedical" (which does NOT appear inside "oscarrx...") is kept; the DHT
+    # cert key "oscar" is still yielded by _keys_for_client's base. See the
+    # matching CLIENT_PRIMARY_KEY_OVERRIDE["Oscar"] entry.
+    "Oscar":                ["oscarmedical"],
     "OscarRx":              ["oscarrx", "oscarrxmasterload", "oscarrxabii"],
     # Centene / CenteneRx job prefixes
     "Centene":              ["centene", "centenemedical"],
@@ -358,15 +363,17 @@ WEEKLY_CLIENTS = {
 # 2026-06-08 — now treated as a normal monthly Kaiser_Amb cert feed (see
 # MONTHLY_CERT_ONLY_CLIENTS / SNAP_KIND_ONLY_CLIENTS).
 # Oscar (weekly Wed) was Inactive 7/1-7/8; reactivated 2026-07-15 (backfill
-# certified 7/15 covering 7/1 & 7/8). 2026-07-17: per user, the 7/15 cell shows
-# the 7/15 cert date and ALL FUTURE Oscar Medical dates are Inactive — Oscar
-# re-added to FORCED_INACTIVE. The 7/1/7/8/7/15 cells keep their MANUAL_OVERRIDES
-# (dates), so only future Wed cells (7/22+) render "Inactive".
+# certified 7/15 covering 7/1 & 7/8). 2026-07-17: re-added to FORCED_INACTIVE
+# (all future dates Inactive). 2026-07-23: REACTIVATED per user — Oscar Medical is
+# back in RAMP (Stage/Load jobs running again; last cert 7/15) so it must track
+# live loads/cert/L via the normal STAGE_FILE_CELL path. Removed from
+# FORCED_INACTIVE. The 7/1/7/8/7/15 cells keep their MANUAL_OVERRIDES (dates) as a
+# historical anchor; future Wed cells now render real state.
 # ESIPBMRx (monthly, tape/snap-driven) added 2026-07-15 per user: mark Inactive
 # until loading resumes ("can go to 'L' once loading starts again").
 # Tufts_Audit_CIT (weekly Mon) added 2026-07-17 per user: mark Inactive.
 FORCED_INACTIVE = {"Tufts_PublicPlan", "TuftsRx", "HealthNetCA", "ESIPBMRx",
-                   "Oscar", "Tufts_Audit_CIT"}
+                   "Tufts_Audit_CIT"}
 
 # Clients whose load is running but snap step is disabled in RAMP — show
 # marker "Snap" with pink shading on the expected delivery day. Mechanism kept
@@ -1255,6 +1262,16 @@ CLIENT_PRIMARY_KEY_OVERRIDE = {
     # trick as Medica/NCState. _keys_for_client still yields base "hmsa" for
     # DHT cert / snap-index lookups. Per user 2026-07-07.
     "HMSA": "hmsaclaims",
+    # "oscar" (Oscar Medical's key) is a substring of "oscarrx", so
+    # find_matching_jobs("Oscar") falsely matched OscarRx's jobs — a Ready
+    # 'Oscar RX 0110 Load' put a spurious "L" on Oscar Medical. Override to
+    # "oscarmedical", which matches Oscar Medical's own jobs
+    # ('Oscar Medical 0110 Load' → "oscarmedical0110load") but NOT
+    # "oscarrx0110load". Same trick as Medica/NCState/HMSA. _keys_for_client
+    # still yields base "oscar" for the DHT cert lookup (cert DatabaseName is
+    # "Oscar"). Surfaced 2026-07-23 when Oscar was reactivated from
+    # FORCED_INACTIVE. The bare "oscar" alias in CLIENT_ALIASES was also removed.
+    "Oscar": "oscarmedical",
 }
 
 # NYShip_Rx fires four times per month — on the 1st, 8th, 16th, 24th
