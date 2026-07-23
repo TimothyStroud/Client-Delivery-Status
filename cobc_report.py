@@ -5,30 +5,27 @@ No external dependencies, no server, no auth. Styled to match the
 MissingPayDates / CAQH Traffic / MSPI reports. Drop it on a shared drive and
 users open it in a browser.
 
-Data source: TRGUtil10 / Ramp.ramp.FileLog.  This is the RAMP file-movement
-log, so a single physical file is logged once per pipeline stage
-(Completed / Staged / Downloaded / ...).  We therefore DEDUPE to one row per
-file (one canonical row per FileName + received-date, preferring the
-"Completed" stage) and keep only INBOUND CLIENT files (SourcePath under a
-``\\Clients\\`` folder), which is where the client name is derivable.
+Data source: the **RAMP web app** (http://ramp), not SQL.  Two REST endpoints
+behind the RAMP UI pages, both via Windows auth (`curl --negotiate -u :`):
 
-    SELECT ... FROM ramp.FileLog
-    WHERE DateCreated > '2024-12-31 23:59:00.000'
-      AND ([FileName] LIKE '%MARX%'   -- COBC (MARXCOB)
-        OR [FileName] LIKE '%TRR%'    -- TRR
-        OR [FileName] LIKE '%ABII%')  -- ABII
-      AND SourcePath LIKE '%\\Clients\\%'
+  * FileLogger  -> GET /api/Ramp/FileLog/List/{startDate}/{endDate}
+      Backs http://ramp/Ramp/FileLogger.  Dates are JS `toDateString()`
+      format ("Tue Jul 21 2026").  Returns every file RAMP logged in the
+      range, with ClientName / FeedName / JobName already resolved, the
+      timestamp in LogDate (DateCreated is not populated by this projection),
+      and one row per feed/job step (so a file appears a few times -> deduped).
+      Pulled in monthly chunks from START_DATE to today.
 
-Note: the OR group is parenthesised on purpose.  Written flat
-(``... AND a OR b OR c``) SQL binds it as ``(AND a) OR b OR c`` and the date
-filter would silently not apply to the TRR/ABII arms.
+  * UnconfiguredFiles -> GET /api/Ramp/ConfiguredFiles
+      Backs http://ramp/Ramp/UnconfiguredFiles.  Items with
+      IsConfigured == false are files RAMP received but has no config for.
+      Joined to the FileLogger rows by FileLogId so the dashboard can flag a
+      file as UNCONFIGURED (and any unconfigured COBC/TRR/ABII outside the
+      pulled window is injected so it still shows).
 
-Each row carries FileSize (bytes).  Client comes from the SourcePath (the
-segment after ``\\Clients\\``, skipping a ``users\\`` level, with staging
-suffixes like ``_Temp`` / ``_Decrypt`` stripped and a few known aliases
-folded, e.g. ``Machinify\\Inbound\\UHC_COBC`` -> UHC, ``BCBSArkansas`` ->
-BCBSARRx).  File Type (COBC / TRR / ABII) is derived from the FileName.
-Contract and the data date are parsed out of the leaf file name where present.
+We keep only COBC (MARXCOB), TRR and ABII files (matched on FileName), dedupe
+to one row per file (FileName + log-date, encryption-wrapper twins merged),
+and take the client straight from RAMP's ClientName.
 
 Output paths (overwritten each run):
 - \\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Delivery Schedule\\Daily Status Reports\\COBCReport.html
@@ -44,45 +41,14 @@ import os
 import re
 import shutil
 import subprocess
-from datetime import datetime
+import sys
+import time
+import urllib.parse
+from datetime import date, datetime, timedelta
 
-SERVER = "TRGUtil10"
-DATABASE = "Ramp"
-SINCE = "2024-12-31 23:59:00.000"
-
-# sqlcmd's -s only honors a single character, so use a tab (never present in
-# these path / filename / date fields).
-SEP = "\t"
-
-# One canonical row per (FileName, received-date): prefer the Completed stage,
-# then Staged/Downloaded, then anything else; tie-break on FileLogId.  Only
-# inbound client files (SourcePath under \Clients\) so the client parses out.
-SQL = """SET NOCOUNT ON;
-WITH F AS (
-  SELECT  FileName,
-          SourcePath,
-          FileSize,
-          CONVERT(varchar(19), DateCreated, 120) AS Received,
-          Status,
-          ROW_NUMBER() OVER (
-            PARTITION BY FileName, CAST(DateCreated AS date)
-            ORDER BY CASE Status
-                       WHEN 'Completed'  THEN 0
-                       WHEN 'Staged'     THEN 1
-                       WHEN 'Downloaded' THEN 2
-                       ELSE 3 END,
-                     FileLogId
-          ) AS rn
-  FROM ramp.FileLog
-  WHERE DateCreated > '{since}'
-    AND ([FileName] LIKE '%MARX%' OR [FileName] LIKE '%TRR%' OR [FileName] LIKE '%ABII%')
-    AND SourcePath LIKE '%\\Clients\\%'
-)
-SELECT FileName, SourcePath, FileSize, Received, Status
-FROM F
-WHERE rn = 1
-ORDER BY Received DESC;
-""".format(since=SINCE)
+RAMP_BASE = "http://ramp"
+# History start (matches the prior report's "since 2024-12-31").
+START_DATE = date(2025, 1, 1)
 
 OUTPUT_PATHS = [
     r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule\Daily Status Reports\COBCReport.html",
@@ -99,62 +65,17 @@ CONTRACT_SEG_RE = re.compile(r"^R?[A-Z]\d{3,5}$")
 # follows it: RH1607 -> H1607, RR6694 -> R6694, but R6694 stays R6694.
 LEAD_R_RE = re.compile(r"^R(?=[A-Z]\d)")
 
-# Data-date tokens, tried in priority order against filename segments.
-DATE_D_RE   = re.compile(r"^D(\d{2})(\d{2})(\d{2})$")          # D260508      -> 2026-05-08
+# Data-date tokens, tried in priority order against the filename.
+DATE_D_RE    = re.compile(r"^D(\d{2})(\d{2})(\d{2})$")         # D260508      -> 2026-05-08
 DATE_DTRR_RE = re.compile(r"DTRRD_(\d{2})(\d{2})(\d{2})")      # DTRRD_260721 -> 2026-07-21 (YYMMDD)
-DATE_TRR_RE = re.compile(r"TRR(\d{2})(\d{2})(\d{4})")          # TRR07232026  -> 2026-07-23 (MMDDYYYY)
-DATE_YMD_RE = re.compile(r"(20\d{2})(\d{2})(\d{2})")           # 20260722     -> 2026-07-22 (YYYYMMDD)
-DATE_MDY_RE = re.compile(r"^(\d{2})(\d{2})(20\d{2})$")         # 01282026     -> 2026-01-28 (MMDDYYYY)
-DATE_YM_RE  = re.compile(r"^(20\d{2})(\d{2})$")                # 202501       -> 2025-01-01 (YYYYMM)
+DATE_TRR_RE  = re.compile(r"TRR(\d{2})(\d{2})(\d{4})")         # TRR07232026  -> 2026-07-23 (MMDDYYYY)
+DATE_YMD_RE  = re.compile(r"(20\d{2})(\d{2})(\d{2})")          # 20260722     -> 2026-07-22 (YYYYMMDD)
+DATE_MDY_RE  = re.compile(r"^(\d{2})(\d{2})(20\d{2})$")        # 01282026     -> 2026-01-28 (MMDDYYYY)
+DATE_YM_RE   = re.compile(r"^(20\d{2})(\d{2})$")               # 202501       -> 2025-01-01 (YYYYMM)
 
 # Leaf-name wrappers that are pure encryption layers over an otherwise
 # identical file; strip them so encrypted+decrypted twins dedupe to one file.
 ENC_EXT_RE = re.compile(r"\.(pgp|gpg)$", re.IGNORECASE)
-
-# Client-folder staging suffixes to strip (case-insensitive), e.g.
-# BCBSNC_Decrypt -> BCBSNC, bcbsks_TempDecrypt -> bcbsks, MMOH_Temp -> MMOH.
-CLIENT_SUFFIX_RE = re.compile(r"(?:_?Temp)?(?:_?Decrypt)?$", re.IGNORECASE)
-
-# Fold folder tokens (lowercased key) to a clean display name.  Merges case
-# variants and known same-client folder aliases; keeps genuinely distinct
-# medical/Rx feed lines separate.
-CLIENT_ALIASES = {
-    "coventry": "Coventry",
-    "anthem": "Anthem",
-    "aetna": "Aetna",
-    "aetnarx": "AetnaRx",
-    "aetnaqnxt": "AetnaQNXT",
-    "aetnaqnxtrx": "AetnaQNXTRx",
-    "cigna": "Cigna",
-    "healthnet": "HealthNet",
-    "healthnow": "HealthNow",
-    "wellpointrx": "WellpointRx",
-    "wellcarerx": "WellcareRx",
-    "centene": "Centene",
-    "centenerx": "CenteneRx",
-    "centenefidelis": "CenteneFidelis",
-    "centenefidelisrx": "CenteneFidelisRx",
-    "hip_facets": "HIP_Facets",
-    "emblemrx": "EmblemRx",
-    "evernorth": "Evernorth",
-    "mmoh": "MMOH",
-    "mmohrx": "MMOHRx",
-    "bcbsnc": "BCBSNC",
-    "bcbsnc_rx": "BCBSNC_RX",
-    "bcbsks": "BCBSKS",
-    "excellus": "Excellus",
-    "excellusrx": "ExcellusRx",
-    "hap": "HAP",
-    "bcbsarkansas": "BCBSARRx",   # DMZ folder for the same client as BCBSARRx
-    "bcbsarrx": "BCBSARRx",
-    "mcs": "MCS",
-    "carefirst": "CareFirst",
-    "elixir": "ElixirSolutions",
-    "elixirsolutions": "ElixirSolutions",
-    "elevancemmmrx": "ElevanceMMMRx",
-    "premera": "Premera",
-    "premera_medadvrx": "Premera_MedAdvRx",
-}
 
 
 def leaf_name(path: str) -> str:
@@ -163,7 +84,7 @@ def leaf_name(path: str) -> str:
 
 def dedup_key(fname: str) -> str:
     """Filename with an encryption wrapper (.pgp/.gpg) stripped, upper-cased."""
-    return ENC_EXT_RE.sub("", (fname or "")).upper()
+    return ENC_EXT_RE.sub("", leaf_name(fname)).upper()
 
 
 def file_type(fname: str) -> str:
@@ -177,31 +98,9 @@ def file_type(fname: str) -> str:
     return "Other"
 
 
-def parse_client(source_path: str) -> str:
-    """Client from the SourcePath: the segment after \\Clients\\ (skipping a
-    users\\ level), staging suffix stripped, known aliases folded."""
-    parts = [p for p in re.split(r"[\\/]", source_path or "") if p]
-    lower = [p.lower() for p in parts]
-    if "clients" not in lower:
-        return "Unknown"
-    i = lower.index("clients")
-    seg = parts[i + 1] if i + 1 < len(parts) else ""
-    if seg.lower() == "users" and i + 2 < len(parts):
-        seg = parts[i + 2]
-    if not seg:
-        return "Unknown"
-    # \Clients\Machinify\Inbound\UHC_COBC -> UHC (the deepest token, minus _COBC)
-    if seg.lower() == "machinify":
-        tail = parts[-1]
-        tail = re.sub(r"_?COBC$", "", tail, flags=re.IGNORECASE)
-        return (tail or "Machinify").upper()
-    seg = CLIENT_SUFFIX_RE.sub("", seg) or seg
-    return CLIENT_ALIASES.get(seg.lower(), seg)
-
-
 def parse_contract(fname: str) -> str:
     """Contract token in the leaf file name, leading routing 'R' dropped."""
-    for seg in re.split(r"[._ ]", (fname or "").upper()):
+    for seg in re.split(r"[._ ]", leaf_name(fname).upper()):
         if CONTRACT_SEG_RE.match(seg):
             return LEAD_R_RE.sub("", seg)
     return ""
@@ -209,7 +108,7 @@ def parse_contract(fname: str) -> str:
 
 def parse_extracted(fname: str) -> str:
     """Best-effort data (extracted) date from the leaf name; '' if none."""
-    up = (fname or "").upper()
+    up = leaf_name(fname).upper()
     segs = re.split(r"[._ ]", up)
     for seg in segs:                       # D260508 style
         m = DATE_D_RE.match(seg)
@@ -235,41 +134,133 @@ def parse_extracted(fname: str) -> str:
     return ""
 
 
-def fetch_rows():
-    cmd = [
-        "sqlcmd", "-S", SERVER, "-d", DATABASE, "-E",
-        "-h", "-1", "-W", "-s", SEP, "-Q", SQL,
-    ]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
-    seen = {}          # dedup_key(name) + received-date -> row (keep first / Completed)
-    for line in out.splitlines():
-        line = line.rstrip("\r\n")
-        if not line.strip():
+# ---- RAMP API -----------------------------------------------------------
+
+def ramp_get_json(url: str, tries: int = 5):
+    """GET a RAMP endpoint via NTLM/negotiate, retrying transient non-JSON
+    bodies (RAMP intermittently returns an empty/HTML body)."""
+    for _ in range(tries):
+        out = subprocess.run(
+            ["curl", "-s", "--negotiate", "-u", ":", url],
+            capture_output=True, text=True,
+        ).stdout
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError:
+            time.sleep(5)
+    raise RuntimeError(f"RAMP returned no valid JSON after {tries} tries: {url}")
+
+
+def _unwrap(payload):
+    """RAMP wraps rows as {'Data': [[...rows...]]}; unwrap to the row list."""
+    data = payload.get("Data")
+    if isinstance(data, list) and data and isinstance(data[0], list):
+        return data[0]
+    return data or []
+
+
+def to_date_string(d: date) -> str:
+    """JS Date.toDateString() format, e.g. 'Tue Jul 21 2026'."""
+    return d.strftime("%a %b %d %Y")
+
+
+def month_chunks(start: date, end: date):
+    """Consecutive (start, end) day ranges, one per calendar month, with a
+    1-day overlap at boundaries (dedup removes the overlap)."""
+    cur = start
+    while cur <= end:
+        nxt = date(cur.year + 1, 1, 1) if cur.month == 12 else date(cur.year, cur.month + 1, 1)
+        yield cur, min(nxt, end)
+        cur = nxt
+
+
+def fetch_filelog(start: date, end: date):
+    url = (f"{RAMP_BASE}/api/Ramp/FileLog/List/"
+           f"{urllib.parse.quote(to_date_string(start))}/"
+           f"{urllib.parse.quote(to_date_string(end))}")
+    return _unwrap(ramp_get_json(url))
+
+
+def fetch_unconfigured():
+    """Items RAMP received with no matching config (IsConfigured == false)."""
+    items = _unwrap(ramp_get_json(f"{RAMP_BASE}/api/Ramp/ConfiguredFiles"))
+    return [i for i in items if not i.get("IsConfigured")]
+
+
+# ---- Data assembly ------------------------------------------------------
+
+def _mkrow(fname, client, feed, log_ts, size, unconf):
+    return {
+        "client": (client or "Unknown").strip() or "Unknown",
+        "ftype": file_type(fname),
+        "contract": parse_contract(fname),
+        "filename": leaf_name(fname),
+        "extracted": parse_extracted(fname),
+        "logged": (log_ts or "")[:19].replace("T", " "),
+        "feed": (feed or "").strip(),
+        "size": int(size) if isinstance(size, (int, float)) else 0,
+        "unconf": 1 if unconf else 0,
+    }
+
+
+def build_rows():
+    today = datetime.now().date()
+
+    # Unconfigured files first, so we can flag FileLogger rows as we ingest.
+    unconfigured = fetch_unconfigured()
+    unconf_ids = {i.get("FileLogId") for i in unconfigured if i.get("FileLogId")}
+    print(f"[info] {len(unconfigured)} unconfigured file(s) in RAMP right now")
+
+    by_key = {}   # dedup_key + log-date -> row (with a set of FileLogIds seen)
+
+    def ingest(fname, client, feed, log_ts, size, fid, unconf):
+        if file_type(fname) == "Other":
+            return
+        day = (log_ts or "")[:10]
+        key = dedup_key(fname) + "|" + day
+        row = by_key.get(key)
+        if row is None:
+            row = _mkrow(fname, client, feed, log_ts, size, unconf)
+            row["_ids"] = set()
+            by_key[key] = row
+        else:
+            # Keep the earliest log timestamp; OR-in the unconfigured flag.
+            lg = (log_ts or "")[:19].replace("T", " ")
+            if lg and (not row["logged"] or lg < row["logged"]):
+                row["logged"] = lg
+            if unconf:
+                row["unconf"] = 1
+            if not row["size"] and isinstance(size, (int, float)):
+                row["size"] = int(size)
+        if fid:
+            row["_ids"].add(fid)
+
+    # FileLogger: monthly chunks across the full history.
+    total_raw = 0
+    for cs, ce in month_chunks(START_DATE, today):
+        rows = fetch_filelog(cs, ce)
+        total_raw += len(rows)
+        for r in rows:
+            fid = r.get("FileLogId")
+            ingest(r.get("FileName"), r.get("ClientName"), r.get("FeedName"),
+                   r.get("LogDate"), r.get("FileSize"), fid, fid in unconf_ids)
+        print(f"[info]   {cs} -> {ce}: {len(rows):>7} rows  (running files: {len(by_key)})")
+
+    # Inject any unconfigured COBC/TRR/ABII (may be outside the pulled window).
+    for i in unconfigured:
+        fl = i.get("FileLog") or {}
+        fname = i.get("File") or fl.get("FileName")
+        if file_type(fname) == "Other":
             continue
-        parts = line.split(SEP)
-        if len(parts) != 5:
-            continue
-        fname, spath, size, received, status = [p.strip() for p in parts]
-        if not fname or fname.lower() == "filename":
-            continue
-        ftype = file_type(fname)
-        if ftype == "Other":
-            continue
-        rec = received if received and received != "NULL" else ""
-        key = dedup_key(fname) + "|" + rec[:10]
-        if key in seen:
-            continue                       # keep the first (Completed-first from SQL order)
-        seen[key] = {
-            "client": parse_client(spath),
-            "ftype": ftype,
-            "contract": parse_contract(fname),
-            "filename": leaf_name(fname),
-            "extracted": parse_extracted(fname),
-            "received": rec,
-            "status": status,
-            "size": int(size) if size.isdigit() else 0,
-        }
-    return list(seen.values())
+        log_ts = fl.get("LogDate") or fl.get("DateCreated") or i.get("CreateDate")
+        ingest(fname, fl.get("ClientName"), fl.get("FeedName"),
+               log_ts, fl.get("FileSize"), i.get("FileLogId"), True)
+
+    rows = list(by_key.values())
+    for r in rows:
+        r.pop("_ids", None)
+    print(f"[info] {total_raw} raw FileLogger rows -> {len(rows)} files (deduped)")
+    return rows
 
 
 HTML_TEMPLATE = """<!doctype html>
@@ -333,6 +324,7 @@ HTML_TEMPLATE = """<!doctype html>
   }
   .kpi .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .kpi .value { font-size: 22px; font-weight: 600; margin-top: 2px; color: var(--accent-dark); }
+  .kpi.warn .value { color: #b23b2e; }
   .filters {
     background: var(--card);
     border: 1px solid var(--border);
@@ -355,6 +347,9 @@ HTML_TEMPLATE = """<!doctype html>
     min-width: 120px;
   }
   .field input[type=date] { min-width: 140px; }
+  .field.check { flex-direction: row; align-items: center; gap: 6px; }
+  .field.check input { min-width: 0; }
+  .field.check label { text-transform: none; font-weight: 600; color: var(--text); letter-spacing: 0; }
   button {
     background: var(--accent);
     color: #fff;
@@ -397,6 +392,8 @@ HTML_TEMPLATE = """<!doctype html>
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.zero { color: #b6bec8; }
   tr:hover td { background: #f8fafc; }
+  tr.is-unconf td { background: #fff6f4; }
+  tr.is-unconf:hover td { background: #ffeee9; }
   .pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; justify-content: flex-end; font-size: 13px; color: var(--muted); }
   .empty { padding: 24px; text-align: center; color: var(--muted); }
 
@@ -406,6 +403,10 @@ HTML_TEMPLATE = """<!doctype html>
   .ft-COBC { background: #e3f0fb; color: #1f5b8a; }
   .ft-TRR  { background: #eae6fb; color: #5b3a9e; }
   .ft-ABII { background: #e4f6ea; color: #1c7a44; }
+  /* Unconfigured badge */
+  .uc { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 10px;
+        font-size: 10px; font-weight: 800; letter-spacing: .5px;
+        background: #fbe4df; color: #b23b2e; border: 1px solid #f0b6ab; vertical-align: middle; }
 
   /* ---- Monthly matrix ---- */
   .matrix-wrap {
@@ -446,6 +447,7 @@ HTML_TEMPLATE = """<!doctype html>
   table.matrix td.day { text-align: center; padding: 6px; min-width: 64px; }
   table.matrix td.day.hit { cursor: pointer; }
   .mk {
+    position: relative;
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 22px; height: 22px; border-radius: 6px; padding: 0 8px;
     background: #e3f4ea; color: #1c7a44; font-weight: 700; font-size: 12px;
@@ -454,6 +456,12 @@ HTML_TEMPLATE = """<!doctype html>
     font-variant-numeric: tabular-nums;
   }
   table.matrix td.day.hit:hover .mk { background: #cdecd8; transform: scale(1.12); }
+  /* red corner dot when the cell contains any unconfigured file */
+  .mk.has-unconf::after {
+    content: ""; position: absolute; top: -3px; right: -3px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #d64426; box-shadow: 0 0 0 1.5px #fff;
+  }
   .mx-empty { padding: 28px; text-align: center; color: var(--muted); }
 
   /* Client group (expandable) row */
@@ -484,12 +492,13 @@ HTML_TEMPLATE = """<!doctype html>
   #tooltip .tt-file + .tt-file { margin-top: 6px; border-top: 1px solid #3a4757; padding-top: 6px; }
   #tooltip .tt-name { font-family: Consolas, "Courier New", monospace; word-break: break-all; }
   #tooltip .tt-label { color: #9fb4cc; }
+  #tooltip .tt-uc { color: #ff9b8a; font-weight: 700; }
 </style>
 </head>
 <body>
 <header>
   <h1>COBC / TRR / ABII File Report</h1>
-  <div class="meta">Generated __GENERATED__ &middot; TRGUtil10 / Ramp.ramp.FileLog &middot; inbound client files since __SINCE__ &middot; __ROW_COUNT__ files (deduped)</div>
+  <div class="meta">Generated __GENERATED__ &middot; source: RAMP FileLogger + Unconfigured Files (http://ramp) &middot; since __SINCE__ &middot; __ROW_COUNT__ files &middot; <span style="color:#ff9b8a">__UNCONF_COUNT__ unconfigured</span></div>
 </header>
 <main>
   <div class="tabs">
@@ -517,7 +526,7 @@ HTML_TEMPLATE = """<!doctype html>
       <button class="secondary" id="m-collapse">Collapse all</button>
       <div class="field" style="justify-content:flex-end">
         <label>&nbsp;</label>
-        <span style="font-size:12px;color:var(--muted)">Cell = files received that month &middot; click a client to expand its contracts &middot; hover a <b>count</b> for file details.</span>
+        <span style="font-size:12px;color:var(--muted)">Cell = files logged that month &middot; a <b style="color:#d64426">&bull;</b> dot marks a month containing an unconfigured file &middot; click a client to expand &middot; hover a <b>count</b> for details.</span>
       </div>
     </section>
     <div class="matrix-wrap">
@@ -533,8 +542,9 @@ HTML_TEMPLATE = """<!doctype html>
     <div class="kpi"><div class="label">Files</div><div class="value" id="kpi-files">&mdash;</div></div>
     <div class="kpi"><div class="label">Clients</div><div class="value" id="kpi-clients">&mdash;</div></div>
     <div class="kpi"><div class="label">Contracts</div><div class="value" id="kpi-contracts">&mdash;</div></div>
+    <div class="kpi warn"><div class="label">Unconfigured</div><div class="value" id="kpi-unconf">&mdash;</div></div>
     <div class="kpi"><div class="label">Total Size</div><div class="value" id="kpi-size">&mdash;</div></div>
-    <div class="kpi"><div class="label">Latest Received</div><div class="value" id="kpi-latest">&mdash;</div></div>
+    <div class="kpi"><div class="label">Latest Logged</div><div class="value" id="kpi-latest">&mdash;</div></div>
   </section>
 
   <section class="filters">
@@ -555,12 +565,16 @@ HTML_TEMPLATE = """<!doctype html>
       <input type="text" id="f-filename" placeholder="contains&hellip;">
     </div>
     <div class="field">
-      <label for="f-ldfrom">Received From</label>
+      <label for="f-ldfrom">Logged From</label>
       <input type="date" id="f-ldfrom">
     </div>
     <div class="field">
-      <label for="f-ldto">Received To</label>
+      <label for="f-ldto">Logged To</label>
       <input type="date" id="f-ldto">
+    </div>
+    <div class="field check">
+      <input type="checkbox" id="f-unconf">
+      <label for="f-unconf">Unconfigured only</label>
     </div>
     <button class="secondary" id="btn-reset">Reset</button>
   </section>
@@ -573,8 +587,8 @@ HTML_TEMPLATE = """<!doctype html>
         <th data-key="contract">Contract<span class="arrow">&#8597;</span></th>
         <th data-key="filename">File Name<span class="arrow">&#8597;</span></th>
         <th data-key="extracted">Extracted<span class="arrow">&#8597;</span></th>
-        <th data-key="received">Received<span class="arrow">&#8597;</span></th>
-        <th data-key="status">Status<span class="arrow">&#8597;</span></th>
+        <th data-key="logged">Log Date<span class="arrow">&#8597;</span></th>
+        <th data-key="feed">Feed<span class="arrow">&#8597;</span></th>
         <th data-key="size" class="num">File Size<span class="arrow">&#8597;</span></th>
       </tr>
     </thead>
@@ -596,8 +610,8 @@ HTML_TEMPLATE = """<!doctype html>
   const PAGE_SIZE = 100;
   let state = {
     ftype: '', client: '', contract: '', filename: '',
-    ldfrom: '', ldto: '',
-    sortKey: 'received', sortDir: 'desc', page: 0,
+    ldfrom: '', ldto: '', unconf: false,
+    sortKey: 'logged', sortDir: 'desc', page: 0,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -626,8 +640,9 @@ HTML_TEMPLATE = """<!doctype html>
       if (state.ftype && r.ftype !== state.ftype) return false;
       if (state.client && r.client !== state.client) return false;
       if (state.contract && r.contract !== state.contract) return false;
+      if (state.unconf && !r.unconf) return false;
       if (fnQ && r.filename.toLowerCase().indexOf(fnQ) === -1) return false;
-      const ld = r.received ? r.received.slice(0, 10) : '';
+      const ld = r.logged ? r.logged.slice(0, 10) : '';
       if (state.ldfrom && (!ld || ld < state.ldfrom)) return false;
       if (state.ldto && (!ld || ld > state.ldto)) return false;
       return true;
@@ -654,17 +669,19 @@ HTML_TEMPLATE = """<!doctype html>
     const sorted = sortRows(filtered);
 
     // KPIs
-    let size = 0, latest = '';
+    let size = 0, latest = '', unconf = 0;
     const cset = new Set(), ctset = new Set();
     for (const r of filtered) {
       size += r.size || 0;
       if (r.client) cset.add(r.client);
       if (r.contract) ctset.add(r.contract);
-      if (r.received && r.received > latest) latest = r.received;
+      if (r.unconf) unconf++;
+      if (r.logged && r.logged > latest) latest = r.logged;
     }
     $('kpi-files').textContent = filtered.length.toLocaleString();
     $('kpi-clients').textContent = cset.size.toLocaleString();
     $('kpi-contracts').textContent = ctset.size.toLocaleString();
+    $('kpi-unconf').textContent = unconf.toLocaleString();
     $('kpi-size').textContent = fmtSize(size);
     $('kpi-latest').textContent = latest ? latest.slice(0, 10) : '—';
 
@@ -685,20 +702,21 @@ HTML_TEMPLATE = """<!doctype html>
       const esc = (s) => (s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
       for (const r of slice) {
         const tr = document.createElement('tr');
+        if (r.unconf) tr.className = 'is-unconf';
         tr.innerHTML =
           '<td>' + esc(r.client) + '</td>' +
           '<td>' + ftPill(r.ftype) + '</td>' +
           '<td>' + esc(r.contract) + '</td>' +
-          '<td>' + esc(r.filename) + '</td>' +
+          '<td>' + esc(r.filename) + (r.unconf ? '<span class="uc" title="File is unconfigured in RAMP">UNCONFIGURED</span>' : '') + '</td>' +
           '<td>' + esc(r.extracted) + '</td>' +
-          '<td>' + esc(r.received) + '</td>' +
-          '<td>' + esc(r.status) + '</td>' +
+          '<td>' + esc(r.logged) + '</td>' +
+          '<td>' + esc(r.feed) + '</td>' +
           '<td class="num' + (r.size ? '' : ' zero') + '">' + fmtSize(r.size) + '</td>';
         body.appendChild(tr);
       }
     }
 
-    for (const th of document.querySelectorAll('th[data-key]')) {
+    for (const th of document.querySelectorAll('#grid th[data-key]')) {
       th.classList.remove('sort-asc', 'sort-desc');
       const arrow = th.querySelector('.arrow');
       if (th.dataset.key === state.sortKey) {
@@ -724,9 +742,15 @@ HTML_TEMPLATE = """<!doctype html>
         render();
       });
     });
+    $('f-unconf').addEventListener('change', () => {
+      state.unconf = $('f-unconf').checked;
+      state.page = 0;
+      render();
+    });
     $('btn-reset').addEventListener('click', () => {
       ids.forEach(id => $(id).value = '');
-      Object.assign(state, { ftype: '', client: '', contract: '', filename: '', ldfrom: '', ldto: '', page: 0 });
+      $('f-unconf').checked = false;
+      Object.assign(state, { ftype: '', client: '', contract: '', filename: '', ldfrom: '', ldto: '', unconf: false, page: 0 });
       render();
     });
     document.querySelectorAll('#grid th[data-key]').forEach(th => {
@@ -736,7 +760,7 @@ HTML_TEMPLATE = """<!doctype html>
           state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
         } else {
           state.sortKey = k;
-          state.sortDir = (k === 'size' || k === 'received' || k === 'extracted') ? 'desc' : 'asc';
+          state.sortDir = (k === 'size' || k === 'logged' || k === 'extracted') ? 'desc' : 'asc';
         }
         render();
       });
@@ -753,8 +777,8 @@ HTML_TEMPLATE = """<!doctype html>
 
   const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-  // Distinct received-years (YYYY), newest first.
-  const years = [...new Set(ROWS.map(r => r.received).filter(Boolean).map(s => s.slice(0, 4)))].sort().reverse();
+  // Distinct log-years (YYYY), newest first.
+  const years = [...new Set(ROWS.map(r => r.logged).filter(Boolean).map(s => s.slice(0, 4)))].sort().reverse();
   for (const yy of years) {
     const opt = document.createElement('option');
     opt.value = yy; opt.textContent = yy;
@@ -792,10 +816,10 @@ HTML_TEMPLATE = """<!doctype html>
     if (!files) return;
     tip.innerHTML = files.map(f =>
       '<div class="tt-file">' +
-        '<div class="tt-name">' + escT(f.filename) + '</div>' +
-        '<div><span class="tt-label">Type:</span> ' + escT(f.ftype) + '</div>' +
+        '<div class="tt-name">' + escT(f.filename) + (f.unconf ? ' <span class="tt-uc">&#9888; UNCONFIGURED</span>' : '') + '</div>' +
+        '<div><span class="tt-label">Type:</span> ' + escT(f.ftype) + ' &middot; <span class="tt-label">Feed:</span> ' + (escT(f.feed) || '&mdash;') + '</div>' +
         '<div><span class="tt-label">Date Extracted:</span> ' + (escT(f.extracted) || '&mdash;') + '</div>' +
-        '<div><span class="tt-label">Date Received:</span> ' + escT((f.received || '').slice(0, 10)) + '</div>' +
+        '<div><span class="tt-label">Log Date:</span> ' + escT((f.logged || '').slice(0, 10)) + '</div>' +
         '<div><span class="tt-label">File Size:</span> ' + fmtSize(f.size) + '</div>' +
       '</div>'
     ).join('');
@@ -813,7 +837,7 @@ HTML_TEMPLATE = """<!doctype html>
   const hideTip = () => { tip.style.display = 'none'; };
 
   // Universe of client -> [contracts] for the current type filter, so every
-  // client/contract is listed each month whether or not it received a file.
+  // client/contract is listed each month whether or not it logged a file.
   function buildPairs() {
     const pairs = {};
     const tmp = {};
@@ -833,7 +857,8 @@ HTML_TEMPLATE = """<!doctype html>
       if (files && files.length) {
         const id = 'x' + (cid++);
         tipMap[id] = files;
-        cells += '<td class="day hit" data-tip="' + id + '"><span class="mk">' + files.length.toLocaleString('en-US') + '</span></td>';
+        const hasU = files.some(f => f.unconf);
+        cells += '<td class="day hit" data-tip="' + id + '"><span class="mk' + (hasU ? ' has-unconf' : '') + '">' + files.length.toLocaleString('en-US') + '</span></td>';
       } else {
         cells += '<td class="day"></td>';
       }
@@ -859,11 +884,11 @@ HTML_TEMPLATE = """<!doctype html>
     // clients[name] = { contracts: {ct: {month:[files]}}, agg: {month:[files]} }
     const clients = {};
     for (const r of ROWS) {
-      if (!r.received || r.received.slice(0, 4) !== yr) continue;
+      if (!r.logged || r.logged.slice(0, 4) !== yr) continue;
       if (monthState.ftype && r.ftype !== monthState.ftype) continue;
       const c = clients[r.client] || (clients[r.client] = { contracts: {}, agg: {} });
       const ct = c.contracts[r.contract] || (c.contracts[r.contract] = {});
-      const mo = Number(r.received.slice(5, 7));
+      const mo = Number(r.logged.slice(5, 7));
       (ct[mo] = ct[mo] || []).push(r);
       (c.agg[mo] = c.agg[mo] || []).push(r);
     }
@@ -970,20 +995,24 @@ HTML_TEMPLATE = """<!doctype html>
 
 
 def generate_html(rows) -> str:
+    unconf_n = sum(1 for r in rows if r.get("unconf"))
     return (HTML_TEMPLATE
             .replace("__GENERATED__", datetime.now().strftime("%Y-%m-%d %H:%M"))
-            .replace("__SINCE__", SINCE[:10])
+            .replace("__SINCE__", START_DATE.strftime("%Y-%m-%d"))
             .replace("__ROW_COUNT__", f"{len(rows):,}")
+            .replace("__UNCONF_COUNT__", f"{unconf_n:,}")
             .replace("__DATA_JSON__", json.dumps(rows, separators=(",", ":"))))
 
 
 def main():
-    print(f"[info] Fetching COBC/TRR/ABII files from {SERVER}/{DATABASE} (DateCreated > {SINCE})")
-    rows = fetch_rows()
+    print(f"[info] Building COBC/TRR/ABII report from RAMP ({RAMP_BASE}) since {START_DATE}")
+    rows = build_rows()
     by_type = {}
     for r in rows:
         by_type[r["ftype"]] = by_type.get(r["ftype"], 0) + 1
-    print(f"[info] {len(rows)} files (deduped) — " + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items())))
+    unconf_n = sum(1 for r in rows if r.get("unconf"))
+    print(f"[info] {len(rows)} files — " + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
+          + f", unconfigured={unconf_n}")
     html = generate_html(rows)
 
     primary = OUTPUT_PATHS[0]
