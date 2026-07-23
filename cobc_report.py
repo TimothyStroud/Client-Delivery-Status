@@ -87,13 +87,25 @@ def dedup_key(fname: str) -> str:
     return ENC_EXT_RE.sub("", leaf_name(fname)).upper()
 
 
-def file_type(fname: str) -> str:
+def row_type(fname: str, job: str = None, feed: str = None) -> str:
+    """Classify a file the way RAMP does. Filename tokens are strongest, but
+    many files carry the type only in the JobName/FeedName (RAMP's own
+    classification), e.g. ABII Transplant reports named
+    '<contract>_Transplant_Report_YYYYMM.xlsx' under 'Wellpoint RX ABII 0100
+    Stage', or Centene Fidelis COBC named 'COBD_YYYYMMDD_..._H5599.txt'."""
     u = (fname or "").upper()
     if "MARX" in u:
         return "COBC"
     if "ABII" in u:
         return "ABII"
     if "TRR" in u:
+        return "TRR"
+    jf = ((job or "") + " " + (feed or "")).upper()
+    if "MARXCOB" in jf or "COBC" in jf:
+        return "COBC"
+    if "ABII" in jf:
+        return "ABII"
+    if "DTRR" in jf or "TRR" in jf:
         return "TRR"
     return "Other"
 
@@ -189,10 +201,10 @@ def fetch_unconfigured():
 
 # ---- Data assembly ------------------------------------------------------
 
-def _mkrow(fname, client, feed, log_ts, size, unconf):
+def _mkrow(fname, client, feed, log_ts, size, unconf, ftype):
     return {
         "client": (client or "Unknown").strip() or "Unknown",
-        "ftype": file_type(fname),
+        "ftype": ftype,
         "contract": parse_contract(fname),
         "filename": leaf_name(fname),
         "extracted": parse_extracted(fname),
@@ -213,14 +225,15 @@ def build_rows():
 
     by_key = {}   # dedup_key + log-date -> row (with a set of FileLogIds seen)
 
-    def ingest(fname, client, feed, log_ts, size, fid, unconf):
-        if file_type(fname) == "Other":
+    def ingest(fname, client, feed, log_ts, size, fid, unconf, job=None):
+        ftype = row_type(fname, job, feed)
+        if ftype == "Other":
             return
         day = (log_ts or "")[:10]
         key = dedup_key(fname) + "|" + day
         row = by_key.get(key)
         if row is None:
-            row = _mkrow(fname, client, feed, log_ts, size, unconf)
+            row = _mkrow(fname, client, feed, log_ts, size, unconf, ftype)
             row["_ids"] = set()
             by_key[key] = row
         else:
@@ -243,18 +256,18 @@ def build_rows():
         for r in rows:
             fid = r.get("FileLogId")
             ingest(r.get("FileName"), r.get("ClientName"), r.get("FeedName"),
-                   r.get("LogDate"), r.get("FileSize"), fid, fid in unconf_ids)
+                   r.get("LogDate"), r.get("FileSize"), fid, fid in unconf_ids,
+                   r.get("JobName"))
         print(f"[info]   {cs} -> {ce}: {len(rows):>7} rows  (running files: {len(by_key)})")
 
     # Inject any unconfigured COBC/TRR/ABII (may be outside the pulled window).
     for i in unconfigured:
         fl = i.get("FileLog") or {}
         fname = i.get("File") or fl.get("FileName")
-        if file_type(fname) == "Other":
-            continue
         log_ts = fl.get("LogDate") or fl.get("DateCreated") or i.get("CreateDate")
         ingest(fname, fl.get("ClientName"), fl.get("FeedName"),
-               log_ts, fl.get("FileSize"), i.get("FileLogId"), True)
+               log_ts, fl.get("FileSize"), i.get("FileLogId"), True,
+               fl.get("JobName"))
 
     rows = list(by_key.values())
     for r in rows:
