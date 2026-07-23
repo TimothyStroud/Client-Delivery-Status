@@ -111,12 +111,23 @@
   tr:hover td { background: #f8fafc; }
   .pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; justify-content: flex-end; font-size: 13px; color: var(--muted); }
   .empty { padding: 24px; text-align: center; color: var(--muted); }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 2px solid var(--border); }
+  .tab {
+    background: transparent; color: var(--muted); border: 0;
+    border-bottom: 2px solid transparent; margin-bottom: -2px;
+    padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 600;
+    border-radius: 0;
+  }
+  .tab:hover { color: var(--accent-dark); }
+  .tab.active { color: var(--accent-dark); border-bottom-color: var(--accent); }
+  td.tip { cursor: help; text-decoration: underline dotted; text-underline-offset: 2px; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
 <header>
   <h1>CAQH Traffic Report</h1>
-  <div class="meta">Generated 2026-07-23 07:30 &middot; sqlutilmine3 / CAQH3 &middot; loads since 2026-01-01 &middot; 109 rows total</div>
+  <div class="meta">Generated 2026-07-23 09:10 &middot; sqlutilmine3 / CAQH3 &middot; loads since 2026-01-01 &middot; 109 rows total</div>
 </header>
 <main>
   <section class="kpis">
@@ -163,24 +174,50 @@
     <button class="secondary" id="btn-reset">Reset</button>
   </section>
 
-  <table id="grid">
-    <thead>
-      <tr>
-        <th data-key="reid">Reporting Entity<span class="arrow">&#8597;</span></th>
-        <th data-key="prod">Prodctrlnum<span class="arrow">&#8597;</span></th>
-        <th data-key="client">Client<span class="arrow">&#8597;</span></th>
-        <th data-key="filename">File Name<span class="arrow">&#8597;</span></th>
-        <th data-key="extracted">Date Extracted<span class="arrow">&#8597;</span></th>
-        <th data-key="loaded">Date Loaded<span class="arrow">&#8597;</span></th>
-        <th data-key="count" class="num">File Count<span class="arrow">&#8597;</span></th>
-      </tr>
-    </thead>
-    <tbody id="grid-body"></tbody>
-  </table>
-  <div class="pager">
-    <span id="pager-info"></span>
-    <button class="secondary" id="pg-prev">&laquo; Prev</button>
-    <button class="secondary" id="pg-next">Next &raquo;</button>
+  <div class="tabs">
+    <button class="tab active" data-tab="detail">File Detail</button>
+    <button class="tab" data-tab="summary">Traffic Report</button>
+  </div>
+
+  <div id="tab-detail">
+    <table id="grid">
+      <thead>
+        <tr>
+          <th data-key="reid">Reporting Entity<span class="arrow">&#8597;</span></th>
+          <th data-key="prod">Prodctrlnum<span class="arrow">&#8597;</span></th>
+          <th data-key="client">Client<span class="arrow">&#8597;</span></th>
+          <th data-key="filename">File Name<span class="arrow">&#8597;</span></th>
+          <th data-key="extracted">Date Extracted<span class="arrow">&#8597;</span></th>
+          <th data-key="loaded">Date Loaded<span class="arrow">&#8597;</span></th>
+          <th data-key="count" class="num">File Count<span class="arrow">&#8597;</span></th>
+        </tr>
+      </thead>
+      <tbody id="grid-body"></tbody>
+    </table>
+    <div class="pager">
+      <span id="pager-info"></span>
+      <button class="secondary" id="pg-prev">&laquo; Prev</button>
+      <button class="secondary" id="pg-next">Next &raquo;</button>
+    </div>
+  </div>
+
+  <div id="tab-summary" class="hidden">
+    <table id="grid2">
+      <thead>
+        <tr>
+          <th data-key="client">Client<span class="arrow">&#8597;</span></th>
+          <th data-key="reid">Reporting Entity<span class="arrow">&#8597;</span></th>
+          <th data-key="extracted">Date Extracted<span class="arrow">&#8597;</span></th>
+          <th data-key="loaded">Date Loaded<span class="arrow">&#8597;</span></th>
+        </tr>
+      </thead>
+      <tbody id="grid2-body"></tbody>
+    </table>
+    <div class="pager">
+      <span id="pager2-info"></span>
+      <button class="secondary" id="pg2-prev">&laquo; Prev</button>
+      <button class="secondary" id="pg2-next">Next &raquo;</button>
+    </div>
   </div>
 </main>
 
@@ -190,13 +227,17 @@
   const ROWS = JSON.parse(document.getElementById('data').textContent);
   const PAGE_SIZE = 100;
   let state = {
+    tab: 'detail',
     client: '', reid: '', prod: '', filename: '',
     exfrom: '', exto: '', ldfrom: '', ldto: '',
-    sortKey: 'loaded', sortDir: 'desc', page: 0,
+    sortKey: 'loaded', sortDir: 'desc', page: 0,       // File Detail tab
+    sSortKey: 'loaded', sSortDir: 'desc', sPage: 0,    // Traffic Report tab
   };
 
   const $ = (id) => document.getElementById(id);
   const fmtInt = (v) => (v == null ? '' : v.toLocaleString('en-US'));
+  const esc = (s) => (s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+  const escAttr = (s) => esc(s).replace(/"/g, '&quot;');
 
   // Populate Client + Reporting Entity dropdowns from data.
   const clients = [...new Set(ROWS.map(r => r.client))].sort();
@@ -230,9 +271,8 @@
     });
   }
 
-  function sortRows(rows) {
-    const k = state.sortKey;
-    const dir = state.sortDir === 'asc' ? 1 : -1;
+  function sortBy(rows, k, dir) {
+    const d = dir === 'asc' ? 1 : -1;
     return rows.slice().sort((a, b) => {
       let av = a[k], bv = b[k];
       if (k === 'count' || k === 'prod' || k === 'reid') {
@@ -240,17 +280,53 @@
       }
       if (av == null) av = '';
       if (bv == null) bv = '';
-      if (av < bv) return -1 * dir;
-      if (av > bv) return  1 * dir;
+      if (av < bv) return -1 * d;
+      if (av > bv) return  1 * d;
       return 0;
     });
   }
 
-  function render() {
-    const filtered = applyFilters();
-    const sorted = sortRows(filtered);
+  // Traffic Report view: one row per Client + Reporting Entity, showing the
+  // most-recent Date Extracted and Date Loaded. The Date Loaded cell carries a
+  // hover tooltip listing each file loaded on that latest load date + its count.
+  function buildSummary(rows) {
+    const groups = new Map();
+    for (const r of rows) {
+      const key = r.client + '|' + r.reid;
+      let g = groups.get(key);
+      if (!g) { g = { client: r.client, reid: r.reid, rows: [] }; groups.set(key, g); }
+      g.rows.push(r);
+    }
+    const out = [];
+    for (const g of groups.values()) {
+      let maxExtracted = '', maxLoaded = '';
+      for (const r of g.rows) {
+        if (r.extracted && r.extracted > maxExtracted) maxExtracted = r.extracted;
+        if (r.loaded && r.loaded > maxLoaded) maxLoaded = r.loaded;
+      }
+      const latestLoadDate = maxLoaded ? maxLoaded.slice(0, 10) : '';
+      const files = g.rows
+        .filter(r => latestLoadDate && (r.loaded ? r.loaded.slice(0, 10) : '') === latestLoadDate)
+        .sort((a, b) => (b.loaded || '').localeCompare(a.loaded || ''));
+      let tip = '';
+      if (files.length) {
+        const hdr = files.length + ' file' + (files.length === 1 ? '' : 's') + ' loaded on ' + latestLoadDate + ':';
+        tip = hdr + '
+' + files.map(f => f.filename + ' — ' + (f.count || 0).toLocaleString()).join('
+');
+      }
+      out.push({
+        client: g.client,
+        reid: g.reid,
+        extracted: maxExtracted,
+        loaded: latestLoadDate,
+        tip: tip,
+      });
+    }
+    return out;
+  }
 
-    // KPIs
+  function updateKPIs(filtered) {
     let totalCount = 0, latest = '';
     const cset = new Set(), rset = new Set();
     for (const r of filtered) {
@@ -264,15 +340,16 @@
     $('kpi-reid').textContent = rset.size.toLocaleString();
     $('kpi-count').textContent = totalCount.toLocaleString();
     $('kpi-latest').textContent = latest ? latest.slice(0, 10) : '—';
+  }
 
-    // Pagination
+  function renderDetail(filtered) {
+    const sorted = sortBy(filtered, state.sortKey, state.sortDir);
     const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
     if (state.page >= pageCount) state.page = pageCount - 1;
     if (state.page < 0) state.page = 0;
     const start = state.page * PAGE_SIZE;
     const slice = sorted.slice(start, start + PAGE_SIZE);
 
-    // Body
     const body = $('grid-body');
     body.innerHTML = '';
     if (slice.length === 0) {
@@ -280,7 +357,6 @@
       tr.innerHTML = '<td colspan="7" class="empty">No rows match the current filters.</td>';
       body.appendChild(tr);
     } else {
-      const esc = (s) => (s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
       for (const r of slice) {
         const tr = document.createElement('tr');
         tr.innerHTML =
@@ -294,23 +370,76 @@
         body.appendChild(tr);
       }
     }
-
-    // Sort indicators
-    for (const th of document.querySelectorAll('th[data-key]')) {
-      th.classList.remove('sort-asc', 'sort-desc');
-      const arrow = th.querySelector('.arrow');
-      if (th.dataset.key === state.sortKey) {
-        th.classList.add('sort-' + state.sortDir);
-        arrow.textContent = state.sortDir === 'asc' ? '▲' : '▼';
-      } else {
-        arrow.textContent = '↕';
-      }
-    }
-
-    // Pager
     $('pager-info').textContent = sorted.length === 0
       ? '0 rows'
       : (start + 1).toLocaleString() + '–' + (start + slice.length).toLocaleString() + ' of ' + sorted.length.toLocaleString();
+  }
+
+  function renderSummary(filtered) {
+    const summary = buildSummary(filtered);
+    const sorted = sortBy(summary, state.sSortKey, state.sSortDir);
+    const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+    if (state.sPage >= pageCount) state.sPage = pageCount - 1;
+    if (state.sPage < 0) state.sPage = 0;
+    const start = state.sPage * PAGE_SIZE;
+    const slice = sorted.slice(start, start + PAGE_SIZE);
+
+    const body = $('grid2-body');
+    body.innerHTML = '';
+    if (slice.length === 0) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="4" class="empty">No rows match the current filters.</td>';
+      body.appendChild(tr);
+    } else {
+      for (const r of slice) {
+        const loadedCell = r.tip
+          ? '<td class="tip" title="' + escAttr(r.tip) + '">' + esc(r.loaded) + '</td>'
+          : '<td>' + esc(r.loaded) + '</td>';
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          '<td>' + esc(r.client) + '</td>' +
+          '<td>' + esc(r.reid) + '</td>' +
+          '<td>' + esc(r.extracted) + '</td>' +
+          loadedCell;
+        body.appendChild(tr);
+      }
+    }
+    $('pager2-info').textContent = sorted.length === 0
+      ? '0 rows'
+      : (start + 1).toLocaleString() + '–' + (start + slice.length).toLocaleString() + ' of ' + sorted.length.toLocaleString();
+  }
+
+  function updateSortIndicators() {
+    const mark = (sel, key, dir) => {
+      for (const th of document.querySelectorAll(sel + ' th[data-key]')) {
+        th.classList.remove('sort-asc', 'sort-desc');
+        const arrow = th.querySelector('.arrow');
+        if (th.dataset.key === key) {
+          th.classList.add('sort-' + dir);
+          arrow.textContent = dir === 'asc' ? '▲' : '▼';
+        } else {
+          arrow.textContent = '↕';
+        }
+      }
+    };
+    mark('#grid', state.sortKey, state.sortDir);
+    mark('#grid2', state.sSortKey, state.sSortDir);
+  }
+
+  function render() {
+    const filtered = applyFilters();
+    updateKPIs(filtered);
+    if (state.tab === 'detail') renderDetail(filtered);
+    else renderSummary(filtered);
+    updateSortIndicators();
+  }
+
+  function switchTab(tab) {
+    state.tab = tab;
+    $('tab-detail').classList.toggle('hidden', tab !== 'detail');
+    $('tab-summary').classList.toggle('hidden', tab !== 'summary');
+    document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    render();
   }
 
   function bindFilters() {
@@ -319,16 +448,18 @@
     ids.forEach((id, i) => {
       $(id).addEventListener('input', () => {
         state[keys[i]] = $(id).value;
-        state.page = 0;
+        state.page = 0; state.sPage = 0;
         render();
       });
     });
     $('btn-reset').addEventListener('click', () => {
       ids.forEach(id => $(id).value = '');
-      Object.assign(state, { client: '', reid: '', prod: '', filename: '', exfrom: '', exto: '', ldfrom: '', ldto: '', page: 0 });
+      Object.assign(state, { client: '', reid: '', prod: '', filename: '', exfrom: '', exto: '', ldfrom: '', ldto: '', page: 0, sPage: 0 });
       render();
     });
-    document.querySelectorAll('th[data-key]').forEach(th => {
+
+    // Detail-tab column sorting
+    document.querySelectorAll('#grid th[data-key]').forEach(th => {
       th.addEventListener('click', () => {
         const k = th.dataset.key;
         if (state.sortKey === k) {
@@ -340,8 +471,28 @@
         render();
       });
     });
+    // Summary-tab column sorting
+    document.querySelectorAll('#grid2 th[data-key]').forEach(th => {
+      th.addEventListener('click', () => {
+        const k = th.dataset.key;
+        if (state.sSortKey === k) {
+          state.sSortDir = state.sSortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sSortKey = k;
+          state.sSortDir = (k === 'loaded' || k === 'extracted') ? 'desc' : 'asc';
+        }
+        render();
+      });
+    });
+
     $('pg-prev').addEventListener('click', () => { state.page--; render(); });
     $('pg-next').addEventListener('click', () => { state.page++; render(); });
+    $('pg2-prev').addEventListener('click', () => { state.sPage--; render(); });
+    $('pg2-next').addEventListener('click', () => { state.sPage++; render(); });
+
+    document.querySelectorAll('.tab').forEach(b => {
+      b.addEventListener('click', () => switchTab(b.dataset.tab));
+    });
   }
 
   bindFilters();
