@@ -301,7 +301,6 @@ SSIS_SERVER = 'TRGETLPROD2'
 SSIS_PKG = 'AetnaHRP_MasterLoad.dtsx'
 FS_MAX_FRAC = 0.95   # ignore terminal cleanup tasks pinned at ~99-100% (no lead time)
 FS_MAX_SD = 0.08     # milestone must complete at a stable fraction across runs
-FS_MIN_ELAPSED = 600  # don't project off a run that just started
 
 
 def _ssis_sql(query):
@@ -323,24 +322,33 @@ def _ssis_sql(query):
 
 
 def _ssis_milestone():
-    """(executable_id, avg_end_fraction) of the latest STABLE late milestone task
-    over the last 6 successful runs, or (None, None). 'Stable' = completes at a
-    consistent fraction (sd <= FS_MAX_SD) and not later than FS_MAX_FRAC so there's
-    still lead time when we detect it."""
+    """(executable_id, median_tail_seconds) for the latest STABLE late milestone
+    task over the last 6 successful runs, or (None, None). The milestone is the
+    latest task that COMPLETES at a consistent fraction of wall-clock (sd <=
+    FS_MAX_SD, not later than FS_MAX_FRAC so there's lead time). We return the
+    MEDIAN tail = (run_end - milestone_end): the finalization work after the
+    milestone is roughly fixed in absolute time regardless of how long the heavy
+    load took (validated 2026-07-23: a 14 h Rx run and a 2.5 h one both had ~25 min
+    tails), so ETA = milestone_end + median_tail is far more robust than a
+    fraction-of-elapsed projection on outlier-length runs."""
     rows = _ssis_sql(
         f"DECLARE @pkg sysname=N'{SSIS_PKG}'; "
-        ";WITH ex AS (SELECT TOP 6 execution_id, start_time, "
+        ";WITH ex AS (SELECT TOP 6 execution_id, start_time, end_time, "
         "  DATEDIFF(second,start_time,end_time) AS total_sec "
         "  FROM catalog.executions WHERE package_name=@pkg AND status=7 "
         "  AND end_time IS NOT NULL ORDER BY execution_id DESC), "
         "f AS (SELECT es.executable_id, "
         "  CAST(DATEDIFF(second,ex.start_time,es.end_time) AS float)"
-        "  /NULLIF(ex.total_sec,0) AS frac "
+        "  /NULLIF(ex.total_sec,0) AS frac, "
+        "  DATEDIFF(second,es.end_time,ex.end_time) AS tail "
         "  FROM catalog.executable_statistics es "
-        "  JOIN ex ON ex.execution_id=es.execution_id WHERE ex.total_sec>600) "
-        "SELECT TOP 1 executable_id, AVG(frac) FROM f GROUP BY executable_id "
-        f"HAVING COUNT(*)>=4 AND AVG(frac)<={FS_MAX_FRAC} "
-        f"AND ISNULL(STDEV(frac),1)<={FS_MAX_SD} ORDER BY AVG(frac) DESC;")
+        "  JOIN ex ON ex.execution_id=es.execution_id WHERE ex.total_sec>600), "
+        "pick AS (SELECT TOP 1 executable_id FROM f GROUP BY executable_id "
+        f"  HAVING COUNT(*)>=4 AND AVG(frac)<={FS_MAX_FRAC} "
+        f"  AND ISNULL(STDEV(frac),1)<={FS_MAX_SD} ORDER BY AVG(frac) DESC) "
+        "SELECT p.executable_id, (SELECT DISTINCT PERCENTILE_CONT(0.5) "
+        "  WITHIN GROUP (ORDER BY CAST(f2.tail AS float)) OVER() "
+        "  FROM f f2 WHERE f2.executable_id=p.executable_id) FROM pick p;")
     if rows and len(rows[0]) >= 2:
         try:
             return int(rows[0][0]), float(rows[0][1])
@@ -350,32 +358,31 @@ def _ssis_milestone():
 
 
 def _ssis_final_stage_eta():
-    """If the SSIS package is running AND has already completed its stable ~90%
-    milestone task, return the projected completion datetime (run_start + elapsed /
-    milestone_fraction). Else None. Elapsed is measured on the SSISDB server clock
-    (GETDATE) to avoid host/server skew."""
-    mid, frac = _ssis_milestone()
-    if not mid or not frac or frac <= 0:
+    """If the SSIS package is running AND has already completed its stable late
+    milestone task, return projected completion = milestone_end + median_tail.
+    Else None (the JOIN yields no row until the milestone completes, which is
+    exactly the 'not in the final stretch yet' case)."""
+    mid, tail = _ssis_milestone()
+    if not mid or tail is None or tail < 0:
         return None
+    # Pick the LATEST genuinely-current running execution (recency guard excludes
+    # orphaned executions left stuck at status=2), THEN check whether IT has
+    # completed the milestone. Doing it in that order matters: a real run that
+    # hasn't reached its milestone yet must return None (fall back to the anchored
+    # median), not silently match some older execution that happens to have one.
     rows = _ssis_sql(
-        f"DECLARE @pkg sysname=N'{SSIS_PKG}'; DECLARE @mid bigint={mid}; "
-        "SELECT TOP 1 CONVERT(varchar(19),e.start_time,120), "
-        "  DATEDIFF(second,e.start_time,GETDATE()), "
-        "  CASE WHEN EXISTS(SELECT 1 FROM catalog.executable_statistics s "
-        "    WHERE s.execution_id=e.execution_id AND s.executable_id=@mid) "
-        "  THEN 1 ELSE 0 END "
-        "FROM catalog.executions e WHERE e.package_name=@pkg AND e.status=2 "
-        "ORDER BY e.execution_id DESC;")
-    if not rows or len(rows[0]) < 3 or rows[0][2] != '1':
+        f"DECLARE @pkg sysname=N'{SSIS_PKG}'; DECLARE @mid bigint={mid}; DECLARE @rid bigint; "
+        "SELECT TOP 1 @rid=execution_id FROM catalog.executions "
+        "  WHERE package_name=@pkg AND status=2 "
+        "  AND start_time>DATEADD(day,-3,GETDATE()) ORDER BY execution_id DESC; "
+        "SELECT CONVERT(varchar(19),s.end_time,120) FROM catalog.executable_statistics s "
+        "  WHERE s.execution_id=@rid AND s.executable_id=@mid;")
+    if not rows:
         return None
-    start = _to_dt(rows[0][0])
-    try:
-        elapsed = int(rows[0][1])
-    except Exception:
+    mend = _to_dt(rows[0][0])
+    if not mend:
         return None
-    if not start or elapsed < FS_MIN_ELAPSED:
-        return None
-    return start + timedelta(seconds=elapsed / frac)
+    return mend + timedelta(seconds=tail)
 
 
 def eta_detail(server, name):
@@ -395,7 +402,9 @@ def eta_detail(server, name):
     task, show the tighter live 'final stage' ETA instead (per user 2026-07-23)."""
     fs = _ssis_final_stage_eta()
     if fs:
-        return [f"{EXEC_ICON} final stage - ETA ~{_eta_stamp(fs)}"]
+        if fs > datetime.now():
+            return [f"{EXEC_ICON} final stage - ETA ~{_eta_stamp(fs)}"]
+        return [f"{EXEC_ICON} final stage - wrapping up"]
     durs = sorted(_recent_full_durations(server, name))
     if not durs:
         return [f"{EXEC_ICON} in progress"]

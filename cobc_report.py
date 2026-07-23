@@ -50,6 +50,18 @@ RAMP_BASE = "http://ramp"
 # History start (matches the prior report's "since 2024-12-31").
 START_DATE = date(2025, 1, 1)
 
+# --- Rolling-window cache -------------------------------------------------
+# Re-pulling the full START_DATE->today history every run (~2.3M FileLogger
+# rows over 19 months) is expensive, and the report now runs hourly on
+# weekdays.  Instead we cache the built rows and, on each subsequent run,
+# only re-fetch a recent rolling window (by LogDate) and merge it over the
+# cached history.  Pass --full to force a from-scratch rebuild.
+CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "cobc_report_cache.json")
+# Days back from today to refresh live each run.  Generous so late-arriving
+# files and any recently-unconfigured file land inside the refreshed window.
+WINDOW_DAYS = 45
+
 OUTPUT_PATHS = [
     r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule\Daily Status Reports\COBCReport.html",
     r"C:\Users\tls2\.claude\projects\H--\COBCReport.html",
@@ -215,64 +227,156 @@ def _mkrow(fname, client, feed, log_ts, size, unconf, ftype):
     }
 
 
-def build_rows():
-    today = datetime.now().date()
+def _ingest(by_key, fname, client, feed, log_ts, size, fid, unconf, job=None):
+    """Type + dedupe one file into by_key (dedup_key|log-day -> row)."""
+    ftype = row_type(fname, job, feed)
+    if ftype == "Other":
+        return
+    day = (log_ts or "")[:10]
+    key = dedup_key(fname) + "|" + day
+    row = by_key.get(key)
+    if row is None:
+        row = _mkrow(fname, client, feed, log_ts, size, unconf, ftype)
+        row["_ids"] = set()
+        by_key[key] = row
+    else:
+        # Keep the earliest log timestamp; OR-in the unconfigured flag.
+        lg = (log_ts or "")[:19].replace("T", " ")
+        if lg and (not row["logged"] or lg < row["logged"]):
+            row["logged"] = lg
+        if unconf:
+            row["unconf"] = 1
+        if not row["size"] and isinstance(size, (int, float)):
+            row["size"] = int(size)
+    if fid:
+        row["_ids"].add(fid)
 
-    # Unconfigured files first, so we can flag FileLogger rows as we ingest.
-    unconfigured = fetch_unconfigured()
-    unconf_ids = {i.get("FileLogId") for i in unconfigured if i.get("FileLogId")}
-    print(f"[info] {len(unconfigured)} unconfigured file(s) in RAMP right now")
 
-    by_key = {}   # dedup_key + log-date -> row (with a set of FileLogIds seen)
-
-    def ingest(fname, client, feed, log_ts, size, fid, unconf, job=None):
-        ftype = row_type(fname, job, feed)
-        if ftype == "Other":
-            return
-        day = (log_ts or "")[:10]
-        key = dedup_key(fname) + "|" + day
-        row = by_key.get(key)
-        if row is None:
-            row = _mkrow(fname, client, feed, log_ts, size, unconf, ftype)
-            row["_ids"] = set()
-            by_key[key] = row
-        else:
-            # Keep the earliest log timestamp; OR-in the unconfigured flag.
-            lg = (log_ts or "")[:19].replace("T", " ")
-            if lg and (not row["logged"] or lg < row["logged"]):
-                row["logged"] = lg
-            if unconf:
-                row["unconf"] = 1
-            if not row["size"] and isinstance(size, (int, float)):
-                row["size"] = int(size)
-        if fid:
-            row["_ids"].add(fid)
-
-    # FileLogger: monthly chunks across the full history.
+def _ingest_filelog_range(by_key, start, end, unconf_ids):
+    """Pull FileLogger in monthly chunks over [start, end] into by_key."""
     total_raw = 0
-    for cs, ce in month_chunks(START_DATE, today):
+    for cs, ce in month_chunks(start, end):
         rows = fetch_filelog(cs, ce)
         total_raw += len(rows)
         for r in rows:
             fid = r.get("FileLogId")
-            ingest(r.get("FileName"), r.get("ClientName"), r.get("FeedName"),
-                   r.get("LogDate"), r.get("FileSize"), fid, fid in unconf_ids,
-                   r.get("JobName"))
+            _ingest(by_key, r.get("FileName"), r.get("ClientName"), r.get("FeedName"),
+                    r.get("LogDate"), r.get("FileSize"), fid, fid in unconf_ids,
+                    r.get("JobName"))
         print(f"[info]   {cs} -> {ce}: {len(rows):>7} rows  (running files: {len(by_key)})")
+    return total_raw
 
-    # Inject any unconfigured COBC/TRR/ABII (may be outside the pulled window).
+
+def _inject_unconfigured(by_key, unconfigured):
+    """Inject unconfigured COBC/TRR/ABII (may be outside the pulled window)."""
     for i in unconfigured:
         fl = i.get("FileLog") or {}
         fname = i.get("File") or fl.get("FileName")
         log_ts = fl.get("LogDate") or fl.get("DateCreated") or i.get("CreateDate")
-        ingest(fname, fl.get("ClientName"), fl.get("FeedName"),
-               log_ts, fl.get("FileSize"), i.get("FileLogId"), True,
-               fl.get("JobName"))
+        _ingest(by_key, fname, fl.get("ClientName"), fl.get("FeedName"),
+                log_ts, fl.get("FileSize"), i.get("FileLogId"), True,
+                fl.get("JobName"))
 
+
+def _finalize(by_key):
     rows = list(by_key.values())
     for r in rows:
         r.pop("_ids", None)
-    print(f"[info] {total_raw} raw FileLogger rows -> {len(rows)} files (deduped)")
+    return rows
+
+
+def build_rows_full():
+    """Full rebuild: pull the entire START_DATE->today history from RAMP."""
+    today = datetime.now().date()
+    unconfigured = fetch_unconfigured()
+    unconf_ids = {i.get("FileLogId") for i in unconfigured if i.get("FileLogId")}
+    print(f"[info] {len(unconfigured)} unconfigured file(s) in RAMP right now")
+
+    by_key = {}
+    total_raw = _ingest_filelog_range(by_key, START_DATE, today, unconf_ids)
+    _inject_unconfigured(by_key, unconfigured)
+    rows = _finalize(by_key)
+    print(f"[info] {total_raw} raw FileLogger rows -> {len(rows)} files (deduped) [FULL]")
+    return rows
+
+
+# ---- Rolling-window cache -----------------------------------------------
+
+def _load_cache():
+    """Return the cached payload, or None if missing/invalid/stale schema."""
+    try:
+        with open(CACHE_PATH, "r", encoding="utf-8") as f:
+            c = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(c.get("rows"), list):
+        return None
+    if c.get("start_date") != START_DATE.isoformat():
+        print("[info] cache START_DATE differs from current -> full rebuild")
+        return None
+    return c
+
+
+def _save_cache(rows):
+    payload = {
+        "built": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "start_date": START_DATE.isoformat(),
+        "window_days": WINDOW_DAYS,
+        "rows": rows,
+    }
+    tmp = CACHE_PATH + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, separators=(",", ":"))
+        os.replace(tmp, CACHE_PATH)
+        print(f"[info] cache saved ({len(rows)} rows) -> {CACHE_PATH}")
+    except OSError as e:
+        print(f"[warn] couldn't save cache: {e}")
+
+
+def build_rows_rolling():
+    """Merge a fresh rolling window over the cached history.
+
+    Rows older than the window come straight from the cache; rows whose log
+    date falls inside the window are dropped and re-fetched live, so recent
+    additions/updates/removals are reflected.  Unconfigured files are pulled
+    and injected in full every run (cheap, and keeps the flag current for
+    anything inside the refreshed window).  Falls back to a full rebuild when
+    there's no usable cache.
+    """
+    cache = _load_cache()
+    if cache is None:
+        rows = build_rows_full()
+        _save_cache(rows)
+        return rows
+
+    today = datetime.now().date()
+    window_start = today - timedelta(days=WINDOW_DAYS)
+    ws = window_start.isoformat()
+
+    unconfigured = fetch_unconfigured()
+    unconf_ids = {i.get("FileLogId") for i in unconfigured if i.get("FileLogId")}
+    print(f"[info] {len(unconfigured)} unconfigured file(s) in RAMP right now")
+
+    # Seed with cached rows OLDER than the window; in-window rows get refetched.
+    by_key = {}
+    kept = 0
+    for r in cache["rows"]:
+        day = (r.get("logged") or "")[:10]
+        if day and day >= ws:
+            continue
+        r = dict(r)
+        r["_ids"] = set()
+        by_key[dedup_key(r.get("filename", "")) + "|" + day] = r
+        kept += 1
+    print(f"[info] cache built {cache.get('built')}: kept {kept} rows older than {ws}")
+
+    total_raw = _ingest_filelog_range(by_key, window_start, today, unconf_ids)
+    _inject_unconfigured(by_key, unconfigured)
+    rows = _finalize(by_key)
+    print(f"[info] rolling {ws}->{today}: {total_raw} raw window rows -> "
+          f"{len(rows)} files total (deduped) [ROLLING]")
+    _save_cache(rows)
     return rows
 
 
@@ -1018,8 +1122,15 @@ def generate_html(rows) -> str:
 
 
 def main():
-    print(f"[info] Building COBC/TRR/ABII report from RAMP ({RAMP_BASE}) since {START_DATE}")
-    rows = build_rows()
+    full = "--full" in sys.argv
+    mode = "FULL rebuild" if full else f"rolling {WINDOW_DAYS}-day window"
+    print(f"[info] Building COBC/TRR/ABII report from RAMP ({RAMP_BASE}) "
+          f"since {START_DATE} [{mode}]")
+    if full:
+        rows = build_rows_full()
+        _save_cache(rows)
+    else:
+        rows = build_rows_rolling()
     by_type = {}
     for r in rows:
         by_type[r["ftype"]] = by_type.get(r["ftype"], 0) + 1
