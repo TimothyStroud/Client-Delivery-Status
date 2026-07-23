@@ -285,28 +285,32 @@ def _eta_stamp(dt):
 
 
 def eta_detail(server, name):
-    """Anchored ETA lines for the in-flight run: run_start + typical (p25-p75)
-    historical duration, plus elapsed and an overdue flag. Anchoring to the real
-    run start (not 'now') is what stops the old 2-h-per-tick drift. Degrades to a
-    plain typical-range note if the live run start can't be read."""
+    """Single expected-completion ETA for the in-flight run, matching the RCE/RX
+    digests' one-line 'ETA ~<time>' look (per user 2026-07-23). The estimate is
+    the live run's actual START + the MEDIAN (p50) of recent successful full-run
+    durations. Anchoring to the real start (not 'now') is what keeps it fixed
+    across the 2-hourly ticks instead of marching forward ~2 h every 2 h (the old
+    'now + remaining' drift bug fixed 2026-07-21).
+
+    Once the run passes its median the shown ETA steps up to the p75 (slower-case)
+    time so the clock value is never already in the past; only when it also runs
+    past p75 do we drop the time and simply note it's running long. Degrades to a
+    'now + median' estimate if the live run start can't be read."""
     durs = sorted(_recent_full_durations(server, name))
     if not durs:
         return [f"{EXEC_ICON} in progress"]
-    lo, hi = _pct(durs, 25), _pct(durs, 75)
-    typ = f"typical {_dur_hr_label(lo)}-{_dur_hr_label(hi)}"
+    est, hi = _pct(durs, 50), _pct(durs, 75)
     start = _current_run_start(server, name)
     if not start:
-        return [f"{EXEC_ICON} in progress ({typ})"]
+        eta = datetime.now() + timedelta(seconds=est)
+        return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
     elapsed = (datetime.now() - start).total_seconds()
-    run = _dur_h(elapsed)
     if elapsed > hi:
-        return [f"{EXEC_ICON} running {run} - over {typ}; still processing"]
-    eta_lo, eta_hi = start + timedelta(seconds=lo), start + timedelta(seconds=hi)
-    if elapsed < lo:
-        return [f"{EXEC_ICON} running {run} - {typ}",
-                f"ETA ~{_eta_stamp(eta_lo)} - {_eta_stamp(eta_hi)}"]
-    return [f"{EXEC_ICON} running {run} - {typ}",
-            f"ETA by ~{_eta_stamp(eta_hi)}"]
+        return [f"{EXEC_ICON} running {_dur_h(elapsed)} - longer than usual, still processing"]
+    # Before the median: ETA = start + median. After it (but still within p75):
+    # bump to start + p75 so we never display a time already in the past.
+    eta = start + timedelta(seconds=(est if elapsed < est else hi))
+    return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
 
 
 def last_completion(server, name):
