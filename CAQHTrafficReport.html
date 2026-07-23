@@ -127,7 +127,7 @@
 <body>
 <header>
   <h1>CAQH Traffic Report</h1>
-  <div class="meta">Generated 2026-07-23 09:14 &middot; sqlutilmine3 / CAQH3 &middot; loads since 2026-01-01 &middot; 109 rows total</div>
+  <div class="meta">Generated 2026-07-23 09:19 &middot; sqlutilmine3 / CAQH3 &middot; loads since 2026-01-01 &middot; 109 rows total</div>
 </header>
 <main>
   <section class="kpis">
@@ -175,11 +175,11 @@
   </section>
 
   <div class="tabs">
-    <button class="tab active" data-tab="detail">File Detail</button>
-    <button class="tab" data-tab="summary">Traffic Report</button>
+    <button class="tab" data-tab="detail">File Detail</button>
+    <button class="tab active" data-tab="summary">Traffic Report</button>
   </div>
 
-  <div id="tab-detail">
+  <div id="tab-detail" class="hidden">
     <table id="grid">
       <thead>
         <tr>
@@ -201,7 +201,7 @@
     </div>
   </div>
 
-  <div id="tab-summary" class="hidden">
+  <div id="tab-summary">
     <table id="grid2">
       <thead>
         <tr>
@@ -227,7 +227,7 @@
   const ROWS = JSON.parse(document.getElementById('data').textContent);
   const PAGE_SIZE = 100;
   let state = {
-    tab: 'detail',
+    tab: 'summary',
     client: '', reid: '', prod: '', filename: '',
     exfrom: '', exto: '', ldfrom: '', ldto: '',
     sortKey: 'loaded', sortDir: 'desc', page: 0,       // File Detail tab
