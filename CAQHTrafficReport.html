@@ -127,7 +127,7 @@
 <body>
 <header>
   <h1>CAQH Traffic Report</h1>
-  <div class="meta">Generated 2026-07-23 09:10 &middot; sqlutilmine3 / CAQH3 &middot; loads since 2026-01-01 &middot; 109 rows total</div>
+  <div class="meta">Generated 2026-07-23 09:14 &middot; sqlutilmine3 / CAQH3 &middot; loads since 2026-01-01 &middot; 109 rows total</div>
 </header>
 <main>
   <section class="kpis">
@@ -311,9 +311,7 @@
       let tip = '';
       if (files.length) {
         const hdr = files.length + ' file' + (files.length === 1 ? '' : 's') + ' loaded on ' + latestLoadDate + ':';
-        tip = hdr + '
-' + files.map(f => f.filename + ' — ' + (f.count || 0).toLocaleString()).join('
-');
+        tip = hdr + '\n' + files.map(f => f.filename + ' — ' + (f.count || 0).toLocaleString()).join('\n');
       }
       out.push({
         client: g.client,
