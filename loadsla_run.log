@@ -477,3 +477,11 @@ json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
 [optum_pbm] LoadQ=1394802 LoadEnd=2026-07-08T13:15:03.03 SnapEnd=2026-07-08T13:40:51.877 tag=07032026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
    already reported this month -- dormant until restart
 State saved.
+[caresource] (weekly) QueueId=1406007 Status=Successful End=2026-07-21T21:05:19.577 period=2026-W30
+   already reported this period -- dormant until restart
+[wellmark] (weekly) QueueId=1404968 Status=Successful End=2026-07-20T05:49:24.613 period=2026-W30
+   already reported this period -- dormant until restart
+[healthspring_fwa] (monthly) QueueId=1396476 Status=Successful End=2026-07-08T15:22:18.743 period=2026-07
+   already reported this period -- dormant until restart
+[optum_pbm] LoadQ=1394802 LoadEnd=2026-07-08T13:15:03.03 SnapEnd=2026-07-08T13:40:51.877 tag=07032026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   already reported this month -- dormant until restart
