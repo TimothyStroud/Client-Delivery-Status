@@ -197,8 +197,9 @@ def build_daily_table(per_day, cadence_note):
         for c in DISPLAY:
             mtot[c] += day_data.get(c, 0)
         mdays += 1
+        is_pending = d > _missing_cutoff
         received = {c for c, n in day_data.items() if n > 0}
-        missing = [c for c in DISPLAY if expected_today(c, d) and c not in received]
+        missing = [] if is_pending else [c for c in DISPLAY if expected_today(c, d) and c not in received]
         holiday = HOLIDAYS.get(d)
         if holiday:
             row_cls = " class='holiday'"
@@ -212,10 +213,21 @@ def build_daily_table(per_day, cadence_note):
         cells = [f"<td{row_cls}>{date_label}</td>", f"<td{row_cls}>{d:%a}</td>"]
         for c in DISPLAY:
             n = day_data.get(c, 0)
-            cls = "num ok" if n > 0 else ("num missing" if expected_today(c, d) else "num")
+            if n > 0:
+                cls = "num ok"
+            elif is_pending:
+                cls = "num pending"
+            elif expected_today(c, d):
+                cls = "num missing"
+            else:
+                cls = "num"
             cells.append(f"<td class='{cls}'>{fmt_count(n)}</td>")
-        cells.append(f"<td class='missing'>{', '.join(missing)}</td>" if missing
-                     else "<td class='ok'>&mdash;</td>")
+        if is_pending:
+            cells.append("<td class='pending'>within 1-week delay &mdash; not yet assessed</td>")
+        elif missing:
+            cells.append(f"<td class='missing'>{', '.join(missing)}</td>")
+        else:
+            cells.append("<td class='ok'>&mdash;</td>")
         rows.append("<tr>" + "".join(cells) + "</tr>")
     if prev_month is not None:
         rows.append(month_total_row(prev_month, all_days[-1].year, mtot, mdays))
@@ -224,7 +236,8 @@ def build_daily_table(per_day, cadence_note):
                  for i, c in enumerate(DISPLAY))
     total_files = sum(sum(v.values()) for v in per_day.values())
     days_missing = sum(1 for d in all_days
-                       if any(expected_today(c, d) and c not in per_day.get(d, {}) for c in DISPLAY))
+                       if d <= _missing_cutoff
+                       and any(expected_today(c, d) and c not in per_day.get(d, {}) for c in DISPLAY))
     table = f"""<table><thead><tr>
 <th>Date</th><th>Day</th>{th}<th class='grp-start'>Missing Contracts</th>
 </tr></thead><tbody>{''.join(rows)}</tbody></table>"""
@@ -376,6 +389,13 @@ if _dl:
 
 today = date.today()
 
+# One-week reporting delay (per user 2026-07-24): dates within the last 7 days are
+# NOT flagged as missing in the daily TRR/COBC grids — upstream delivery delays
+# otherwise cause false positives ("current week" confusion). Dates on/before the
+# cutoff assess normally. (ABII is monthly; its current-month pending logic stands.)
+MISSING_DELAY_DAYS = 7
+_missing_cutoff = today - timedelta(days=MISSING_DELAY_DAYS)
+
 trr_per_day = parse_daily(trr_rows)
 cobc_per_day = parse_daily(cobc_rows)
 
@@ -404,6 +424,7 @@ th { background: #305f9c; color: white; }
 td.num { text-align: center; font-variant-numeric: tabular-nums; }
 .ok { background: #d9f4d9; }
 .missing { background: #fde4e4; color: #a40000; font-weight: bold; }
+.pending { background: #eef1f6; color: #667; font-style: italic; }
 .satday { background: #fff8e1; font-style: italic; }
 .holiday { background: #f0e4ff !important; font-weight: bold; }
 tr.monthsep td { background: #305f9c; height: 4px; padding: 0; border: none; }
@@ -435,6 +456,7 @@ html = f"""<html><head>{STYLE}</head><body>
 Contract and file date are parsed from the FileName. TRR (TableID 5400) and COBC
 (5000/5100/5200, deduped to one row per physical file) are <b>daily</b>; ABII
 (5500 Dialysis / 5600 Transplant) is <b>monthly</b>. Only production (<code>P.</code>) files counted.</p>
+<p style='font-size:11px;color:#556'><b>One-week reporting delay:</b> in the daily TRR/COBC grids, the most recent 7 days ({_missing_cutoff + timedelta(days=1):%Y-%m-%d} &rarr; {today:%Y-%m-%d}) are shown but <b>not assessed for missing files</b> (upstream delivery delays would otherwise flag false gaps).</p>
 
 {callout}
 
