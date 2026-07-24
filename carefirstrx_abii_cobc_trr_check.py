@@ -448,6 +448,13 @@ today = date.today()
 MISSING_DELAY_DAYS = 7
 _missing_cutoff = today - timedelta(days=MISSING_DELAY_DAYS)
 
+# Known outages for the COBC feed ONLY (per user 2026-07-24): the "Annual Refresh"
+# feed-wide no-delivery window 3/19-4/2. These dates are excluded from missing in
+# the COBC daily grid + by-contract table. TRR is unaffected (built without outages).
+COBC_OUTAGES = {}
+for _n in range((date(2026, 4, 2) - date(2026, 3, 19)).days + 1):
+    COBC_OUTAGES[date(2026, 3, 19) + timedelta(days=_n)] = "Annual Refresh"
+
 trr_per_day = parse_daily(trr_rows)
 cobc_per_day = parse_daily(cobc_rows)
 
