@@ -1,12 +1,15 @@
 """
 TRR missing contracts report (2025 + 2026) — queries TRGINTP3, emails Timothy.Stroud@machinify.com
 """
-import subprocess, re, sys
+import subprocess, re, sys, os
+import calendar as _cal
 from collections import defaultdict
 from datetime import datetime, date, timedelta
 
 sys.path.insert(0, r'C:\Users\tls2\.claude\projects\H--')
 import send_via_outlook
+
+DRY_RUN = os.environ.get("REPORT_DRYRUN") == "1"
 
 TO      = 'Timothy.Stroud@machinify.com; RDPOperations@Machinify.com'
 FROM    = 'DataOperations@machinify.com'
@@ -58,6 +61,18 @@ def yymmdd_to_date(d):
 
 def fmt_date(d):
     return d.strftime('%Y-%m-%d') if isinstance(d, date) else ''
+
+
+def _misses_by_month_html(dates):
+    """Group a list of date objects by month -> 'Feb: 2/19, 2/20<br>Mar: 3/3'."""
+    _bym = defaultdict(list)
+    for _x in dates:
+        _bym[_x.month].append(_x)
+    return "<br>".join(
+        f"<b>{_cal.month_abbr[_m]}:</b> "
+        + ", ".join(f"{_x.month}/{_x.day}" for _x in sorted(_bym[_m]))
+        for _m in sorted(_bym)
+    )
 
 
 def mon_sat_dates(year, present_dates):
@@ -137,6 +152,52 @@ def build_year_section(year, present, unexpected):
                            f'<p>{gap_badges}</p>')
     else:
         no_file_section = '<p style="margin-top:16px;color:#555;">No Mon–Sat gaps found.</p>'
+
+    # --- Missing deliveries by contract (pivot of the same missing data) ---
+    # day_missing = per-date missing contracts = partial-date misses (d <= cutoff)
+    # UNION whole-day no-file gaps (every expected contract missing that day).
+    day_missing = {}
+    for d in all_dates:
+        dt = yymmdd_to_date(d)
+        if dt and dt <= _missing_cutoff:
+            miss = EXPECTED_SET - present[d]
+            if miss:
+                day_missing[dt] = sorted(miss)
+    for nf in no_file_dates:                       # no_file_dates already <= cutoff
+        day_missing[nf] = sorted(EXPECTED_SET)
+
+    contract_misses = defaultdict(list)
+    for dt in sorted(day_missing):
+        for c in day_missing[dt]:
+            contract_misses[c].append(dt)
+
+    _cm_rows = []
+    for c in sorted(contract_misses):              # ordered by contract number
+        ds = sorted(contract_misses[c])
+        _cm_rows.append(f'<tr><td style="{td}">{c}</td>'
+                        f'<td style="{td}">{len(ds)}</td>'
+                        f'<td style="{td}font-size:12px;">{_misses_by_month_html(ds)}</td></tr>')
+    bycontract_thead = ''.join(f'<th style="{th}">{h}</th>'
+                               for h in ['Contract', '# Misses', 'Missing dates by month'])
+    if _cm_rows:
+        bycontract_table = (
+            f'<p style="font-weight:700;color:#c0392b;margin:16px 0 4px 0;">'
+            f'Missing deliveries by contract ({len(_cm_rows)}, ordered by contract number):</p>'
+            f'<p style="color:#555;font-size:11px;margin:0 0 6px 0;">Pivot of the same missing data above '
+            f'&mdash; no-file gap days count all {len(EXPECTED)} expected contracts as missing; the last 7 days '
+            f'(1-week delay) are already excluded. Contracts with zero misses are omitted.</p>'
+            f'<table style="border-collapse:collapse;width:100%;min-width:600px;margin-bottom:16px;">'
+            f'<thead><tr>{bycontract_thead}</tr></thead><tbody>{"".join(_cm_rows)}</tbody></table>'
+        )
+    else:
+        bycontract_table = ('<p style="color:#369e57;font-weight:600;margin-bottom:16px;">'
+                            'No missing deliveries by contract.</p>')
+
+    # self-verify: the by-contract pivot must match the per-date missing data
+    _cal_pairs = {(c, dt) for dt in day_missing for c in day_missing[dt]}
+    _tbl_pairs = {(c, dt) for c, dts in contract_misses.items() for dt in dts}
+    print(f"[verify] {year} Missing-by-Contract vs missing data: "
+          f"{'MATCH' if _cal_pairs == _tbl_pairs else 'MISMATCH'} ({len(_cal_pairs)} pairs)")
 
     # --- Unexpected contracts ---
     if unexpected:

@@ -14,6 +14,7 @@ and tracked as expected from their first-seen date forward (never retroactively)
 
 Emails an HTML report to the user via the interactive Outlook sender.
 """
+import os
 import re
 import subprocess
 import calendar as _cal
@@ -24,6 +25,8 @@ BASE = r'C:\Users\tls2\.claude\projects\H--'
 import sys
 sys.path.insert(0, BASE)
 from send_via_outlook import send
+
+DRY_RUN = os.environ.get("REPORT_DRYRUN") == "1"
 
 EMAIL_TO = "DataOperations@machinify.com; RDPOperations@Machinify.com"
 EMAIL_FROM = "DataOperations@machinify.com"
@@ -186,6 +189,7 @@ def build_daily_table(per_day, cadence_note):
     prev_month = None
     mtot = defaultdict(int)
     mdays = 0
+    day_missing = {}   # date -> [missing contracts] — single source for calendar + by-contract table
     for d in all_days:
         if prev_month is not None and d.month != prev_month:
             rows.append(month_total_row(prev_month, d.year, mtot, mdays))
@@ -197,10 +201,17 @@ def build_daily_table(per_day, cadence_note):
         for c in DISPLAY:
             mtot[c] += day_data.get(c, 0)
         mdays += 1
-        is_pending = d > _missing_cutoff
-        received = {c for c, n in day_data.items() if n > 0}
-        missing = [] if is_pending else [c for c in DISPLAY if expected_today(c, d) and c not in received]
         holiday = HOLIDAYS.get(d)
+        is_pending = d > _missing_cutoff
+        is_holiday = holiday is not None
+        excluded = is_pending or is_holiday
+        received = {c for c, n in day_data.items() if n > 0}
+        # Single source of truth for "missing": excluded on federal holidays and
+        # within the 1-week delay; otherwise every expected contract not received.
+        # The per-contract grid cells, the Missing column, and the by-contract
+        # table below all read from day_missing, so they always match.
+        missing = [] if excluded else [c for c in DISPLAY if expected_today(c, d) and c not in received]
+        day_missing[d] = missing
         if holiday:
             row_cls = " class='holiday'"
         elif d.weekday() == 5:
@@ -215,6 +226,8 @@ def build_daily_table(per_day, cadence_note):
             n = day_data.get(c, 0)
             if n > 0:
                 cls = "num ok"
+            elif is_holiday:
+                cls = "num holidaycell"
             elif is_pending:
                 cls = "num pending"
             elif expected_today(c, d):
@@ -222,7 +235,9 @@ def build_daily_table(per_day, cadence_note):
             else:
                 cls = "num"
             cells.append(f"<td class='{cls}'>{fmt_count(n)}</td>")
-        if is_pending:
+        if is_holiday:
+            cells.append("<td class='holidaycell'>Federal holiday &mdash; excluded from missing</td>")
+        elif is_pending:
             cells.append("<td class='pending'>within 1-week delay &mdash; not yet assessed</td>")
         elif missing:
             cells.append(f"<td class='missing'>{', '.join(missing)}</td>")
@@ -235,14 +250,51 @@ def build_daily_table(per_day, cadence_note):
     th = "".join(f"<th{' class=' + chr(39) + 'grp-start' + chr(39) if i == 0 else ''}>{c}</th>"
                  for i, c in enumerate(DISPLAY))
     total_files = sum(sum(v.values()) for v in per_day.values())
-    days_missing = sum(1 for d in all_days
-                       if d <= _missing_cutoff
-                       and any(expected_today(c, d) and c not in per_day.get(d, {}) for c in DISPLAY))
+    days_missing = sum(1 for d in all_days if day_missing.get(d))
     table = f"""<table><thead><tr>
 <th>Date</th><th>Day</th>{th}<th class='grp-start'>Missing Contracts</th>
 </tr></thead><tbody>{''.join(rows)}</tbody></table>"""
+
+    # ---- Missing deliveries by contract (transpose of day_missing -> always matches) ----
+    def _misses_by_month_html(dates):
+        _bym = defaultdict(list)
+        for _x in dates:
+            _bym[_x.month].append(_x)
+        return "<br>".join(
+            f"<b>{_cal.month_abbr[_m]}:</b> "
+            + ", ".join(f"{_x.month}/{_x.day}" for _x in sorted(_bym[_m]))
+            for _m in sorted(_bym))
+
+    contract_misses = defaultdict(list)   # contract -> [date, ...] (sorted, since all_days is)
+    for _d in all_days:
+        for _c in day_missing.get(_d, []):
+            contract_misses[_c].append(_d)
+    _cm_rows = []
+    for _c in sorted(contract_misses):   # ordered by contract number (per user 2026-07-24)
+        _ds = contract_misses[_c]
+        _cm_rows.append(f"<tr><td>{_c}</td><td class='num'>{len(_ds)}</td>"
+                        f"<td style='font-size:11px'>{_misses_by_month_html(_ds)}</td></tr>")
+    contract_miss_table = (
+        "<p style='max-width:1000px'>For each contract (<b>ordered by contract number</b>), the number of "
+        "Mon&ndash;Sat days it was <b>expected</b> (from first delivery forward) but <b>did not deliver</b>, "
+        "with the missing dates grouped by month. This is a pivot of the daily calendar below and "
+        "<b>matches it exactly</b>: feed-wide no-file days count as a miss for every expected contract that "
+        "day; the only days excluded are <b>federal holidays</b> and the most recent 7 days (1-week delay). "
+        "Contracts with zero misses are omitted.</p>"
+        "<table><thead><tr><th>Contract</th><th># Misses</th><th>Missing dates by month</th></tr></thead>"
+        f"<tbody>{''.join(_cm_rows) if _cm_rows else '<tr><td colspan=3>none</td></tr>'}</tbody></table>")
+
+    # self-verify: the by-contract table is a transpose of the calendar's per-date
+    # missing sets — they must contain the identical (contract, date) pairs.
+    _cal_pairs = {(c, d) for d in all_days for c in day_missing.get(d, [])}
+    _tbl_pairs = {(c, d) for c, ds in contract_misses.items() for d in ds}
+    print(f"[verify] {cadence_note} Daily Calendar vs Missing-by-Contract: "
+          f"{'MATCH' if _cal_pairs == _tbl_pairs else 'MISMATCH diff=' + str(len(_cal_pairs ^ _tbl_pairs))} "
+          f"({len(_cal_pairs)} missing pairs)")
+
     stats = dict(contracts=DISPLAY, total_files=total_files, days=len(all_days),
-                 days_missing=days_missing, cadence=cadence_note)
+                 days_missing=days_missing, cadence=cadence_note,
+                 contract_miss_table=contract_miss_table)
     return table, stats
 
 
