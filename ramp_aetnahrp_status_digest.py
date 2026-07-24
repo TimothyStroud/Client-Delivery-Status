@@ -408,17 +408,25 @@ def eta_detail(server, name):
     durs = sorted(_recent_full_durations(server, name))
     if not durs:
         return [f"{EXEC_ICON} in progress"]
-    est, hi = _pct(durs, 50), _pct(durs, 75)
     start = _current_run_start(server, name)
     if not start:
-        eta = datetime.now() + timedelta(seconds=est)
+        eta = datetime.now() + timedelta(seconds=_pct(durs, 50))
         return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
     elapsed = (datetime.now() - start).total_seconds()
-    if elapsed > hi:
+    # Conditional (survival) ETA (per user 2026-07-24: "most accurate at every
+    # update"). The load is bimodal (2 h-30 h) with no mid-run progress signal, so
+    # the one honest refinement each tick is elapsed itself: drop the historical
+    # runs SHORTER than we've already been running -- those outcomes are ruled out
+    # -- and take the median of what's still possible. As elapsed grows the estimate
+    # climbs and converges on the real finish; it moves ONLY when a shorter outcome
+    # is genuinely eliminated. Anchored to the actual start, so it never drifts on
+    # 'now' the way the pre-2026-07-21 'now + remaining' code did. (When the SSIS
+    # ~92% milestone completes, _ssis_final_stage_eta above overrides this with the
+    # tighter finalization projection.)
+    still_possible = [d for d in durs if d >= elapsed]
+    if not still_possible:
         return [f"{EXEC_ICON} running {_dur_h(elapsed)} - longer than usual, still processing"]
-    # Before the median: ETA = start + median. After it (but still within p75):
-    # bump to start + p75 so we never display a time already in the past.
-    eta = start + timedelta(seconds=(est if elapsed < est else hi))
+    eta = start + timedelta(seconds=_pct(still_possible, 50))
     return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
 
 
