@@ -157,8 +157,22 @@ def first_seen_map(per_day):
     return fs
 
 
-def build_daily_table(per_day, cadence_note):
+def _fmt_outage_ranges(dates):
+    """Collapse a set of dates into contiguous 'YYYY-MM-DD -> YYYY-MM-DD' ranges."""
+    ds = sorted(dates)
+    ranges, s, p = [], ds[0], ds[0]
+    for x in ds[1:]:
+        if (x - p).days == 1:
+            p = x
+        else:
+            ranges.append((s, p)); s = p = x
+    ranges.append((s, p))
+    return ", ".join(f"{a:%Y-%m-%d}" + (f" &rarr; {b:%Y-%m-%d}" if b != a else "") for a, b in ranges)
+
+
+def build_daily_table(per_day, cadence_note, outages=None):
     """Return (html_table, stats_dict) for a Wellpoint-style daily grid."""
+    outages = outages or {}
     first_seen = first_seen_map(per_day)
     DISPLAY = sorted(first_seen)                 # all auto-discovered, alpha
 
@@ -204,7 +218,8 @@ def build_daily_table(per_day, cadence_note):
         holiday = HOLIDAYS.get(d)
         is_pending = d > _missing_cutoff
         is_holiday = holiday is not None
-        excluded = is_pending or is_holiday
+        is_outage = d in outages
+        excluded = is_outage or is_pending or is_holiday
         received = {c for c, n in day_data.items() if n > 0}
         # Single source of truth for "missing": excluded on federal holidays and
         # within the 1-week delay; otherwise every expected contract not received.
@@ -226,6 +241,8 @@ def build_daily_table(per_day, cadence_note):
             n = day_data.get(c, 0)
             if n > 0:
                 cls = "num ok"
+            elif is_outage:
+                cls = "num outageday"
             elif is_holiday:
                 cls = "num holidaycell"
             elif is_pending:
@@ -235,7 +252,9 @@ def build_daily_table(per_day, cadence_note):
             else:
                 cls = "num"
             cells.append(f"<td class='{cls}'>{fmt_count(n)}</td>")
-        if is_holiday:
+        if is_outage:
+            cells.append(f"<td class='outageday'>{outages[d]} &mdash; excluded from missing</td>")
+        elif is_holiday:
             cells.append("<td class='holidaycell'>Federal holiday &mdash; excluded from missing</td>")
         elif is_pending:
             cells.append("<td class='pending'>within 1-week delay &mdash; not yet assessed</td>")
@@ -292,9 +311,24 @@ def build_daily_table(per_day, cadence_note):
           f"{'MATCH' if _cal_pairs == _tbl_pairs else 'MISMATCH diff=' + str(len(_cal_pairs ^ _tbl_pairs))} "
           f"({len(_cal_pairs)} missing pairs)")
 
+    # ---- Known-outage box (grouped by reason into contiguous ranges) ----
+    outage_box = ""
+    if outages:
+        _by_reason = defaultdict(list)
+        for _od, _oreason in outages.items():
+            _by_reason[_oreason].append(_od)
+        _items = "".join(
+            f"<li><b>{_oreason}</b> &mdash; {_fmt_outage_ranges(_ods)}</li>"
+            for _oreason, _ods in sorted(_by_reason.items(), key=lambda kv: min(kv[1])))
+        outage_box = (
+            "<div class='outage'><b>&#9888; Known outages &mdash; excluded from missing</b>"
+            f"<ul style='margin:6px 0 0 18px;padding:0'>{_items}</ul>"
+            "<span style='font-size:11px;color:#7a5c00'>These dates are excluded from the missing-contract "
+            "counts, the per-contract miss table, and the daily calendar's Missing column.</span></div>")
+
     stats = dict(contracts=DISPLAY, total_files=total_files, days=len(all_days),
                  days_missing=days_missing, cadence=cadence_note,
-                 contract_miss_table=contract_miss_table)
+                 contract_miss_table=contract_miss_table, outage_box=outage_box)
     return table, stats
 
 
@@ -458,8 +492,8 @@ for _n in range((date(2026, 4, 2) - date(2026, 3, 19)).days + 1):
 trr_per_day = parse_daily(trr_rows)
 cobc_per_day = parse_daily(cobc_rows)
 
-trr_table, trr_stats = build_daily_table(trr_per_day, "daily")
-cobc_table, cobc_stats = build_daily_table(cobc_per_day, "daily")
+trr_table, trr_stats = build_daily_table(trr_per_day, "TRR")
+cobc_table, cobc_stats = build_daily_table(cobc_per_day, "COBC", outages=COBC_OUTAGES)
 abii_html = build_abii_table(abii_rows, dialysis_last)
 
 # Contract lifecycle callout (offboarding / newly added) across TRR + COBC.
@@ -485,6 +519,8 @@ td.num { text-align: center; font-variant-numeric: tabular-nums; }
 .missing { background: #fde4e4; color: #a40000; font-weight: bold; }
 .pending { background: #eef1f6; color: #667; font-style: italic; }
 .holidaycell { background: #f0e4ff; color: #5b2c8c; font-style: italic; }
+.outageday { background: #fff8e1; color: #7a5c00; font-style: italic; }
+.outage { background: #fff8e1; border: 2px solid #e0a800; padding: 8px 12px; margin: 12px 0; color: #6b4e00; }
 .satday { background: #fff8e1; font-style: italic; }
 .holiday { background: #f0e4ff !important; font-weight: bold; }
 tr.monthsep td { background: #305f9c; height: 4px; padding: 0; border: none; }
@@ -507,6 +543,7 @@ def section(title, table, stats):
 <code>{', '.join(stats['contracts']) or '(none seen)'}</code><br>
 <b>{stats['total_files']}</b> files across <b>{stats['days']}</b> Mon-Sat days;
 <b>{stats['days_missing']}</b> days missing one or more expected contracts.</p>
+{stats.get('outage_box', '')}
 <h4 style='margin-top:14px'>Missing deliveries by contract</h4>
 {stats['contract_miss_table']}
 <h4 style='margin-top:14px'>Daily delivery calendar</h4>
