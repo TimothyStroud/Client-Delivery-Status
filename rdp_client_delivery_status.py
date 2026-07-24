@@ -555,10 +555,11 @@ MANUAL_OVERRIDES = {
     ("WellCareRx",    date(2026, 6, 12)): date(2026, 6, 24),
     ("WellCareRx",    date(2026, 6, 19)): date(2026, 6, 24),
     ("WellCareRx",    date(2026, 6, 26)): date(2026, 6, 24),
-    # 2026-07-21: the current WellCareRx load is a Reload, not the normal Friday
-    # delivery (per user). Show this Friday's cell as pending "No Data"; the
-    # reload appears on its own "WellCareRx (Reload)" row (ADDITIONAL_ENTRIES).
-    ("WellCareRx",    date(2026, 7, 24)): "No Data",
+    # 2026-07-24: the WellCareRx Reload CERTIFIED 2026-07-22 (DHT WellCareRx
+    # [mining].[RxClaim], StatTimestamp 7/22 10:13, CertTimestamp 7/22 14:24).
+    # Per user the reload has cleared, so the 7/21 "No Data" pin + the separate
+    # "(Reload)" ADDITIONAL_ENTRIES row were REMOVED — the 7/22 cert now
+    # auto-lands on the normal Friday 7/24 cell via the StatTimestamp week.
     # 2026-06-24: CenteneRx/OscarRx 6/22 certs land on the 6/19 cell
     # automatically via the StatTimestamp system. The 6/26 blank overrides were
     # REMOVED 2026-06-24 — OscarRx & CenteneRx are now LOADING their 6/26
@@ -827,10 +828,9 @@ ADDITIONAL_ENTRIES = [
     # 7/6 Elig activity was June's, not July's). Show it as a labeled ✓ row so
     # the late delivery is recorded; July's own row sits on 7/24 (No Data).
     ("monthly", date(2026, 7, 6), "BCBSFL Elig (June)", "✓", False, None),
-    # 2026-07-21: WellCareRx current load is a Reload, NOT the normal Friday
-    # delivery (per user). Surface it as its own labeled "L" row; the normal
-    # 7/24 Friday cell is separately forced to "No Data" (MANUAL_OVERRIDES).
-    ("weekly", date(2026, 7, 24), "WellCareRx (Reload)", "L", False, None),
+    # 2026-07-24: WellCareRx Reload CERTIFIED 7/22 (see MANUAL_OVERRIDES note).
+    # The separate "(Reload)" L row was removed — the normal WellCareRx Friday
+    # 7/24 cell now shows the 7/22 cert automatically.
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
