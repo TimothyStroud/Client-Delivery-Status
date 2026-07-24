@@ -477,6 +477,7 @@ td.num { text-align: center; font-variant-numeric: tabular-nums; }
 .ok { background: #d9f4d9; }
 .missing { background: #fde4e4; color: #a40000; font-weight: bold; }
 .pending { background: #eef1f6; color: #667; font-style: italic; }
+.holidaycell { background: #f0e4ff; color: #5b2c8c; font-style: italic; }
 .satday { background: #fff8e1; font-style: italic; }
 .holiday { background: #f0e4ff !important; font-weight: bold; }
 tr.monthsep td { background: #305f9c; height: 4px; padding: 0; border: none; }
@@ -499,6 +500,9 @@ def section(title, table, stats):
 <code>{', '.join(stats['contracts']) or '(none seen)'}</code><br>
 <b>{stats['total_files']}</b> files across <b>{stats['days']}</b> Mon-Sat days;
 <b>{stats['days_missing']}</b> days missing one or more expected contracts.</p>
+<h4 style='margin-top:14px'>Missing deliveries by contract</h4>
+{stats['contract_miss_table']}
+<h4 style='margin-top:14px'>Daily delivery calendar</h4>
 {table}"""
 
 
@@ -523,8 +527,11 @@ Saturdays cream, holidays purple. First draft &mdash; reply with any layout / ex
 </body></html>"""
 
 subject = f"CareFirstRx — ABII, COBC & TRR delivery check {YEAR} (through {today:%Y-%m-%d})"
-result = send(to=EMAIL_TO, subject=subject, body=html, from_address=EMAIL_FROM)
-print(f"[send] to={EMAIL_TO} from={EMAIL_FROM} -> {result}")
+if DRY_RUN:
+    print(f"[dry-run] skipping send to {EMAIL_TO}")
+else:
+    result = send(to=EMAIL_TO, subject=subject, body=html, from_address=EMAIL_FROM)
+    print(f"[send] to={EMAIL_TO} from={EMAIL_FROM} -> {result}")
 print(f"[TRR]  contracts={trr_stats['contracts']} files={trr_stats['total_files']}")
 print(f"[COBC] contracts={cobc_stats['contracts']} files={cobc_stats['total_files']}")
 print(f"[ABII] rows_pulled={len(abii_rows)}")

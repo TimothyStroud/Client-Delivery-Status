@@ -221,6 +221,7 @@ def build_year_section(year, present, unexpected):
   <p style="color:#555;margin:0 0 14px 0;">{summary}</p>
   <p style="font-weight:700;color:#c0392b;margin:0 0 6px 0;">Dates with missing contracts ({len(dates_with_missing)}):</p>
   {missing_table}
+  {bycontract_table}
   {complete_section}
   {no_file_section}
   {unexpected_section}
@@ -259,6 +260,9 @@ def main():
 {''.join(sections)}
 </body></html>
 """
+    if DRY_RUN:
+        print('[dry-run] REPORT_DRYRUN=1 set — report built and verified, email NOT sent.')
+        return
     print(f'Sending to {TO}...')
     result = send_via_outlook.send(TO, SUBJECT, html, from_address=FROM)
     print(f'Result: {result}')
