@@ -20,6 +20,13 @@ EXPECTED = sorted([
 ])
 EXPECTED_SET = set(EXPECTED)
 
+# One-week reporting delay (per user 2026-07-24): dates within the last 7 days are
+# NOT flagged as missing contracts or as Mon-Sat no-file gaps — upstream delivery
+# delays otherwise cause false positives ("current week" confusion). Dates
+# on/before the cutoff assess normally. (Only affects recent 2026 dates.)
+MISSING_DELAY_DAYS = 7
+_missing_cutoff = date.today() - timedelta(days=MISSING_DELAY_DAYS)
+
 QUERIES = {
     '2025': "SET NOCOUNT ON; SELECT [FileName] FROM [WellcareRx].[etl].[tape] T (nolock) JOIN [WellcareRx].[config].[Table] F (nolock) ON t.TableID = f.TableID WHERE f.[TableName] in ('TRR') and [FileName] like '%D25%'",
     '2026': "SET NOCOUNT ON; SELECT [FileName] FROM [WellcareRx].[etl].[tape] T (nolock) JOIN [WellcareRx].[config].[Table] F (nolock) ON t.TableID = f.TableID WHERE f.[TableName] in ('TRR') and [FileName] like '%D26%'",
@@ -80,7 +87,10 @@ def build_year_section(year, present, unexpected):
                   'background:#2c5f8a;padding:8px 14px;margin:28px 0 0 0;border-radius:4px 4px 0 0;')
 
     all_dates = sorted(present.keys())
-    dates_with_missing = [(d, EXPECTED_SET - present[d]) for d in all_dates if EXPECTED_SET - present[d]]
+    # One-week delay: exclude dates within the last 7 days from the missing table.
+    dates_with_missing = [(d, EXPECTED_SET - present[d]) for d in all_dates
+                          if (EXPECTED_SET - present[d])
+                          and yymmdd_to_date(d) and yymmdd_to_date(d) <= _missing_cutoff]
     dates_complete     = [d for d in all_dates if not (EXPECTED_SET - present[d])]
 
     # --- Missing contracts table ---
@@ -114,7 +124,8 @@ def build_year_section(year, present, unexpected):
     # --- No-file dates (Mon-Sat gaps) ---
     all_mon_sat     = mon_sat_dates(year, all_dates)
     present_as_date = {yymmdd_to_date(d) for d in all_dates}
-    no_file_dates   = [d for d in all_mon_sat if d not in present_as_date]
+    # One-week delay: exclude Mon-Sat gaps within the last 7 days.
+    no_file_dates   = [d for d in all_mon_sat if d not in present_as_date and d <= _missing_cutoff]
 
     if no_file_dates:
         gap_badge = ('background:#f3e5f5;color:#6a1b9a;padding:2px 6px;border-radius:3px;'
@@ -178,6 +189,11 @@ def main():
   <strong>WellcareRx TRR — Missing Contracts &amp; Gap Report</strong>
   &nbsp;&nbsp;<span style="color:#555;">as of {datetime.now().strftime('%Y-%m-%d %H:%M')}</span>
   &nbsp;&nbsp;|&nbsp;&nbsp;Expecting {len(EXPECTED)} contracts per date
+</p>
+<p style="color:#556;font-size:11px;margin:0 0 8px 0;">
+  <strong>One-week reporting delay:</strong> dates within the last 7 days
+  (after {_missing_cutoff.strftime('%Y-%m-%d')}) are excluded from the missing-contracts
+  and no-file-gap lists (upstream delivery delays would otherwise flag false gaps).
 </p>
 {''.join(sections)}
 </body></html>
