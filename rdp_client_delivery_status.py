@@ -372,7 +372,14 @@ WEEKLY_CLIENTS = {
 # ESIPBMRx (monthly, tape/snap-driven) added 2026-07-15 per user: mark Inactive
 # until loading resumes ("can go to 'L' once loading starts again").
 # Tufts_Audit_CIT (weekly Mon) added 2026-07-17 per user: mark Inactive.
-FORCED_INACTIVE = {"Tufts_PublicPlan", "TuftsRx", "HealthNetCA", "ESIPBMRx",
+# Tufts_PublicPlan REACTIVATED 2026-07-27 per user — "Active again. All missing
+# months through this month will be certified on the next ticket (today)." Removed
+# from FORCED_INACTIVE so its DHT cert dates render on every month tab as the
+# catch-up ticket certifies. Also added to AUTO_INACTIVE_EXCLUDE below (same as
+# CareFirstRx) so, if its 0100/0110 RAMP jobs are still disabled, the auto-inactive
+# sweep doesn't short-circuit determine_monthly() before the cert lookup. Its
+# STAGE_FILE_CELL_CLIENTS wiring provides the ✓ fallback when a month has no cert.
+FORCED_INACTIVE = {"TuftsRx", "HealthNetCA", "ESIPBMRx",
                    "Tufts_Audit_CIT"}
 
 # Clients whose load is running but snap step is disabled in RAMP — show
@@ -2941,7 +2948,10 @@ def auto_inactive_from_ramp(jobs):
 # longer Inactive and was certified today." With it excluded, the cert wins
 # naturally; if a future month has no cert + no enabled jobs, has_inactive_jobs
 # still surfaces "Inactive" correctly.
-AUTO_INACTIVE_EXCLUDE = {"CareFirstRx"}
+# Tufts_PublicPlan added 2026-07-27: reactivated per user, being certified via a
+# catch-up ticket. If its load jobs are still disabled in RAMP, keep it out of the
+# auto-inactive sweep so the cert wins (same rationale as CareFirstRx).
+AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan"}
 
 
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
