@@ -218,6 +218,10 @@ def _sp_help_job(server, name):
 # superseded by the live SSISDB final-stage ETA once the run is ~90% done.
 
 
+HISTORY_N = 30          # runs in the ETA history window (~6 weeks of daily loads)
+LONG_RUN_FACTOR = 1.15  # once past all history, project 15% more run time to go
+
+
 def _recent_full_durations(server, name, n=8):
     """Durations (seconds) of the last n SUCCESSFUL full runs (step_id=0)."""
     q = ("SET NOCOUNT ON; "
@@ -281,6 +285,13 @@ def _eta_stamp(dt):
     if dt.date() == datetime.now().date():
         return dt.strftime('%I:%M %p').lstrip('0')
     return dt.strftime('%m/%d %I:%M %p').lstrip('0')
+
+
+def _ceil_15(dt):
+    """Round up to the next 15-minute mark (extrapolated ETAs are not precise to
+    the minute, so don't present them that way)."""
+    dt = dt.replace(second=0, microsecond=0)
+    return dt + timedelta(minutes=(-dt.minute) % 15 or 15)
 
 
 # ---- Live final-stage signal from SSISDB (per user 2026-07-23) ----------------
@@ -377,30 +388,55 @@ def _ssis_final_stage_eta():
 
 
 def eta_detail(server, name):
-    """Single expected-completion ETA for the in-flight run (mirrors HRP). If the
-    SSIS package has reached its stable late milestone, show the tighter live
-    'final stage' ETA (milestone_end + median tail); otherwise anchor to the live
-    run START + MEDIAN (p50) of recent successful full-run durations, bumping
-    median->p75->'running longer than usual' as the run outlasts history. Degrades
-    to 'now + median' if the live run start can't be read."""
+    """Single expected-completion ETA for the in-flight run. An ETA is ALWAYS
+    given while the job is executing (per user 2026-07-27) -- see the long-run
+    handling below.
+
+    Order of preference:
+      1. SSIS live 'final stage' ETA (milestone_end + median tail) once the package
+         passes its stable late milestone -- the tightest signal available.
+      2. CONDITIONAL (survival) median, replacing the old p50->p75 ladder: anchor to
+         the live run's actual START and take the median of only those historical
+         durations still POSSIBLE (>= elapsed). Runs shorter than we've already been
+         running are ruled out, so the ETA climbs step-wise as each shorter outcome
+         is eliminated and converges on the real finish. Same approach as HRP.
+      3. Past EVERY run in the history window: extrapolate from the run itself
+         (elapsed * LONG_RUN_FACTOR, rounded up to the next 15 min) instead of
+         dropping the ETA. This is where the old code gave up and posted only
+         'running Xh - longer than usual, still processing' with no time at all.
+
+    The window is HISTORY_N runs rather than 8: this load is bimodal (~2h to ~18h),
+    so the extra tail samples let the estimate step out gradually instead of jumping
+    straight to the slowest run on record. Degrades to 'now + median' if the live
+    run start can't be read."""
     fs = _ssis_final_stage_eta()
     if fs:
         if fs > datetime.now():
             return [f"{EXEC_ICON} final stage - ETA ~{_eta_stamp(fs)}"]
         return [f"{EXEC_ICON} final stage - wrapping up"]
-    durs = sorted(_recent_full_durations(server, name))
+    now = datetime.now()
+    durs = sorted(_recent_full_durations(server, name, HISTORY_N))
     if not durs:
         return [f"{EXEC_ICON} in progress"]
-    est, hi = _pct(durs, 50), _pct(durs, 75)
     start = _current_run_start(server, name)
     if not start:
-        eta = datetime.now() + timedelta(seconds=est)
+        eta = now + timedelta(seconds=_pct(durs, 50))
         return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
-    elapsed = (datetime.now() - start).total_seconds()
-    if elapsed > hi:
-        return [f"{EXEC_ICON} running {_dur_h(elapsed)} - longer than usual, still processing"]
-    eta = start + timedelta(seconds=(est if elapsed < est else hi))
-    return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
+    elapsed = (now - start).total_seconds()
+    still_possible = [d for d in durs if d >= elapsed]
+    if still_possible:
+        eta, beyond_history = start + timedelta(seconds=_pct(still_possible, 50)), False
+    else:
+        eta, beyond_history = _ceil_15(start + timedelta(seconds=elapsed * LONG_RUN_FACTOR)), True
+    # Never show a clock time that is already here/past -- keep a little lead time.
+    if eta < now + timedelta(minutes=10):
+        eta = _ceil_15(now + timedelta(minutes=10))
+    line = f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"
+    if beyond_history:
+        return [f"{line} - running {_dur_h(elapsed)}, past every recent run"]
+    if elapsed > _pct(durs, 75):
+        return [f"{line} - running {_dur_h(elapsed)}, longer than usual"]
+    return [line]
 
 
 def last_completion(server, name):
