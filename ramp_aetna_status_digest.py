@@ -292,6 +292,43 @@ def _pct(sorted_vals, p):
     return sorted_vals[k - 1]
 
 
+NOTE_ICON = ':information_source:'   # neutral on purpose -- a long run is NOT a failure,
+                                     # so this never uses the red/failure marker (per user
+                                     # 2026-07-27).
+
+
+def _why_longer(durs, beyond_history, projected=False):
+    """One-line, HISTORY-DERIVED explanation of why the ETA moved out (per user
+    2026-07-27: "a small note about why the ETA is longer"). Every number in it
+    comes from this job's OWN recent successful runs -- fastest, slowest, typical,
+    and where the live run sits against them -- so nothing is hardcoded and it
+    can't go stale as the load's profile changes. Kept identical across the three
+    Aetna digests (they're standalone clones, no shared module).
+
+    `projected` says whether the caller is still showing a clock ETA extrapolated
+    from elapsed time (Rx) or has no ETA left to show (HRP/RCE), so the wording
+    matches what's actually on the line above."""
+    if not durs:
+        return []
+    lo, hi, typical, n = durs[0], durs[-1], _pct(durs, 50), len(durs)
+    if beyond_history:
+        tail = ("so the ETA is projected from elapsed time rather than history"
+                if projected else "so recent history no longer bounds the finish")
+        return [f"{NOTE_ICON} why: already past the slowest of the last {n} runs "
+                f"({_dur_h(hi)}), {tail}"]
+    return [f"{NOTE_ICON} why: this load's run time varies (last {n}: {_dur_h(lo)}-{_dur_h(hi)}, "
+            f"typically {_dur_h(typical)}); we are past the typical, so the ETA now reflects "
+            f"only the slower run times still possible"]
+
+
+def _why_step_longer(sid, avg_secs):
+    """Step-path variant (RCE only): this job reports real per-step progress, so
+    when the ETA is pushed out it's because the CURRENT step has outlived its
+    historical average -- say that, with the average from history."""
+    return [f"{NOTE_ICON} why: step {sid} has already run past its usual "
+            f"{_dur_h(avg_secs)}, so the ETA now covers only the steps left after it"]
+
+
 def _dur_h(sec):
     """Compact elapsed: 'Xh YYm' / 'Xh' / 'Ym'."""
     m = int(round(sec / 60.0))
@@ -324,11 +361,16 @@ def eta_detail(server, name):
         rem_incl = sum(v for s, v in hist.items() if s >= sid)   # current + later steps
         rem_after = sum(v for s, v in hist.items() if s > sid)   # later steps only
         eta = step_start + timedelta(seconds=rem_incl)
+        overran = False
         if eta <= now:                       # current step already overran its average
             eta = now + timedelta(seconds=rem_after)
+            overran = True
         if eta <= now:                       # on/after the last step -> essentially done
             return [f"{EXEC_ICON} final stage - wrapping up"]
-        return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
+        line = [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
+        if overran:
+            line += _why_step_longer(sid, hist.get(sid, 0))
+        return line
     # Fallback: anchored full-run median (mirrors HRP/Rx).
     durs = sorted(_recent_full_durations(server, name))
     if not durs:
@@ -338,9 +380,13 @@ def eta_detail(server, name):
         return [f"{EXEC_ICON} ETA ~{_eta_stamp(now + timedelta(seconds=est))}"]
     elapsed = (now - start).total_seconds()
     if elapsed > hi:
-        return [f"{EXEC_ICON} running {_dur_h(elapsed)} - longer than usual, still processing"]
+        return ([f"{EXEC_ICON} running {_dur_h(elapsed)} - longer than usual, still processing"]
+                + _why_longer(durs, True))
     eta = start + timedelta(seconds=(est if elapsed < est else hi))
-    return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
+    line = [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
+    if elapsed > est:
+        return line + _why_longer(durs, False)
+    return line
 
 
 def last_completion(server, name):

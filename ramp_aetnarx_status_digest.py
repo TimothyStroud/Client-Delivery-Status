@@ -287,6 +287,34 @@ def _eta_stamp(dt):
     return dt.strftime('%m/%d %I:%M %p').lstrip('0')
 
 
+NOTE_ICON = ':information_source:'   # neutral on purpose -- a long run is NOT a failure,
+                                     # so this never uses the red/failure marker (per user
+                                     # 2026-07-27).
+
+
+def _why_longer(durs, beyond_history, projected=False):
+    """One-line, HISTORY-DERIVED explanation of why the ETA moved out (per user
+    2026-07-27: "a small note about why the ETA is longer"). Every number in it
+    comes from this job's OWN recent successful runs -- fastest, slowest, typical,
+    and where the live run sits against them -- so nothing is hardcoded and it
+    can't go stale as the load's profile changes.
+
+    `projected` says whether the caller is still showing a clock ETA extrapolated
+    from elapsed time (Rx) or has no ETA left to show (HRP/RCE), so the wording
+    matches what's actually on the line above."""
+    if not durs:
+        return []
+    lo, hi, typical, n = durs[0], durs[-1], _pct(durs, 50), len(durs)
+    if beyond_history:
+        tail = ("so the ETA is projected from elapsed time rather than history"
+                if projected else "so recent history no longer bounds the finish")
+        return [f"{NOTE_ICON} why: already past the slowest of the last {n} runs "
+                f"({_dur_h(hi)}), {tail}"]
+    return [f"{NOTE_ICON} why: this load's run time varies (last {n}: {_dur_h(lo)}-{_dur_h(hi)}, "
+            f"typically {_dur_h(typical)}); we are past the typical, so the ETA now reflects "
+            f"only the slower run times still possible"]
+
+
 def _ceil_15(dt):
     """Round up to the next 15-minute mark (extrapolated ETAs are not precise to
     the minute, so don't present them that way)."""
@@ -433,9 +461,11 @@ def eta_detail(server, name):
         eta = _ceil_15(now + timedelta(minutes=10))
     line = f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"
     if beyond_history:
-        return [f"{line} - running {_dur_h(elapsed)}, past every recent run"]
+        return ([f"{line} - running {_dur_h(elapsed)}, past every recent run"]
+                + _why_longer(durs, True, projected=True))
     if elapsed > _pct(durs, 75):
-        return [f"{line} - running {_dur_h(elapsed)}, longer than usual"]
+        return ([f"{line} - running {_dur_h(elapsed)}, longer than usual"]
+                + _why_longer(durs, False))
     return [line]
 
 
