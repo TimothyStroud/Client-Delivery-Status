@@ -389,8 +389,12 @@ WEEKLY_CLIENTS = {
 # carry today's CertTimestamp — so the auto cert lookup would only place July.
 # May/June/July monthly cells are therefore pinned to the 7/28 cert date via
 # MONTHLY_MONTH_MARKER_OVERRIDES (a real per-month DHT cert still auto-wins).
-FORCED_INACTIVE = {"HealthNetCA", "ESIPBMRx",
-                   "Tufts_Audit_CIT"}
+# 2026-07-28 per user: "the only clients still Inactive are HealthNetCA &
+# MedicalMutualMHS." ESIPBMRx + Tufts_Audit_CIT REACTIVATED (removed here + added
+# to AUTO_INACTIVE_EXCLUDE so the RAMP auto-sweep can't re-flag them) — they now
+# render real cert/snap history. MedicalMutualMHS ADDED (monthly stage-file client
+# not yet delivering) → shows "Inactive".
+FORCED_INACTIVE = {"HealthNetCA", "MedicalMutualMHS"}
 
 # Clients whose load is running but snap step is disabled in RAMP — show
 # marker "Snap" with pink shading on the expected delivery day. Mechanism kept
@@ -1695,6 +1699,28 @@ def latest_cert(client, cert_idx, on_or_before=None):
     return best
 
 
+def latest_cert_in_month(client, cert_idx, year, month, on_or_before=None):
+    """Latest Certified datetime whose CertTimestamp falls in (year, month).
+    Unlike latest_cert (which returns the single GLOBAL-latest cert), this finds
+    the cert that belongs to a SPECIFIC month — so a past month tab surfaces its
+    OWN cert even when the client has certified again in a later month. Without
+    this, determine_monthly's `latest_cert(...).month == month` check only ever
+    matched the client's most-recent month, leaving every earlier month "No Data".
+    """
+    best = None
+    for key in _keys_for_client(client):
+        for dt, status in cert_idx.get(key, ()):
+            if status != "Certified":
+                continue
+            if dt.year != year or dt.month != month:
+                continue
+            if on_or_before and dt.date() > on_or_before:
+                continue
+            if best is None or dt > best:
+                best = dt
+    return best
+
+
 def _keys_for_client(client):
     # Always yield the base normalize(client) so cert/snap lookups still
     # find the natural DHT/RAMP key even when CLIENT_PRIMARY_KEY_OVERRIDE
@@ -1824,10 +1850,18 @@ def fetch_ramp_queue():
     return rows
 
 
-def fetch_ramp_snaps():
+def fetch_ramp_snaps(since=None):
+    """Snap completions from the RAMP SnapQueueStatus endpoint (full payload),
+    trimmed by End date. `since` (a date) sets the cutoff so the report can
+    reach back far enough to fill past-month cells — the report renders every
+    computed month in one run, and snap-driven ✓ marks for e.g. May are lost if
+    the window only reaches ~60 days. Defaults to the last 60 days when `since`
+    is not supplied. The HTTP payload is the same either way (the endpoint has no
+    date filter) — a wider `since` just keeps more rows in the snap index."""
     data = curl_json(f"{RAMP_BASE}/api/Ramp/Snap/SnapQueueStatus").get("Data", [[]])
     rows = data[0] if data and isinstance(data[0], list) else data
-    cutoff = datetime.now() - timedelta(days=60)
+    cutoff = (datetime.combine(since, datetime.min.time()) if since
+              else datetime.now() - timedelta(days=60))
     out = []
     for s in rows:
         end = parse_dt(s.get("End"))
@@ -2993,7 +3027,12 @@ def auto_inactive_from_ramp(jobs):
 # auto-inactive sweep so the cert wins (same rationale as CareFirstRx).
 # TuftsRx added 2026-07-28: reactivated per user (catch-up cert today). Same
 # rationale — keep it out of the auto-inactive sweep so the monthly cert/pin wins.
-AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan", "TuftsRx"}
+# ESIPBMRx + Tufts_Audit_CIT added 2026-07-28: reactivated per user ("only
+# HealthNetCA & MedicalMutualMHS still Inactive") — keep them out of the sweep so
+# a still-disabled RAMP job can't re-flag them Inactive; their real cert/snap
+# history renders instead.
+AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan", "TuftsRx",
+                        "ESIPBMRx", "Tufts_Audit_CIT"}
 
 
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
@@ -3700,12 +3739,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 expected_date = date(year, month, calendar.monthrange(year, month)[1])
             expected_date = _apply_weekday_spread(expected_date, client)
 
-        # 1) Already certified this month → place on actual cert date
-        c_latest = latest_cert(client, cert_idx, on_or_before=today)
-        if c_latest and c_latest.year == year and c_latest.month == month:
-            d = c_latest.date()
+        # 1) Certified in THIS month → place on that month's actual cert date.
+        # Per-month lookup (NOT the global latest_cert) so a PAST month surfaces
+        # its OWN cert even after the client certified again in a later month —
+        # otherwise every month but the client's most-recent one showed "No Data".
+        c_month = latest_cert_in_month(client, cert_idx, year, month, on_or_before=today)
+        if c_month:
+            d = c_month.date()
             d = next_monday_if_weekend(d) if d.weekday() >= 5 else d
-            return d, c_latest.date()
+            return d, c_month.date()
 
         # 1-stage) Monthly stage-file clients (Tufts_PublicPlan, MedicalMutualMHS):
         # ✓ FALLBACK on the expected day of the data-through MONTH, driven by the
@@ -5453,7 +5495,13 @@ def main():
 
     print("[info] Fetching RAMP queue + snap history…")
     queue = fetch_ramp_queue()
-    snaps = fetch_ramp_snaps()
+    # Snaps: reach back to the first COMPUTED month (months 1..N are frozen
+    # xlsx snapshots that never consult live snaps) so past-month tabs get their
+    # snap-driven ✓ marks. Falls back to the default 60-day window otherwise.
+    first_computed_month = (max(EXPECTED_DATES_FILES) + 1) if year == 2026 else 1
+    snap_since = (date(year, first_computed_month, 1)
+                  if 1 <= first_computed_month <= 12 else None)
+    snaps = fetch_ramp_snaps(since=snap_since)
     print(f"[info]   queue={len(queue)}, snaps={len(snaps)}")
 
     print("[info] Fetching tape loads…")
