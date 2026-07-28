@@ -565,6 +565,14 @@ MANUAL_OVERRIDES = {
     # the regression can't recur. Per user: "Once a client gets certified, do not
     # change the cell to an '!'." Remove once DHT flips 3598 back to Certified.
     ("CignaFacets",   date(2026, 6, 9)): date(2026, 6, 9),
+    # 2026-07-28: BCBSARRx (weekly Tue) certified all four May weeks (5/5, 5/12,
+    # 5/20, 5/26) but the 5/5 cert carries an ANOMALOUS StatTimestamp of 5/22 in
+    # DHT, so cert_in_week piled it onto the 5/18/5/25 weeks and left 5/12 with a
+    # pink "!" and 5/19 showing the wrong 5/26 date. Pin both Tuesday cells to
+    # their real cert dates. (June's 6/8-week "!" is a GENUINE no-cert gap — DHT
+    # jumps 6/1→6/16 — so it is left flagged.)
+    ("BCBSARRx",      date(2026, 5, 12)): date(2026, 5, 12),
+    ("BCBSARRx",      date(2026, 5, 19)): date(2026, 5, 20),
     # WellCare / WellCareRx delivery tracking (updated 2026-06-24):
     #  - WellCare Medical: 6/12 cell certified 6/17; 6/19 cell certified 6/18.
     #  - WellCareRx loaded 6/12+6/19 together and CERTIFIED 6/24 (per user; DHT
@@ -657,11 +665,9 @@ MANUAL_OVERRIDES = {
     # 2026-07-13: BCBSARRx (weekly Tue) — certified today (7/13). Per user, pin
     # last week's Tue 7/7 cell with the 7/13 cert date.
     ("BCBSARRx",      date(2026, 7, 7)):  date(2026, 7, 13),
-    # 2026-07-17: Tufts_Audit_CIT (weekly Mon) → Inactive. Future cells render
-    # Inactive via FORCED_INACTIVE, but this week's Mon 7/13 cell (a past day in
-    # the current week) was showing "L" from active-load detection; pin it to
-    # "Inactive" so the whole client reads Inactive. Per user.
-    ("Tufts_Audit_CIT", date(2026, 7, 13)): "Inactive",
+    # (2026-07-17 Tufts_Audit_CIT 7/13 → "Inactive" override removed 2026-07-28:
+    # Tufts_Audit_CIT reactivated per user — "the only clients still Inactive are
+    # HealthNetCA & MedicalMutualMHS" — so this cell resolves normally again.)
     # 2026-07-17: WebTPA (weekly Fri) certified today (7/17); per user this cert
     # covers BOTH the 7/10 and 7/17 weeks. Pin the 7/17 cert date on each Friday
     # cell (the single cert would otherwise land on only one week).
@@ -1803,12 +1809,21 @@ def fetch_ramp_jobs():
     return curl_json(f"{RAMP_BASE}/api/Ramp/Job/List").get("Data", [[]])[0]
 
 
-def fetch_ramp_queue():
+def fetch_ramp_queue(since=None):
     """Pull RAMP queue from SQL [TRGUTIL10].RAMP.ramp.Queue directly.
     The REST endpoint /api/Ramp/Queue/List caps at 1000 items and SFTP/LogFile
     churn rotates real load entries out within hours. SQL gives full history.
     Returns dicts shaped like the REST response so downstream code is unchanged.
+
+    `since` (a date) sets the CreateDate floor so the report can reach back to
+    the first computed month and populate snap_idx with past-month snap/load
+    completions (e.g. May's 'Kaiser GE 0120 Snap') — these drive the ✓ marks for
+    snap-only monthly clients that the 60/89-day RAMP snap endpoint no longer
+    returns. Defaults to the last 45 days. Old rows are safe: is_loading_today
+    only reads Ready/Running and has_recent_failure ignores anything >3 days old.
     """
+    date_floor = (f"'{since.isoformat()}'" if since
+                  else "DATEADD(day, -45, GETDATE())")
     q = (
         "SET NOCOUNT ON; "
         "SELECT q.QueueId, q.JobId, q.Status, "
@@ -1817,7 +1832,7 @@ def fetch_ramp_queue():
         "       CONVERT(varchar(23), q.CreateDate, 121) AS CreateDate, "
         "       CAST(q.JobXml AS varchar(MAX)) AS JobXml "
         "FROM [RAMP].[ramp].[Queue] q "
-        "WHERE q.CreateDate >= DATEADD(day, -45, GETDATE()) "
+        f"WHERE q.CreateDate >= {date_floor} "
         "ORDER BY q.QueueId DESC"
     )
     SEP = "\x1f"   # ASCII unit separator — unlikely to appear in any XML/data
@@ -3707,9 +3722,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             ov_day, ov_marker = override
             if ov_day.year == year and ov_day.month == month:
                 if ov_marker == "AUTO":
-                    c_latest = latest_cert(client, cert_idx, on_or_before=today)
-                    if c_latest and c_latest.year == year and c_latest.month == month:
-                        return ov_day, c_latest.date()
+                    # Per-month cert (NOT global latest_cert) so a past-month
+                    # AUTO override still surfaces that month's own cert.
+                    c_month = latest_cert_in_month(client, cert_idx, year, month, on_or_before=today)
+                    if c_month:
+                        return ov_day, c_month.date()
                     if is_loading_today(client, ramp_queue, ramp_jobs):
                         return ov_day, "L"
                     if has_recent_failure(client, ramp_queue, ramp_jobs, today):
@@ -5493,14 +5510,16 @@ def main():
               f"{sorted(auto_inactive)}")
         FORCED_INACTIVE.update(auto_inactive)
 
-    print("[info] Fetching RAMP queue + snap history…")
-    queue = fetch_ramp_queue()
-    # Snaps: reach back to the first COMPUTED month (months 1..N are frozen
-    # xlsx snapshots that never consult live snaps) so past-month tabs get their
-    # snap-driven ✓ marks. Falls back to the default 60-day window otherwise.
+    # Reach back to the first COMPUTED month (months 1..N are frozen xlsx
+    # snapshots that never consult live data) so past-month tabs get their
+    # snap/load-driven markers. Both the queue (snap/load completions, esp. for
+    # snap-only monthly clients like Kaiser GE / MMOH whose May snaps have rolled
+    # off the RAMP snap endpoint) and the snap endpoint honor this floor.
     first_computed_month = (max(EXPECTED_DATES_FILES) + 1) if year == 2026 else 1
     snap_since = (date(year, first_computed_month, 1)
                   if 1 <= first_computed_month <= 12 else None)
+    print("[info] Fetching RAMP queue + snap history…")
+    queue = fetch_ramp_queue(since=snap_since)
     snaps = fetch_ramp_snaps(since=snap_since)
     print(f"[info]   queue={len(queue)}, snaps={len(snaps)}")
 
@@ -5525,7 +5544,10 @@ def main():
     print(f"[info] snap index dates: {len(snap_idx)}")
 
     print("[info] Querying SQLUtilAudit for Aetna NMSP NonMSP loads…")
-    aetna_nmsp_loads = fetch_aetna_nmsp_loads(since=date(year, month, 1) - timedelta(days=30))
+    # Reach back to the first computed month (not just 30 days) so past-month
+    # tabs get their MMSEA ✓ — e.g. the 5/28 NonMSP import for May.
+    aetna_nmsp_loads = fetch_aetna_nmsp_loads(
+        since=(snap_since or date(year, month, 1) - timedelta(days=30)))
     print(f"[info]   {len(aetna_nmsp_loads)} Aetna NonMSP entries")
 
     print("[info] Checking EverNorthRx claims (ESI_PAID_CLAIMS_*) staged-not-loaded…")
