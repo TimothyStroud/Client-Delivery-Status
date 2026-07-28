@@ -3316,6 +3316,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     stage_delivered = {}
     for sf_client, rows in stage_file_loads.items():
         keys = [k for k in _keys_for_client(sf_client) if k]
+        # require_snap=False (e.g. TuftsRx): a loaded claims file alone is the
+        # delivery signal — the client batch-loaded many weeks at once, so a
+        # per-week snap-within-7-days match can't line up. Default keeps the
+        # snap gate (CVSPBMRx-style: load AND a client snap within 7 days).
+        require_snap = STAGE_FILE_CELL_CLIENTS.get(sf_client, {}).get("require_snap", True)
         sf_snap_dts = sorted(
             e[1] for d in snap_idx for e in snap_idx[d]
             if len(e) > 3 and e[3] == "snap" and _src_matches_client(e[0], keys)
@@ -3325,10 +3330,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             if not f.get("loaded") or not f.get("load_date"):
                 continue
             ld = f["load_date"]
-            snap_dt = next((s for s in sf_snap_dts
-                            if ld <= s <= ld + timedelta(days=7)), None)
-            if snap_dt is None:
-                continue
+            if require_snap:
+                snap_dt = next((s for s in sf_snap_dts
+                                if ld <= s <= ld + timedelta(days=7)), None)
+                if snap_dt is None:
+                    continue
+            else:
+                snap_dt = ld   # load itself is the delivery signal
             cell = f["cell"]
             if cell not in cells or snap_dt > cells[cell]:
                 cells[cell] = snap_dt
@@ -3450,6 +3458,17 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         forced_inactive = client in FORCED_INACTIVE
         if forced_inactive and day >= today:
             return "Inactive"
+        # checkmark_over_cert weekly stage-file clients (TuftsRx): show ✓ for a
+        # delivered file BEFORE the cert lookup, so the monthly cert's per-week
+        # StatTimestamps don't bleed a cert date onto the weekly file cells. The
+        # monthly (determine_monthly) cell still carries the cert date. Per user
+        # 2026-07-28. Only fires on the weekly path (allow_week_window) and only
+        # for cells with a delivered file in stage_delivered.
+        if (allow_week_window
+                and client in STAGE_FILE_CELL_CLIENTS
+                and STAGE_FILE_CELL_CLIENTS[client].get("checkmark_over_cert")
+                and day in stage_delivered.get(client, {})):
+            return "✓"
         # cert on the exact day
         ts = cert_on_day(client, day, cert_idx)
         if ts:
