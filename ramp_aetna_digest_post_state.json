@@ -1,1 +1,1 @@
-{"last_emit": "2026-07-28T08:07:08.272592", "last_msg": "AETNA RCE - STATUS UPDATE\n\nAetna RCE Daily Process - Idle\n\nETL NCStateAetna MasterLoad - Idle"}
+{"last_emit": "2026-07-28T14:07:09.712013", "last_msg": "AETNA RCE - STATUS UPDATE\n\nAetna RCE Daily Process - Idle\n\nETL NCStateAetna MasterLoad Executing Step 1 (Execute Master Load)\n:arrows_counterclockwise: ETA ~2:17 PM\n:information_source: why: this load's run time varies (last 8: 25m-1h 43m, typically 26m); we are past the typical, so the ETA now reflects only the slower run times still possible"}

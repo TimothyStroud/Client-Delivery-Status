@@ -379,7 +379,17 @@ WEEKLY_CLIENTS = {
 # CareFirstRx) so, if its 0100/0110 RAMP jobs are still disabled, the auto-inactive
 # sweep doesn't short-circuit determine_monthly() before the cert lookup. Its
 # STAGE_FILE_CELL_CLIENTS wiring provides the ✓ fallback when a month has no cert.
-FORCED_INACTIVE = {"TuftsRx", "HealthNetCA", "ESIPBMRx",
+# TuftsRx REACTIVATED 2026-07-28 per user — "no longer Inactive; will be certified
+# today for all past Monthly deliveries; checkmarks can be added to the weekly
+# cells." Removed from FORCED_INACTIVE + added to AUTO_INACTIVE_EXCLUDE (same as
+# Tufts_PublicPlan/CareFirstRx). Weekly Monday cells now resolve via the
+# STAGE_FILE_CELL_CLIENTS ✓ fallback (all claims files 2/16–7/27 loaded PS=50).
+# The monthly (10th) cert catch-up was still "Email sent, Ready for Certification
+# review" in DHT at reactivation (not yet Certified) and, once flipped, all rows
+# carry today's CertTimestamp — so the auto cert lookup would only place July.
+# May/June/July monthly cells are therefore pinned to the 7/28 cert date via
+# MONTHLY_MONTH_MARKER_OVERRIDES (a real per-month DHT cert still auto-wins).
+FORCED_INACTIVE = {"HealthNetCA", "ESIPBMRx",
                    "Tufts_Audit_CIT"}
 
 # Clients whose load is running but snap step is disabled in RAMP — show
@@ -531,9 +541,9 @@ MANUAL_OVERRIDES = {
     ("AetnaRx",       date(2026, 6, 3)): "✓",
     # Kaiser_MASTapestry / KaiserSCPareo blank-until-cert overrides cleared
     # 2026-06-04 — both certified, auto-detection now surfaces the date.
-    # 2026-06-04: TuftsRx Mon 6/1 — force back to Inactive. The past-day ✓
-    # came from a stale snap entry that beat the FORCED_INACTIVE fallback.
-    ("TuftsRx",       date(2026, 6, 1)): "Inactive",
+    # (2026-06-04 TuftsRx Mon 6/1 → "Inactive" override removed 2026-07-28 when
+    # TuftsRx was reactivated — the 6/1 claims file loaded, so the weekly cell now
+    # earns its ✓ via the STAGE_FILE_CELL_CLIENTS fallback like the other Mondays.)
     # 2026-06-08: BCBSFL weekly delivery skipped this week (one-off). Show
     # "Skip" on the 6/9/26 Tuesday cell only. Remove after this week.
     ("BCBSFL",        date(2026, 6, 9)): "Skip",
@@ -795,7 +805,9 @@ MONTHLY_PLACEMENT_OVERRIDES = {
 # month so a single client can be forced across SEVERAL months. The marker is
 # placed on the client's normal expected day; a real DHT cert for that month
 # always wins (checked first in determine_monthly), so the marker only shows
-# until the cert lands. Value = marker string ("L", "No Data", "✓", ...).
+# until the cert lands. Value = marker string ("L", "No Data", "✓", ...) OR a
+# date(...) which renders as a pinned cert date (MM/DD/YY, no pink) — used to
+# stamp a same-day catch-up cert onto months the auto lookup can't attribute.
 MONTHLY_MONTH_MARKER_OVERRIDES = {
     # 2026-07-16: ElixirRx data for May, June, and July has loaded and will be
     # certified tomorrow (per user). Show "L" (loaded, awaiting cert) on each
@@ -819,6 +831,18 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     # auto-placement onto 7/6; force "No Data" on July's 25th slot (renders Fri
     # 7/24) until July's own file arrives. Remove after July delivers.
     ("BCBSFLEligibilityLoad", 2026, 7): "No Data",
+    # 2026-07-28: TuftsRx reactivated — all past monthly deliveries certified today
+    # (per user). The DHT catch-up cert was still "Email sent, Ready for
+    # Certification review" at reactivation and, once flipped, every row carries
+    # today's CertTimestamp, so the auto cert lookup would only place July. Pin the
+    # 7/28 cert DATE on May/June/July's expected (10th) cell — a date value renders
+    # as the cert date (MM/DD/YY) with no pink, exactly like a real cert. A real
+    # per-month DHT cert still auto-wins (checked before this override). Remove
+    # these once DHT attributes distinct per-month certs (unlikely — same-day
+    # catch-up), or once these months roll off the report.
+    ("TuftsRx", 2026, 5): date(2026, 7, 28),
+    ("TuftsRx", 2026, 6): date(2026, 7, 28),
+    ("TuftsRx", 2026, 7): date(2026, 7, 28),
 }
 
 # Extra rows injected into the calendar after standard placement runs. Use for
@@ -1301,11 +1325,16 @@ NYSHIP_OVERRIDES = {
     # auto-detection window. One-off; clear after the June 2026 cycle.
     (2026, 6, 1): date(2026, 6, 9),
     (2026, 6, 8): date(2026, 6, 9),
-    # 2026-06-23: the 16th load ran 6/22 (for the 6/16 data) but has NOT
-    # certified yet (DHT NYSHIP_RX still only shows the 6/9 cert), so show "L".
-    # The next load is for the 24th. Swap to the cert date once it certifies.
-    # Per user.
-    (2026, 6, 16): "L",
+    # 2026-06-23: the 16th load ran 6/22 (for the 6/16 data). It has since
+    # certified — DHT NYSHIP_RX cert 6/23 (StatTimestamp 6/22) — so the stale "L"
+    # was swapped to the 6/23 cert date on 2026-07-28.
+    (2026, 6, 16): date(2026, 6, 23),
+    # 2026-07-28: the July 24th delivery has loaded and certified (per user).
+    # DHT NYSHIP_RX cert 7/28 (StatTimestamp 7/27). The 7/24 cell sits in the
+    # week of Mon 7/20, but the cert's StatTimestamp week is 7/27, so the normal
+    # cert_in_week auto-detection can't attribute it — the cell was showing "!".
+    # Pin the 7/28 cert date. (Same out-of-window situation the 1st/8th needed.)
+    (2026, 7, 24): date(2026, 7, 28),
 }
 
 # Suffix conventions per the All Clients tab key:
@@ -2151,6 +2180,17 @@ STAGE_FILE_CELL_CLIENTS = {
         server="TRGETL3", db="TuftsRx", schedule="weekly",
         claim_re=re.compile(r"Point32Health_Rawlings_\d+_(\d{8})_\d+_RXECHF70CL", re.I),
         date_fmt="%Y%m%d",
+        # 2026-07-28 (reactivation): the DHT cert is a MONTHLY milestone whose
+        # StatTimestamps landed across July weeks, so cert_in_week would bleed the
+        # monthly cert date onto the weekly file cells. Per user, the weekly cells
+        # should show a ✓ per delivered file (monthly cell keeps the cert date):
+        #   require_snap=False    → a loaded claims file (PS=50) alone earns the ✓
+        #                           (the catch-up batch-loaded weeks 2/16–7/27 in
+        #                           one pass, so the snap-within-7-days gate can't
+        #                           line up per week).
+        #   checkmark_over_cert   → the weekly-cell ✓ wins over cert_in_week so the
+        #                           monthly cert doesn't overwrite the weekly ✓.
+        require_snap=False, checkmark_over_cert=True,
     ),
     # Stage job 'Oscar Medical 0100 Stage'. Weekly Wednesday. Claims file
     # Oscar_Weekly_Claims_MMDDYYYY_MMDDYYYY.txt — a date RANGE; use the END
@@ -2951,7 +2991,9 @@ def auto_inactive_from_ramp(jobs):
 # Tufts_PublicPlan added 2026-07-27: reactivated per user, being certified via a
 # catch-up ticket. If its load jobs are still disabled in RAMP, keep it out of the
 # auto-inactive sweep so the cert wins (same rationale as CareFirstRx).
-AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan"}
+# TuftsRx added 2026-07-28: reactivated per user (catch-up cert today). Same
+# rationale — keep it out of the auto-inactive sweep so the monthly cert/pin wins.
+AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan", "TuftsRx"}
 
 
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
