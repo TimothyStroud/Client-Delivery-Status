@@ -396,6 +396,19 @@ WEEKLY_CLIENTS = {
 # not yet delivering) → shows "Inactive".
 FORCED_INACTIVE = {"HealthNetCA", "MedicalMutualMHS"}
 
+# Date-gated inactivation: {client: cutoff_date}. Cells on/after the cutoff show
+# "Inactive"; cells BEFORE the cutoff render their normal history (cert dates /
+# ✓ / etc.). Unlike FORCED_INACTIVE (which is always-on for the whole client and
+# only preserves past-day markers before *today*), this pins the exact date a
+# client stopped delivering while keeping the earlier real record intact.
+# TuftsMedPref & Tufts_Audit_CIT (both weekly Mon) → Inactive 7/6/26 forward per
+# user 2026-07-29 (deliveries stopped as of that Monday; earlier weeks keep their
+# history). Takes precedence over the cert lookup in resolve_marker.
+FORCED_INACTIVE_FROM = {
+    "TuftsMedPref":    date(2026, 7, 6),
+    "Tufts_Audit_CIT": date(2026, 7, 6),
+}
+
 # Clients whose load is running but snap step is disabled in RAMP — show
 # marker "Snap" with pink shading on the expected delivery day. Mechanism kept
 # wired for future use; Kaiser_AmbM removed 2026-06-08 (snap re-enabled).
@@ -665,12 +678,9 @@ MANUAL_OVERRIDES = {
     ("AetnaHRP",      date(2026, 7, 7)): "✓",
     ("AetnaHRP",      date(2026, 7, 8)): date(2026, 7, 8),
     ("AetnaHRP",      date(2026, 7, 9)): "✓",
-    # 2026-07-13: TuftsMedPref (weekly Mon) — today's cert (7/13) is for THIS
-    # week's data. Last week's data is still MISSING. Pin the 7/13 cert on this
-    # week's Mon 7/13 cell and flag last week's Mon 7/6 cell "No Data" (pink).
-    # Remove/replace 7/6 once last week's data loads + certifies.
-    ("TuftsMedPref",  date(2026, 7, 13)): date(2026, 7, 13),
-    ("TuftsMedPref",  date(2026, 7, 6)):  "No Data",
+    # 2026-07-29: TuftsMedPref (weekly Mon) → Inactive 7/6/26 forward per user
+    # (deliveries stopped). Handled by FORCED_INACTIVE_FROM now; the old 7/13
+    # cert / 7/6 "No Data" pins were removed so resolve_marker returns "Inactive".
     # 2026-07-13: BCBSAR (Medical, weekly Tue) — today's cert (7/13) covers BOTH
     # last week AND this week. Per user, mark last week's Tue 7/7 and this week's
     # Tue 7/14 cells with the 7/13 cert date.
@@ -701,16 +711,12 @@ MANUAL_OVERRIDES = {
     # prior week's band; this override surfaces it on the current Thu 7/23 cell to
     # match the sibling Kaiser feeds. Remove once next week's cycle certifies.)
     ("Kaiser_NW",     date(2026, 7, 23)): date(2026, 7, 23),
-    # 2026-07-22: HealthNetCA (weekly Mon, FORCED_INACTIVE) was rendering "L" on
-    # this week's Mon 7/20 cell. HealthNetCA is NOT loading — the only live job is
-    # 'Healthnet 0200 Eligibility Stage' (JobId 1809, Ready), i.e. the HealthNet
-    # Elig file staging, which per user "isn't something that needs to be tracked."
-    # is_loading_today already excludes stage jobs, but the weekly snap_in_week
-    # activity path (uncertified cert client -> "L") picks up the Elig staging
-    # activity and beats the FORCED_INACTIVE fallback. Pin the past-day-in-current-
-    # week Mon cell to "Inactive" (same fix as Tufts_Audit_CIT 7/13). Future Mondays
-    # render Inactive automatically via FORCED_INACTIVE.
-    ("HealthNetCA",   date(2026, 7, 20)): "Inactive",
+    # 2026-07-29: HealthNetCA (weekly Mon, FORCED_INACTIVE) is loading again, but
+    # per user all Monday cells must stay Inactive until the data is reviewed for
+    # activate/Snap/Certify. The prior cell-by-cell "L"-suppression pins (e.g.
+    # 7/20) are no longer needed — resolve_marker now returns "Inactive" for any
+    # forced-inactive client on any non-certified cell, so resumed load activity
+    # can't paint "L" on the current-week Monday.
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -3591,6 +3597,14 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
           - "Inactive"     : forced inactive client
           - ""             : nothing yet
         """
+        # Date-gated inactivation (FORCED_INACTIVE_FROM): any cell on/after the
+        # client's cutoff is "Inactive" regardless of cert/load activity; cells
+        # before the cutoff fall through and render their normal history. Checked
+        # first so it outranks the cert lookup. Per user 2026-07-29
+        # (TuftsMedPref & Tufts_Audit_CIT → Inactive 7/6/26 forward).
+        fi_from = FORCED_INACTIVE_FROM.get(client)
+        if fi_from and day >= fi_from:
+            return "Inactive"
         # Forced-inactive clients show "Inactive" only for the current day
         # and future days — past-day cells keep their normal markers so a
         # newly-disabled client doesn't retroactively erase its prior cert
@@ -3620,6 +3634,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             ts = cert_in_week(client, day, cert_idx)
             if ts:
                 return ts.date()
+        # Forced-inactive clients never show a live "L" / "✓" / "Load Failure"
+        # from resumed loading — only a genuine cert date (returned above) or
+        # "Inactive". Per user 2026-07-29: HealthNetCA is loading again, but all
+        # its (Monday) cells must stay Inactive until the data is reviewed for
+        # activate/Snap/Certify. Without this, a current-week past cell would pick
+        # up "L" from the load activity and beat the FORCED_INACTIVE fallback
+        # (previously patched cell-by-cell, e.g. the 7/20 MANUAL_OVERRIDE).
+        if forced_inactive:
+            return "Inactive"
         in_current_week = today_week_start <= day <= today_week_end
 
         # Daily clients: on today's cell, L outranks Failure (active retry
