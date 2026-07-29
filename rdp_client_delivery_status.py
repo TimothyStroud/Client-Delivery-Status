@@ -635,6 +635,20 @@ MANUAL_OVERRIDES = {
     # occasional occurrence per user. Mark the 7/7 Tuesday cell "Empty" (pink,
     # matching the team's ALL_CLIENTS_ALERT_MARKERS convention). Remove next week.
     ("HMSA_Rx",       date(2026, 7, 7)): "Empty",
+    # 2026-07-29: HMSA_Rx (weekly Tue) 7/28 file is EMPTY again (per user). Mark
+    # the 7/28 Tuesday cell "Empty" with NO pink — alert_state returns False for
+    # "Empty". Remove next week.
+    ("HMSA_Rx",       date(2026, 7, 28)): "Empty",
+    # 2026-07-29: AetnaRCE & NCStateAetna (both DAILY, driven by the shared
+    # 'Aetna RCE 310 ETL Load') began loading the 7/28 data TODAY (7/29) → force
+    # "L" on the 7/28 cell (a past-day daily cell wouldn't otherwise show "L").
+    # The 7/29 file is bad and must be RE-SENT by the client, so pin the 7/29 cell
+    # to blank (no "L", no pink) instead of letting is_loading_today paint it "L".
+    # Remove once 7/28 loads/certifies and the 7/29 replacement arrives.
+    ("AetnaRCE",      date(2026, 7, 28)): "L",
+    ("NCStateAetna",  date(2026, 7, 28)): "L",
+    ("AetnaRCE",      date(2026, 7, 29)): "",
+    ("NCStateAetna",  date(2026, 7, 29)): "",
     # 2026-07-09: Oscar (weekly Wed) — was Inactive 7/1 & 7/8. 2026-07-15: per
     # user a backfill certified today (7/15) covering BOTH the 7/1 and 7/8
     # deliveries. 2026-07-17: per user the 7/15 cell certified 7/15 (show the
