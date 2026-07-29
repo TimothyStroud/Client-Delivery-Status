@@ -407,6 +407,9 @@ FORCED_INACTIVE = {"HealthNetCA", "MedicalMutualMHS"}
 FORCED_INACTIVE_FROM = {
     "TuftsMedPref":    date(2026, 7, 6),
     "Tufts_Audit_CIT": date(2026, 7, 6),
+    # Oscar (weekly Wed) → Inactive 7/22/26 forward per user 2026-07-29. Earlier
+    # cells keep their history (incl. the 7/1/7/8/7/15 → 7/15 cert overrides).
+    "Oscar":           date(2026, 7, 22),
 }
 
 # Clients whose load is running but snap step is disabled in RAMP — show
@@ -1251,6 +1254,16 @@ BLANK_BEFORE = {
     # ElevanceMMMRx — only show June 2026 forward (per user 2026-06-16); earlier
     # cells were implementation-phase noise.
     "ElevanceMMMRx": date(2026, 6, 1),
+}
+
+# Clients whose cells ON/AFTER a given date render empty (the standing row is
+# dropped) — the mirror image of BLANK_BEFORE. Earlier history is preserved.
+# Keyed by client → cutoff date; any scheduled day on/after the cutoff is skipped.
+# Per user 2026-07-29: ElevanceMMMRx removed from the report starting 7/13/26 —
+# it should only appear going forward as an AdHoc load (added manually via
+# ADDITIONAL_ENTRIES when one actually arrives).
+BLANK_FROM = {
+    "ElevanceMMMRx": date(2026, 7, 13),
 }
 
 # Clients whose "is delivered" signal is exclusively from TRGETL3 tape loads.
@@ -4141,6 +4154,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             bb = BLANK_BEFORE.get(c)
             if bb and d < bb:
                 continue
+            # Blank-from clients: drop the standing row on/after the cutoff
+            # (e.g. ElevanceMMMRx removed 7/13/26 forward — AdHoc only).
+            bf = BLANK_FROM.get(c)
+            if bf and d >= bf:
+                continue
             place(daily, "daily", c, d)
 
     # KaiserPrePayCOB — placed in the DAILY section (sorted alphabetically with
@@ -4154,12 +4172,16 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         days = WEEKLY_CLIENTS[c]
         impl_start = IMPLEMENTATION_CLIENTS.get(c)
         blank_before = BLANK_BEFORE.get(c)
+        blank_from = BLANK_FROM.get(c)
         for d in all_days:
             if d.strftime("%A") not in days:
                 continue
             # Blank-before clients: render empty (skip the cell) for any day
             # before the cutoff — no marker, no pink "!".
             if blank_before and d < blank_before:
+                continue
+            # Blank-from clients: drop the standing row on/after the cutoff.
+            if blank_from and d >= blank_from:
                 continue
             # Implementation clients are suppressed before their start date.
             if impl_start and d < impl_start:
