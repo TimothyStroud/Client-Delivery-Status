@@ -656,13 +656,14 @@ MANUAL_OVERRIDES = {
     # "Empty". Remove next week.
     ("HMSA_Rx",       date(2026, 7, 28)): "Empty",
     # 2026-07-29: AetnaRCE & NCStateAetna (both DAILY, driven by the shared
-    # 'Aetna RCE 310 ETL Load') began loading the 7/28 data TODAY (7/29) → force
-    # "L" on the 7/28 cell (a past-day daily cell wouldn't otherwise show "L").
-    # The 7/29 file is bad and must be RE-SENT by the client, so pin the 7/29 cell
-    # to blank (no "L", no pink) instead of letting is_loading_today paint it "L".
-    # Remove once 7/28 loads/certifies and the 7/29 replacement arrives.
-    ("AetnaRCE",      date(2026, 7, 28)): "L",
-    ("NCStateAetna",  date(2026, 7, 28)): "L",
+    # 'Aetna RCE 310 ETL Load'). Per user the load FAILURE is for the 7/28/26
+    # load → pin "Load Failure" on the 7/28 cell (both clients). The failure is a
+    # recent one so has_recent_failure would otherwise also pink today's (7/29)
+    # empty cell as a stray "!"; the 7/29 replacement hasn't loaded yet, so pin
+    # 7/29 to an explicit manual blank (an explicit "" override now suppresses the
+    # cell's alert-fill — see place()). Remove once 7/28's re-sent data loads.
+    ("AetnaRCE",      date(2026, 7, 28)): "Load Failure",
+    ("NCStateAetna",  date(2026, 7, 28)): "Load Failure",
     ("AetnaRCE",      date(2026, 7, 29)): "",
     ("NCStateAetna",  date(2026, 7, 29)): "",
     # 2026-07-09: Oscar (weekly Wed) — was Inactive 7/1 & 7/8. 2026-07-15: per
@@ -2238,6 +2239,12 @@ def fetch_cvspbm_adhoc(since):
 # files (RAW_MEMBR_ELIG_GCP_YYYYMMDD) don't match this pattern and are handled as
 # Ad Hoc by fetch_cvspbm_adhoc.
 CVSPBMRX_WEEKLY_RE = re.compile(r"RAW_MEMBR_ELIG_(\d{8})\.txt", re.I)
+# Ad Hoc / GCP backfill filenames carry the same trailing _YYYYMMDD.TXT data
+# date (with an optional GCP_ segment before it), e.g.
+# RAW_MEMBR_ELIG_GCP_20260611.TXT or RAW_MEMBR_ELIG_20260709.TXT. Capture the
+# 8-digit data date so a loaded Ad Hoc ✓ can be attributed to its Monday
+# delivery cell (same rule as the weekly path), not the load-completion date.
+CVSPBMRX_ADHOC_DATE_RE = re.compile(r"_(\d{8})\.txt", re.I)
 
 
 def _cvspbmrx_cell_monday(data_date):
@@ -4053,6 +4060,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         else:  # monthly
             marker = resolve_marker(client, day, allow_checkmark=True, allow_week_window=False)
         alert  = alert_state(client, day, marker)
+        # An explicit manual blank ("") means the team has intentionally emptied
+        # this cell — never pink-shade it (otherwise a live has_recent_failure on
+        # today's cell would repaint it as a stray "!" even though the failure is
+        # already shown on its correct day). Per user 2026-07-29 (AetnaRCE /
+        # NCStateAetna 7/29 re-send cell).
+        if from_manual and marker == "":
+            alert = False
         marker, alert = apply_sticky_cert(client, day, marker, alert, from_manual)
         wk_start = day - timedelta(days=day.weekday())
         wk_end   = wk_start + timedelta(days=4)
@@ -4479,21 +4493,36 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         weekly[placement].append((cig_label, marker, alert, None))
 
     # CVSPBMRx Ad Hoc (backfill) row — one per oversized/out-of-cycle tape file
-    # (FileSize giveaway; see fetch_cvspbm_adhoc). While loading → "L" on today;
-    # once loaded → "✓" on its load date (weekend-shifted). Kept separate from
-    # the regular weekly Monday cells (per user 2026-07-06). Emitted only on the
-    # month tab whose rendered days contain the placement day.
+    # (FileSize giveaway; see fetch_cvspbm_adhoc). While loading → "L" on today
+    # (per user 2026-07-29: "continue to show the Ad Hoc on the current day
+    # during the load"). Once loaded → "✓" attributed to the file's DATA date
+    # Monday delivery cell (parsed from the filename), NOT the load-completion
+    # date — same rule as the regular weekly path (per user 2026-07-29: the
+    # in-flight RAW_MEMBR_ELIG_20260709 Ad Hoc is "the 7/13 load"; 7/9 data →
+    # 7/13 Mon cell). Falls back to the weekend-shifted load date if the filename
+    # has no parseable date. Kept separate from the regular weekly Monday cells
+    # (per user 2026-07-06). Emitted only on the month tab whose rendered days
+    # contain the placement day.
     _cvspbm_ah_seen = set()
     for a in cvspbm_adhoc:
         if a.get("loaded"):
-            ld = a.get("load_date")
-            if not ld:
-                continue
-            cell = ld.date()
-            if cell.weekday() == 5:
-                cell -= timedelta(days=1)
-            elif cell.weekday() == 6:
-                cell += timedelta(days=1)
+            cell = None
+            m_ah = CVSPBMRX_ADHOC_DATE_RE.search(a.get("filename") or "")
+            if m_ah:
+                try:
+                    cell = _cvspbmrx_cell_monday(
+                        datetime.strptime(m_ah.group(1), "%Y%m%d").date())
+                except ValueError:
+                    cell = None
+            if cell is None:
+                ld = a.get("load_date")
+                if not ld:
+                    continue
+                cell = ld.date()
+                if cell.weekday() == 5:
+                    cell -= timedelta(days=1)
+                elif cell.weekday() == 6:
+                    cell += timedelta(days=1)
             mk = "✓"
         else:
             cell = today

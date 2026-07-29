@@ -1,1 +1,1 @@
-{"last_emit": "2026-07-29T10:07:10.799598", "last_msg": "AETNA RCE - STATUS UPDATE\n\nAetna RCE Daily Process Executing Step 2 (SSIS AetnaRCE Daily Process)\n:arrows_counterclockwise: ETA ~8:33 PM\n\nETL NCStateAetna MasterLoad - Idle"}
+{"last_emit": "2026-07-29T12:07:10.192485", "last_msg": "AETNA RCE - STATUS UPDATE\n\nAetna RCE Daily Process\n:x: Failed 07/29/2026 10:57 AM\n\nETL NCStateAetna MasterLoad - Idle"}
