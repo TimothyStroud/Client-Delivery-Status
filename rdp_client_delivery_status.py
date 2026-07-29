@@ -706,10 +706,19 @@ MANUAL_OVERRIDES = {
 # blank / "No Data" pink "!". Per user 2026-06-16: "Once a client gets certified,
 # do not change the cell to an '!'." Live certs always win (a fresh cert date
 # overwrites the remembered one); the cache only fills in when the live lookup
-# would otherwise leave the cell empty. Persisted next to the script as JSON
-# {"client|YYYY-MM-DD": "YYYY-MM-DD"}. Keyed by exact cell day, so it's reliable
-# for fixed-weekday weekly/daily clients (monthly cells, which move to the cert
-# date, are best-effort).
+# would otherwise leave the cell empty.
+#
+# LOCK-IN POLICY (per user 2026-07-28: "once past clients have been certified/
+# Snapped and updated, lock in that information unless told otherwise"): the cache
+# now remembers BOTH cert dates AND "✓" snap marks — the STRONGEST state a cell
+# has ever shown (a cert date outranks a ✓). When a later run regresses a cell to
+# blank/"No Data" (because the source data has aged out of the fetch window), the
+# remembered marker is restored. Manual overrides are the "told otherwise" escape:
+# they are never overwritten by a restore. Two key namespaces in the same JSON:
+#   "client|YYYY-MM-DD"     → day-keyed (weekly/daily/kaiser/NYShip — stable day)
+#   "M|client|YYYY-MM"      → month-keyed "day~marker" (monthly clients, whose
+#                             placement day moves to the cert/snap date, so a
+#                             day key can't be matched on the regressed run)
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CERT_STICKY_PATH = os.path.join(_SCRIPT_DIR, "cert_sticky_cache.json")
 STICKY_CERTS = {}
@@ -733,28 +742,93 @@ def save_sticky_certs():
         print(f"[warn] couldn't write sticky cert cache: {e}")
 
 
-def apply_sticky_cert(client, day, marker, alert, from_manual):
-    """Record live cert dates and restore a remembered cert if the freshly
-    computed cell would regress to a pink "!".
+def _marker_rank(m):
+    """Strength of a positive delivery marker: cert date (2) > "✓" snap (1) >
+    everything else (0). Used so a remembered cert date is never clobbered by a
+    later ✓, and a ✓ is never clobbered by a regression."""
+    if isinstance(m, date):
+        return 2
+    if m == "✓":
+        return 1
+    return 0
 
-    - `marker` is a date (a real cert) → remember it; live cert always wins.
-    - Otherwise, when the marker is NOT a manual-override value and is one of the
-      states that renders "!" (blank or "No Data"), restore a remembered cert
-      date for this (client, day) and clear the alert. Manual overrides (e.g. an
-      intentional blank) are left untouched.
+
+def _stored_rank(s):
+    """Rank of a stored (string) sticky value: "✓" → 1, any other non-empty
+    string is treated as an ISO cert date → 2, empty/missing → 0."""
+    if s == "✓":
+        return 1
+    if isinstance(s, str) and s:
+        return 2
+    return 0
+
+
+def apply_sticky_cert(client, day, marker, alert, from_manual):
+    """Lock in a certified/snapped cell (per user 2026-07-28). Remember the
+    STRONGEST positive marker a cell has shown (cert date > "✓" snap); if a later
+    run regresses the cell to blank/"No Data" because the source data aged out of
+    the fetch window, restore the remembered marker (and clear the "!" alert).
+
+    Manual overrides (`from_manual`) are the "told otherwise" escape: an
+    intentional manual blank/No Data is left alone and never restored over. A
+    live marker that is itself positive always flows through (so a ✓→cert-date
+    upgrade shows), and only bumps the stored value UP in rank (never down).
     """
     key = f"{client}|{day.isoformat()}"
-    if isinstance(marker, date):
-        STICKY_CERTS[key] = marker.isoformat()
+    live_rank = _marker_rank(marker)
+    if live_rank > 0:
+        if live_rank >= _stored_rank(STICKY_CERTS.get(key)):
+            STICKY_CERTS[key] = marker.isoformat() if isinstance(marker, date) else marker
         return marker, alert
     if from_manual:
         return marker, alert
-    if marker in ("", "No Data") and key in STICKY_CERTS:
-        try:
-            return date.fromisoformat(STICKY_CERTS[key]), False
-        except ValueError:
-            pass
+    if marker in ("", "No Data"):
+        stored = STICKY_CERTS.get(key)
+        if stored == "✓":
+            return "✓", False
+        if isinstance(stored, str) and stored:
+            try:
+                return date.fromisoformat(stored), False
+            except ValueError:
+                pass
     return marker, alert
+
+
+def apply_sticky_monthly(client, day, marker, year, month, today, told_otherwise):
+    """Month-keyed lock-in for MONTHLY clients, whose placement day moves to the
+    cert/snap date — so the day-keyed cache can't be matched on the run where the
+    cell regresses (which lands on the expected day instead). Remembers the
+    strongest (day, marker) seen for (client, year, month) and restores it when a
+    later run in the SAME-or-past month regresses to No Data/Inactive.
+
+    `told_otherwise` = a manual monthly override / FORCED_INACTIVE governs this
+    cell → don't restore over it. Returns (day, marker), possibly restored.
+    """
+    mkey = f"M|{client}|{year:04d}-{month:02d}"
+    if _marker_rank(marker) > 0:
+        cur = f"{day.isoformat()}~{marker.isoformat() if isinstance(marker, date) else marker}"
+        prev = STICKY_CERTS.get(mkey, "")
+        prev_marker = prev.split("~", 1)[1] if "~" in prev else ""
+        if _marker_rank_str(marker) >= _stored_rank(prev_marker):
+            STICKY_CERTS[mkey] = cur
+        return day, marker
+    if told_otherwise:
+        return day, marker
+    # Only restore for the current or a past month (never fabricate a future one).
+    if (year, month) <= (today.year, today.month) and mkey in STICKY_CERTS:
+        try:
+            sd, sm = STICKY_CERTS[mkey].split("~", 1)
+            rd = date.fromisoformat(sd)
+            rm = "✓" if sm == "✓" else date.fromisoformat(sm)
+            return rd, rm
+        except (ValueError, KeyError):
+            pass
+    return day, marker
+
+
+def _marker_rank_str(m):
+    """_marker_rank for a value that may be a date or the string "✓"."""
+    return 2 if isinstance(m, date) else (1 if m == "✓" else 0)
 
 
 # ADO ticket IDs to hyperlink onto specific Load-Failure cells. Keyed by
@@ -4097,6 +4171,18 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         if retired and (year, month) >= retired:
             continue
         d, marker = determine_monthly(c)
+        # Lock-in (per user 2026-07-28): remember a certified/snapped monthly cell
+        # and restore it if a later run regresses to No Data after the source data
+        # ages out of the fetch window. "Told otherwise" = a manual override or
+        # FORCED_INACTIVE governs this cell → don't restore over it.
+        told_otherwise = (
+            c in FORCED_INACTIVE
+            or (c, year, month) in MONTHLY_MONTH_MARKER_OVERRIDES
+            or (c in MONTHLY_PLACEMENT_OVERRIDES
+                and MONTHLY_PLACEMENT_OVERRIDES[c][0].year == year
+                and MONTHLY_PLACEMENT_OVERRIDES[c][0].month == month)
+        )
+        d, marker = apply_sticky_monthly(c, d, marker, year, month, today, told_otherwise)
         if d.month != month:
             continue
         place(monthly, "monthly", c, d, marker_override=marker)
