@@ -655,17 +655,20 @@ MANUAL_OVERRIDES = {
     # the 7/28 Tuesday cell "Empty" with NO pink — alert_state returns False for
     # "Empty". Remove next week.
     ("HMSA_Rx",       date(2026, 7, 28)): "Empty",
-    # 2026-07-29: AetnaRCE & NCStateAetna (both DAILY, driven by the shared
-    # 'Aetna RCE 310 ETL Load'). Per user the load FAILURE is for the 7/28/26
-    # load → pin "Load Failure" on the 7/28 cell (both clients). The failure is a
-    # recent one so has_recent_failure would otherwise also pink today's (7/29)
-    # empty cell as a stray "!"; the 7/29 replacement hasn't loaded yet, so pin
-    # 7/29 to an explicit manual blank (an explicit "" override now suppresses the
-    # cell's alert-fill — see place()). Remove once 7/28's re-sent data loads.
-    ("AetnaRCE",      date(2026, 7, 28)): "Load Failure",
-    ("NCStateAetna",  date(2026, 7, 28)): "Load Failure",
+    # 2026-07-30: AetnaRCE & NCStateAetna (both DAILY, driven by the shared
+    # 'Aetna RCE 310 ETL Load'). The 7/28 load FAILED (2026-07-29) and is now
+    # being re-sent — per user the 7/28 re-load is RUNNING now → pin "L" on the
+    # 7/28 cell (both clients). The NEXT load will carry BOTH the 7/29 and 7/30
+    # files, so neither has loaded yet: pin 7/29 AND 7/30 to explicit manual
+    # blanks (an explicit "" override suppresses the cell's alert-fill AND keeps
+    # the currently-running load from painting a stray "L" on today's 7/30 cell —
+    # see place()). Remove once the 7/28 load finishes and the 7/29+7/30 load lands.
+    ("AetnaRCE",      date(2026, 7, 28)): "L",
+    ("NCStateAetna",  date(2026, 7, 28)): "L",
     ("AetnaRCE",      date(2026, 7, 29)): "",
     ("NCStateAetna",  date(2026, 7, 29)): "",
+    ("AetnaRCE",      date(2026, 7, 30)): "",
+    ("NCStateAetna",  date(2026, 7, 30)): "",
     # 2026-07-09: Oscar (weekly Wed) — was Inactive 7/1 & 7/8. 2026-07-15: per
     # user a backfill certified today (7/15) covering BOTH the 7/1 and 7/8
     # deliveries. 2026-07-17: per user the 7/15 cell certified 7/15 (show the
