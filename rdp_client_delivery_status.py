@@ -655,20 +655,24 @@ MANUAL_OVERRIDES = {
     # the 7/28 Tuesday cell "Empty" with NO pink — alert_state returns False for
     # "Empty". Remove next week.
     ("HMSA_Rx",       date(2026, 7, 28)): "Empty",
-    # 2026-07-30: AetnaRCE & NCStateAetna (both DAILY, driven by the shared
-    # 'Aetna RCE 310 ETL Load'). The 7/28 load FAILED (2026-07-29) and is now
-    # being re-sent — per user the 7/28 re-load is RUNNING now → pin "L" on the
-    # 7/28 cell (both clients). The NEXT load will carry BOTH the 7/29 and 7/30
-    # files, so neither has loaded yet: pin 7/29 AND 7/30 to explicit manual
-    # blanks (an explicit "" override suppresses the cell's alert-fill AND keeps
-    # the currently-running load from painting a stray "L" on today's 7/30 cell —
-    # see place()). Remove once the 7/28 load finishes and the 7/29+7/30 load lands.
-    ("AetnaRCE",      date(2026, 7, 28)): "L",
-    ("NCStateAetna",  date(2026, 7, 28)): "L",
-    ("AetnaRCE",      date(2026, 7, 29)): "",
-    ("NCStateAetna",  date(2026, 7, 29)): "",
-    ("AetnaRCE",      date(2026, 7, 30)): "",
-    ("NCStateAetna",  date(2026, 7, 30)): "",
+    # 2026-07-30 (updated PM): AetnaRCE & NCStateAetna (both DAILY, driven by the
+    # shared 'Aetna RCE 310 ETL Load'). The 7/28 re-send SUCCEEDED (RAMP QueueId
+    # 1411504, 7/28 13:38 -> Successful 16:33) → pin "✓" on the 7/28 cell (both
+    # clients). Per user the 7/29 AND 7/30 loads are now in a FAILED status (latest
+    # run QueueId 1413129, 7/30 10:34 -> Failed 13:42); they will RELOAD TOGETHER
+    # when the ETL restarts → pin "Load Failure" on 7/29 AND 7/30 (both clients).
+    # Replace with "✓" once the combined 7/29+7/30 reload lands & snaps.
+    ("AetnaRCE",      date(2026, 7, 28)): "✓",
+    ("NCStateAetna",  date(2026, 7, 28)): "✓",
+    ("AetnaRCE",      date(2026, 7, 29)): "Load Failure",
+    ("NCStateAetna",  date(2026, 7, 29)): "Load Failure",
+    ("AetnaRCE",      date(2026, 7, 30)): "Load Failure",
+    ("NCStateAetna",  date(2026, 7, 30)): "Load Failure",
+    # 2026-07-30: CVSPBMRx (weekly Monday) — per user the 7/27 delivery is complete;
+    # pin "✓" and lock it in on the 7/27 cell. The weekly RAW_MEMBR_ELIG_20260725
+    # file isn't in tape yet (auto cvspbm_delivered can't fire), so this manual ✓
+    # both shows the checkmark and locks the cell against regression.
+    ("CVSPBMRx",      date(2026, 7, 27)): "✓",
     # 2026-07-09: Oscar (weekly Wed) — was Inactive 7/1 & 7/8. 2026-07-15: per
     # user a backfill certified today (7/15) covering BOTH the 7/1 and 7/8
     # deliveries. 2026-07-17: per user the 7/15 cell certified 7/15 (show the
@@ -3527,6 +3531,14 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         - No Data → only shade when today is >7 days past the expected END day
         - Kaiser feeds → shade only when past Friday without cert that week
         """
+        # A real cert date is a successful delivery — NEVER pink-shade it, even
+        # when a stale current-state signal (has_recent_failure /
+        # has_inactive_jobs) would otherwise fire on today's cell. Per user
+        # 2026-07-30: HealthNewEngland certified 7/30 (weekly Thu) but its Thursday
+        # cell rendered pink because a recent load-failure / disabled-job signal
+        # shaded today's cell despite the cert date already showing.
+        if isinstance(marker, date):
+            return False
         # Problem-state markers ALWAYS shade pink, regardless of client class.
         # Per user 2026-05-19: "Kaiser_HI does have a load failure, but is not
         # in pink." The Kaiser-feed branch below previously short-circuited
