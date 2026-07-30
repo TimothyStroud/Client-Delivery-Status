@@ -17,6 +17,10 @@ import json, os, re, subprocess, sys
 from datetime import datetime, timedelta
 
 RCE_JOBID = 2257       # RAMP 'Aetna RCE 310 ETL Load'
+STAGE_JOBID = 2256     # RAMP 'Aetna RCE 300 ETL Stage' - stages the source input files
+                       # (added 2026-07-30 per user: surface the staged AetnaRCE file
+                       #  name + size + created date in the digest, from the same
+                       #  'Related Files' panel the RAMP job view shows).
 SNAP_JOBID = 10053     # RAMP 'Aetna RCE 400 Daily Snap' (added 2026-07-14 per user)
 # Extra RAMP jobs added to the digest's RAMP section per user 2026-07-16.
 DAILY_MINE_JOBID = 10574    # 'Aetna RCE 450 Daily Mine'
@@ -125,6 +129,48 @@ def job_run(jobid):
 def rce_run():
     """LatestJobRun for RAMP 'Aetna RCE 310 ETL Load' (2257)."""
     return job_run(RCE_JOBID)
+
+
+def _human_size(nbytes):
+    """Bytes -> RAMP-style size string (up to 2 decimals, trailing zeros trimmed):
+    24211885338 -> '22.55 GB', 21149145658 -> '19.7 GB' (matches the RAMP UI)."""
+    try:
+        n = float(nbytes)
+    except (TypeError, ValueError):
+        return "?"
+    for unit in ('bytes', 'KB', 'MB', 'GB', 'TB'):
+        if n < 1024 or unit == 'TB':
+            s = f"{n:.2f}".rstrip('0').rstrip('.')
+            return f"{s} {unit}"
+        n /= 1024.0
+
+
+def _created(iso):
+    """fmt() for a Related-Files timestamp, but blank out SQL's min-date sentinel."""
+    if not iso or str(iso).startswith('0001-01-01'):
+        return "?"
+    return fmt(iso)
+
+
+def staged_files():
+    """The 'Related Files' for the latest 'Aetna RCE 300 ETL Stage' run -- i.e. the
+    staged AetnaRCE input file(s). Uses the SAME endpoint the RAMP job view's
+    'Related Files' panel uses: /api/Ramp/FileWithBackup/List/{QueueId} (found in
+    the RAMP Angular bundle as getQueueRelatedFiles). Unlike the date-ranged
+    FileLog/List, this one returns Status='Staged' + populated Created/Modified.
+    Returns a list of {FileName, FileSize, DateCreated, ...} dicts (newest last)."""
+    qid = job_run(STAGE_JOBID).get('QueueId')
+    if not qid:
+        return []
+    out = subprocess.run(['curl', '-s', '--negotiate', '-u', ':',
+                          f'http://ramp/api/Ramp/FileWithBackup/List/{qid}'],
+                         capture_output=True, text=True, timeout=180)
+    try:
+        d = json.loads(out.stdout).get('Data')
+    except Exception:
+        return []
+    rows = d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else (d or [])
+    return [r for r in rows if isinstance(r, dict) and r.get('FileName')]
 
 
 # RAMP terminal-good statuses: mining/load jobs report 'Successful'; snap jobs
@@ -588,6 +634,17 @@ def main():
         lines.append(f"{label} {status_text}".rstrip())
         lines.extend(detail)
         lines.append("")
+
+    # Staged AetnaRCE input file(s) from the 'Aetna RCE 300 ETL Stage' job's
+    # Related Files panel (per user 2026-07-30): file name + size + created date.
+    files = staged_files()
+    if files:
+        lines.append("AetnaRCE File(s) Staged:")
+        for f in files:
+            lines.append(f"- {f.get('FileName')}  |  {_human_size(f.get('FileSize'))}"
+                         f"  |  created {_created(f.get('DateCreated'))}")
+        lines.append("")
+
     while lines and lines[-1] == "":
         lines.pop()
     msg = "\n".join(lines)
