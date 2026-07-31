@@ -600,11 +600,13 @@ MANUAL_OVERRIDES = {
     ("WellCareRx",    date(2026, 6, 12)): date(2026, 6, 24),
     ("WellCareRx",    date(2026, 6, 19)): date(2026, 6, 24),
     ("WellCareRx",    date(2026, 6, 26)): date(2026, 6, 24),
-    # 2026-07-24: the current WellCareRx delivery is an Ad Hoc RELOAD (certified
-    # 7/22 — see ADDITIONAL_ENTRIES), NOT the normal weekly Friday delivery. Per
-    # user the WEEKLY WellCareRx has NOT started loading yet, so keep this
-    # Friday's cell as pending "No Data"; the Ad Hoc reload sits on its own row.
-    ("WellCareRx",    date(2026, 7, 24)): "No Data",
+    # 2026-07-31: the normal weekly WellCareRx deliveries for 7/24 and 7/31 have
+    # now LOADED but are not yet Snapped or certified (per user) — pin both
+    # Friday cells to "L". (The earlier 7/24 "No Data" pin is superseded; the Ad
+    # Hoc reload certified 7/22 still sits on its own labeled row below.) Replace
+    # each with the cert date once the weekly delivery certifies.
+    ("WellCareRx",    date(2026, 7, 24)): "L",
+    ("WellCareRx",    date(2026, 7, 31)): "L",
     # 2026-06-24: CenteneRx/OscarRx 6/22 certs land on the 6/19 cell
     # automatically via the StatTimestamp system. The 6/26 blank overrides were
     # REMOVED 2026-06-24 — OscarRx & CenteneRx are now LOADING their 6/26
