@@ -527,3 +527,11 @@ State saved.
    already reported this period -- dormant until restart
 [optum_pbm] LoadQ=1412248 LoadEnd=None SnapEnd=None tag=07032026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
    already reported this month -- dormant until restart
+[caresource] (weekly) QueueId=1410661 Status=Successful End=2026-07-28T06:54:07.77 period=2026-W31
+   already reported this period -- dormant until restart
+[wellmark] (weekly) QueueId=1409922 Status=Successful End=2026-07-26T18:09:31.043 period=2026-W31
+   already reported this period -- dormant until restart
+[healthspring_fwa] (monthly) QueueId=1396476 Status=Successful End=2026-07-08T15:22:18.743 period=2026-07
+   already reported this period -- dormant until restart
+[optum_pbm] LoadQ=1412248 LoadEnd=2026-07-30T08:00:38.957 SnapEnd=2026-07-30T08:26:27.713 tag=07032026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   already reported this month -- dormant until restart
