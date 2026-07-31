@@ -152,15 +152,14 @@ def build(fams, today):
             head += f" - {cad_label}"
         lines.append(head)
 
+        # Only call out misses (per user 2026-07-31) -- a clean feed is just its
+        # header line, no "No missing files" reassurance line.
         miss = missing_by_month(days, dows)
-        if miss:
-            for (y, m) in sorted(miss, reverse=True):
-                ds = miss[(y, m)]
-                total_missing += len(ds)
-                lines.append(f"  :round_pushpin: Missing {MONTHS[m - 1]} Files: "
-                             + ', '.join(md(d) for d in ds))
-        else:
-            lines.append("  :white_small_square: No missing files")
+        for (y, m) in sorted(miss, reverse=True):
+            ds = miss[(y, m)]
+            total_missing += len(ds)
+            lines.append(f"  :round_pushpin: Missing {MONTHS[m - 1]} Files: "
+                         + ', '.join(md(d) for d in ds))
         lines.append("")
     lines.append(f"Source: {SERVER} AetnaRx.etl.tape TableID 200 | dates from FileName "
                  f"| missing window {mdy(START)} forward, up to each feed's latest file")
