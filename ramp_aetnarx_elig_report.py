@@ -150,13 +150,6 @@ def build(fams, today):
         head = f"{label} - {mdy(last)}"
         if cad_label != 'Daily':
             head += f" - {cad_label}"
-        # Stale check: how many EXPECTED delivery days have passed since the last file.
-        overdue = sum(1 for i in range(1, (today - last).days + 1)
-                      if (last + dt.timedelta(days=i)).weekday() in dows)
-        # 3+ missed delivery days, not 2: these feeds land late in the day, so a
-        # daily feed sitting one or two days back is normal in-flight lag.
-        if overdue >= 3:
-            head += f"  :warning: no file in {(today - last).days} days"
         lines.append(head)
 
         miss = missing_by_month(days, dows)
@@ -164,10 +157,10 @@ def build(fams, today):
             for (y, m) in sorted(miss, reverse=True):
                 ds = miss[(y, m)]
                 total_missing += len(ds)
-                lines.append(f"  :red_circle: Missing {MONTHS[m - 1]} Files: "
+                lines.append(f"  :round_pushpin: Missing {MONTHS[m - 1]} Files: "
                              + ', '.join(md(d) for d in ds))
         else:
-            lines.append("  :white_check_mark: No missing files")
+            lines.append("  :white_small_square: No missing files")
         lines.append("")
     lines.append(f"Source: {SERVER} AetnaRx.etl.tape TableID 200 | dates from FileName "
                  f"| missing window {mdy(START)} forward, up to each feed's latest file")
