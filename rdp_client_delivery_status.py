@@ -655,19 +655,20 @@ MANUAL_OVERRIDES = {
     # the 7/28 Tuesday cell "Empty" with NO pink — alert_state returns False for
     # "Empty". Remove next week.
     ("HMSA_Rx",       date(2026, 7, 28)): "Empty",
-    # 2026-07-30 (updated PM): AetnaRCE & NCStateAetna (both DAILY, driven by the
-    # shared 'Aetna RCE 310 ETL Load'). The 7/28 re-send SUCCEEDED (RAMP QueueId
-    # 1411504, 7/28 13:38 -> Successful 16:33) → pin "✓" on the 7/28 cell (both
-    # clients). Per user the 7/29 AND 7/30 loads are now in a FAILED status (latest
-    # run QueueId 1413129, 7/30 10:34 -> Failed 13:42); they will RELOAD TOGETHER
-    # when the ETL restarts → pin "Load Failure" on 7/29 AND 7/30 (both clients).
-    # Replace with "✓" once the combined 7/29+7/30 reload lands & snaps.
+    # 2026-07-31: AetnaRCE & NCStateAetna (both DAILY, driven by the shared
+    # 'Aetna RCE 310 ETL Load'). The 7/28 re-send SUCCEEDED (RAMP QueueId 1411504,
+    # 7/28 13:38 -> Successful 16:33) → keep "✓" on 7/28 (both clients). Per user
+    # the load RESUMES today (7/31) and the resuming run will carry the 7/29, 7/30
+    # AND 7/31 days together → pin "L" on 7/29, 7/30 AND 7/31 (all three loading).
+    # Replace each with "✓" once the combined reload lands & snaps.
     ("AetnaRCE",      date(2026, 7, 28)): "✓",
     ("NCStateAetna",  date(2026, 7, 28)): "✓",
-    ("AetnaRCE",      date(2026, 7, 29)): "Load Failure",
-    ("NCStateAetna",  date(2026, 7, 29)): "Load Failure",
-    ("AetnaRCE",      date(2026, 7, 30)): "Load Failure",
-    ("NCStateAetna",  date(2026, 7, 30)): "Load Failure",
+    ("AetnaRCE",      date(2026, 7, 29)): "L",
+    ("NCStateAetna",  date(2026, 7, 29)): "L",
+    ("AetnaRCE",      date(2026, 7, 30)): "L",
+    ("NCStateAetna",  date(2026, 7, 30)): "L",
+    ("AetnaRCE",      date(2026, 7, 31)): "L",
+    ("NCStateAetna",  date(2026, 7, 31)): "L",
     # 2026-07-30: CVSPBMRx (weekly Monday) — per user the 7/27 delivery is complete;
     # pin "✓" and lock it in on the 7/27 cell. The weekly RAW_MEMBR_ELIG_20260725
     # file isn't in tape yet (auto cvspbm_delivered can't fire), so this manual ✓
@@ -4080,7 +4081,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # today's cell would repaint it as a stray "!" even though the failure is
         # already shown on its correct day). Per user 2026-07-29 (AetnaRCE /
         # NCStateAetna 7/29 re-send cell).
-        if from_manual and marker == "":
+        # A manual "L" override is the same intent for an in-progress reload: the
+        # team has deliberately marked the cell "loading", so a stale
+        # has_recent_failure on today's cell must NOT repaint it pink (auto "L"
+        # already avoids pink via the is_loading_today suppress, but a manual "L"
+        # can be pinned before the resuming job shows Ready/Running in RAMP). Per
+        # user 2026-07-31 (AetnaRCE / NCStateAetna resuming load covers 7/29-7/31).
+        if from_manual and marker in ("", "L"):
             alert = False
         marker, alert = apply_sticky_cert(client, day, marker, alert, from_manual)
         wk_start = day - timedelta(days=day.weekday())
