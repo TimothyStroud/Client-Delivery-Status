@@ -659,18 +659,15 @@ MANUAL_OVERRIDES = {
     ("HMSA_Rx",       date(2026, 7, 28)): "Empty",
     # 2026-07-31: AetnaRCE & NCStateAetna (both DAILY, driven by the shared
     # 'Aetna RCE 310 ETL Load'). The 7/28 re-send SUCCEEDED (RAMP QueueId 1411504,
-    # 7/28 13:38 -> Successful 16:33) → keep "✓" on 7/28 (both clients). Per user
-    # the load RESUMES today (7/31) and the resuming run will carry the 7/29, 7/30
-    # AND 7/31 days together → pin "L" on 7/29, 7/30 AND 7/31 (all three loading).
-    # Replace each with "✓" once the combined reload lands & snaps.
+    # 7/28 13:38 -> Successful 16:33) → keep "✓" on 7/28 (both clients).
+    # 2026-08-02: the resumed loads all landed and snapped, so the 7/29 / 7/30 /
+    # 7/31 "L" pins were REMOVED — those cells now auto-resolve to "✓" from the
+    # RAMP queue (7/29 08:47->11:05 Resolved, 7/30 09:10->09:53 Successful +
+    # 10:34->13:42 Resolved, 7/31 10:40->8/1 01:25 Successful; "Resolved" counts
+    # as success). Certification for the 7/31 delivery date runs 8/3 — see
+    # CERT_CELL_REMAP, which lands that cert on the 7/31 cell instead of 8/3.
     ("AetnaRCE",      date(2026, 7, 28)): "✓",
     ("NCStateAetna",  date(2026, 7, 28)): "✓",
-    ("AetnaRCE",      date(2026, 7, 29)): "L",
-    ("NCStateAetna",  date(2026, 7, 29)): "L",
-    ("AetnaRCE",      date(2026, 7, 30)): "L",
-    ("NCStateAetna",  date(2026, 7, 30)): "L",
-    ("AetnaRCE",      date(2026, 7, 31)): "L",
-    ("NCStateAetna",  date(2026, 7, 31)): "L",
     # 2026-07-30: CVSPBMRx (weekly Monday) — per user the 7/27 delivery is complete;
     # pin "✓" and lock it in on the 7/27 cell. The weekly RAW_MEMBR_ELIG_20260725
     # file isn't in tape yet (auto cvspbm_delivered can't fire), so this manual ✓
@@ -731,6 +728,28 @@ MANUAL_OVERRIDES = {
     # 7/20) are no longer needed — resolve_marker now returns "Inactive" for any
     # forced-inactive client on any non-certified cell, so resumed load activity
     # can't paint "L" on the current-week Monday.
+}
+
+# --- Cert-to-cell reattribution ---------------------------------------------
+# {(client, cert_date): target_cell_day} — a DHT certification that RAN on
+# `cert_date` actually covers the delivery on `target_cell_day`. cert_on_day()
+# both (a) pulls the cert forward/backward onto the target cell and (b) hides it
+# from the cell it would otherwise have landed on, so one cert can't paint two
+# cells.
+#
+# Why: for the daily Aetna clients cert_on_day only widens a FRIDAY cell to pick
+# up Sat/Sun certs — a cert that runs on the following MONDAY is out of reach and
+# would instead stamp its date on the Monday cell (which belongs to the weekend
+# ETL load and should read "✓").
+#
+# 2026-08-02 per user: "AetnaRCE & NCStateAetna will be certified on 8/3, which
+# will be for the 7/31 delivery date." Until the cert lands, 7/31 shows "✓"
+# (loaded + snapped) and 8/3 shows "✓" from the Sat/Sun ETL loads; once DHT
+# certifies on 8/3 the 7/31 cell flips to 08/03/26 and 8/3 stays "✓". Safe to
+# leave in place after the fact — it only ever matches that one cert date.
+CERT_CELL_REMAP = {
+    ("AetnaRCE",     date(2026, 8, 3)): date(2026, 7, 31),
+    ("NCStateAetna", date(2026, 8, 3)): date(2026, 7, 31),
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -1762,14 +1781,25 @@ def cert_on_day(client, day, cert_idx):
     if day.weekday() == 4:  # Friday: also include Sat/Sun
         days_to_check.add(day + timedelta(days=1))
         days_to_check.add(day + timedelta(days=2))
+    # CERT_CELL_REMAP: also consider cert dates explicitly reattributed TO this
+    # cell (they may fall outside the windows above).
+    days_to_check |= {cd for (c, cd), target in CERT_CELL_REMAP.items()
+                      if c == client and target == day}
     best = None
     for key in _keys_for_client(client):
         for dt, status in cert_idx.get(key, ()):
             if status != "Certified":
                 continue
-            if dt.date() in days_to_check:
-                if best is None or dt > best:
-                    best = dt
+            d = dt.date()
+            if d not in days_to_check:
+                continue
+            # ...and skip cert dates reattributed AWAY from this cell, so the
+            # remapped cert doesn't also stamp the day it actually ran on.
+            target = CERT_CELL_REMAP.get((client, d))
+            if target is not None and target != day:
+                continue
+            if best is None or dt > best:
+                best = dt
     return best
 
 
