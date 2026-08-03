@@ -535,3 +535,12 @@ State saved.
    already reported this period -- dormant until restart
 [optum_pbm] LoadQ=1412248 LoadEnd=2026-07-30T08:00:38.957 SnapEnd=2026-07-30T08:26:27.713 tag=07032026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
    already reported this month -- dormant until restart
+[caresource] (weekly) QueueId=1410661 Status=Successful End=2026-07-28T06:54:07.77 period=2026-W32
+   this completion already reported -- skip
+[wellmark] (weekly) QueueId=1415169 Status=Successful End=2026-08-02T21:23:04.81 period=2026-W32
+   send -> Sent. | SLA Update - Wellmark 0210 Claims Load - SUCCESS
+[healthspring_fwa] (monthly) QueueId=1396476 Status=Successful End=2026-07-08T15:22:18.743 period=2026-08
+   this completion already reported -- skip
+[optum_pbm] LoadQ=1412248 LoadEnd=2026-07-30T08:00:38.957 SnapEnd=2026-07-30T08:26:27.713 tag=07032026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   send -> Sent. | SLA Update - Optum 0110 PBM Load (July 2026) - SUCCESS
+State saved.
