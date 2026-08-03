@@ -94,7 +94,12 @@ CLIENT_ALIASES = {
     # so the snap-index key is "elevancemmmrxmaster" — alias it so snap_on_day's
     # strict-equality match fires for ✓. Per user 2026-06-16: daily ✓ on load+snap.
     "ElevanceMMMRx":        ["elevancemmmrxmaster"],
-    "BCBSNorthCarolinaFEP": ["bcbsncfep"],
+    # BCBSNorthCarolinaFEP (monthly, ~10th): the monthly delivery loads through
+    # 'BCBSNC FEP CareFirst 0100 Stage' → '0110 Load' (snap-index key
+    # "bcbsncfepcarefirst"). The bare "bcbsncfep" alias only reaches the
+    # 'BCBSNC FEP Daily' feed, which stages+loads EVERY night and is NOT the
+    # monthly delivery — see LOAD_NAME_REQUIRED. Per user 2026-08-03.
+    "BCBSNorthCarolinaFEP": ["bcbsncfep", "bcbsncfepcarefirst"],
     # NCStateAetna's daily load runs through 'Aetna RCE 310 ETL Load' (Feed
     # "RCE Medical" → key "aetnarce" after stripping). Include aetnarce alias
     # so NCStateAetna gets ✓ from those same daily completions.
@@ -468,6 +473,22 @@ LOAD_NAME_REQUIRED = {
     # "masterload","claim") so 'WellCareRx Masterload 0100 Stage' no longer
     # trips L via the snap-index activity path. Delivery = Masterload 0110 Load.
     "WellCareRx":        ("masterload 0110 load",),
+    # BCBSSC (monthly, ~20th): delivery = 'BCBSSC 0110 Load'. build_snap_index
+    # indexes Stage jobs with kind="load", so a Ready/Resolved 'BCBSSC 0100
+    # Stage' was satisfying load_this_month and painting "L" on the expected day
+    # while nothing had actually loaded. Per user 2026-08-03: "BCBSSC is not
+    # loading, just staging." The full prefix "bcbssc 0110 load" also excludes
+    # the sibling 'BCBSSC RX 0110 Load' (BCBSSCRx is a separate client that the
+    # "bcbssc" substring key otherwise matches).
+    "BCBSSC":            ("bcbssc 0110 load",),
+    # BCBSNorthCarolinaFEP (monthly, ~10th): delivery = 'BCBSNC FEP CareFirst
+    # 0110 Load' (5/10, 6/10, 7/10 → certs 5/11, 6/10, 7/10). The
+    # 'BCBSNC FEP Daily 0100 Stage/0110 Load' pair is a separate DAILY feed that
+    # succeeds every night, so load_this_month was always true and the cell sat
+    # at "L" until the monthly cert landed. Per user 2026-08-03:
+    # "BCBSNorthCarolinaFEP is also not Loading." ('BCBSNC FEP MHS 0110 Load'
+    # is dormant — no runs since May; add "mhs 0110 load" here if it resumes.)
+    "BCBSNorthCarolinaFEP": ("carefirst 0110 load",),
     # BCBSARRx: delivery = 'BCBSARRx MasterLoad 0110 Load'. Narrowed 2026-06-12
     # so the ancillary 'BCBSARRx COBC 0110 Load' failure no longer trips a
     # "Load Failure" (nor L) for the claims cycle. Per user: the failure is COBC,
@@ -600,13 +621,15 @@ MANUAL_OVERRIDES = {
     ("WellCareRx",    date(2026, 6, 12)): date(2026, 6, 24),
     ("WellCareRx",    date(2026, 6, 19)): date(2026, 6, 24),
     ("WellCareRx",    date(2026, 6, 26)): date(2026, 6, 24),
-    # 2026-07-31: the normal weekly WellCareRx deliveries for 7/24 and 7/31 have
-    # now LOADED but are not yet Snapped or certified (per user) — pin both
-    # Friday cells to "L". (The earlier 7/24 "No Data" pin is superseded; the Ad
-    # Hoc reload certified 7/22 still sits on its own labeled row below.) Replace
-    # each with the cert date once the weekly delivery certifies.
-    ("WellCareRx",    date(2026, 7, 24)): "L",
-    ("WellCareRx",    date(2026, 7, 31)): "L",
+    # 2026-08-03: the normal weekly WellCareRx deliveries for 7/24 and 7/31 both
+    # CERTIFIED today (DHT WellCareRx cert 8/3 14:57, StatTimestamps 7/25 + 7/30
+    # — one cert covering both weeks). Per user: "the WellCareRx certified today
+    # goes to the 7/24 & 7/31 dates." Pin the 8/3 cert date on both Friday cells
+    # — the 7/24 cell's Mon-Fri window (7/20-7/24) can't reach the Sat 7/25
+    # StatTimestamp on its own. Supersedes the 7/31 "L" pins. (The Ad Hoc reload
+    # certified 7/22 still sits on its own labeled row below.)
+    ("WellCareRx",    date(2026, 7, 24)): date(2026, 8, 3),
+    ("WellCareRx",    date(2026, 7, 31)): date(2026, 8, 3),
     # 2026-06-24: CenteneRx/OscarRx 6/22 certs land on the 6/19 cell
     # automatically via the StatTimestamp system. The 6/26 blank overrides were
     # REMOVED 2026-06-24 — OscarRx & CenteneRx are now LOADING their 6/26
