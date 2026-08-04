@@ -250,6 +250,8 @@ def _current_run_start(server, name):
          "FROM msdb.dbo.sysjobactivity ja WITH (NOLOCK) "
          "WHERE ja.job_id=@jid AND ja.start_execution_date IS NOT NULL "
          "AND ja.stop_execution_date IS NULL "
+         # Skip orphaned rows left by Agent restarts (same guard as _live_step).
+         f"AND ja.start_execution_date > DATEADD(day,-{STALE_ACTIVITY_DAYS},GETDATE()) "
          "ORDER BY ja.session_id DESC, ja.start_execution_date DESC;")
     out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
                          capture_output=True, text=True, timeout=120)
@@ -415,6 +417,143 @@ def _ssis_final_stage_eta():
     return mend + timedelta(seconds=tail)
 
 
+# ---- Step-aware ETA (per user 2026-08-04) ------------------------------------
+# Ported from the HRP digest after the 08/04 HRP miss (10:17 tick sat on step 6
+# of 9 with ~16 min left and reported 'ETA ~6:56 PM' for a job that ended 10:33
+# AM) -- the cause was consulting WHOLE-JOB history only, which this job did too.
+# This job is 4 steps: step 1 is the SSIS package and steps 2-4 are a short fixed
+# tail (median ~2 min, max 12 min over the last 61 runs). So once step 1 is done
+# the answer is 'about two minutes', while the whole-job survival median could
+# still be quoting hours out. Same class of error, smaller magnitude.
+STALE_ACTIVITY_DAYS = 4   # > the longest run on record (18.4 h); see _live_step
+
+
+def _live_step(server, name):
+    """(step_id, step_start) for the step the CURRENT run is executing, read from
+    msdb.dbo.sysjobactivity -- what SSMS's Job Activity Monitor shows. SQL Agent
+    stamps last_executed_step_id/_date when a step STARTS, so this is the in-flight
+    step and the moment it began. None when not running or unreadable.
+
+    The recency guard skips orphaned rows: an Agent restart leaves a row with a
+    NULL stop_execution_date, which would otherwise read as a 'live' step."""
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         "SELECT TOP 1 ja.last_executed_step_id, "
+         "  CONVERT(varchar(19), ja.last_executed_step_date, 120) "
+         "FROM msdb.dbo.sysjobactivity ja WITH (NOLOCK) "
+         "WHERE ja.job_id=@jid AND ja.start_execution_date IS NOT NULL "
+         "AND ja.stop_execution_date IS NULL AND ja.last_executed_step_id IS NOT NULL "
+         f"AND ja.start_execution_date > DATEADD(day,-{STALE_ACTIVITY_DAYS},GETDATE()) "
+         "ORDER BY ja.session_id DESC, ja.start_execution_date DESC;")
+    try:
+        out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
+                             capture_output=True, text=True, timeout=120)
+    except Exception:
+        return None
+    for line in out.stdout.splitlines():
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) >= 2 and parts[0].isdigit():
+            dt = _to_dt(parts[1])
+            if dt:
+                return int(parts[0]), dt
+    return None
+
+
+def _step_remaining_secs(server, name, step_id, days=120):
+    """Ascending historical wall-clock (seconds) from the START of `step_id` through
+    the END of the job, over recent runs that finished successfully.
+
+    sysjobhistory has no run key, so each step row is attached to the next
+    step_id=0 'job outcome' row after it -- bucketed against ALL outcome rows and
+    only then filtered to successful ones, since bucketing against successes alone
+    would graft a failed run's steps onto the next good run."""
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         f"DECLARE @sid int={int(step_id)}; "
+         "WITH h AS (SELECT instance_id, step_id, run_status, "
+         "  (run_duration/10000)*3600+((run_duration/100)%100)*60+(run_duration%100) AS secs "
+         "  FROM msdb.dbo.sysjobhistory WITH (NOLOCK) WHERE job_id=@jid "
+         f"  AND run_date>=CONVERT(int,CONVERT(varchar(8),DATEADD(day,-{int(days)},GETDATE()),112))), "
+         "o AS (SELECT instance_id, run_status FROM h WHERE step_id=0), "
+         "t AS (SELECT h.step_id, h.secs, h.run_status, "
+         "  (SELECT MIN(o.instance_id) FROM o WHERE o.instance_id>h.instance_id) AS rk "
+         "  FROM h WHERE h.step_id>=@sid) "
+         "SELECT SUM(t.secs) FROM t JOIN o ON o.instance_id=t.rk AND o.run_status=1 "
+         "GROUP BY t.rk "
+         "HAVING MIN(t.run_status)=1 AND MAX(CASE WHEN t.step_id=@sid THEN 1 ELSE 0 END)=1 "
+         "ORDER BY 1;")
+    try:
+        out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
+                             capture_output=True, text=True, timeout=120)
+    except Exception:
+        return []
+    return sorted(int(s) for s in (l.strip() for l in out.stdout.splitlines()) if s.isdigit())
+
+
+_STEPS_CACHE = {}
+
+
+def _steps(server, name):
+    """{step_id: (step_name, subsystem)} for the job, cached per process."""
+    key = (server, name)
+    if key in _STEPS_CACHE:
+        return _STEPS_CACHE[key]
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         "SELECT step_id, subsystem, step_name FROM msdb.dbo.sysjobsteps "
+         "WHERE job_id=@jid ORDER BY step_id;")
+    steps = {}
+    try:
+        out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
+                             capture_output=True, text=True, timeout=120)
+        for line in out.stdout.splitlines():
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) >= 3 and parts[0].isdigit():
+                steps[int(parts[0])] = (parts[2], parts[1])
+    except Exception:
+        pass
+    _STEPS_CACHE[key] = steps
+    return steps
+
+
+def _step_names(server, name):
+    """{step_id: step_name}."""
+    return {k: v[0] for k, v in _steps(server, name).items()}
+
+
+def _ssis_step_id(server, name):
+    """The LAST step whose subsystem is SSIS -- the heavy package load, after which
+    only the short finishers remain. Read from sysjobsteps rather than hardcoded so
+    it self-heals if a step is inserted ahead of the package. Defaults to 1."""
+    ssis = [k for k, v in _steps(server, name).items() if v[1].upper() == 'SSIS']
+    return max(ssis) if ssis else 1
+
+
+def _step_eta(server, name, sid, sstart):
+    """ETA lines projected from the live step's start, or None to fall through.
+    Survival-filtered within the step, like the whole-job estimator: drop the
+    outcomes already ruled out by how long this step has been running, then take
+    the median of what remains."""
+    rem = _step_remaining_secs(server, name, sid)
+    if not rem:
+        # 'Success Step' is a 0-second no-op that doesn't reliably write a history
+        # row, so it can have no samples (it has none here). Landing on the last
+        # step means the job is done bar the outcome row -- say that, rather than
+        # falling through to whole-job history and quoting hours with nothing left.
+        steps = _steps(server, name)
+        if steps and sid >= max(steps):
+            return [f"{EXEC_ICON} final steps - wrapping up"]
+        return None
+    in_step = (datetime.now() - sstart).total_seconds()
+    possible = [d for d in rem if d >= in_step]
+    if not possible:
+        return [f"{EXEC_ICON} final steps - running long, still processing"]
+    eta = sstart + timedelta(seconds=_pct(possible, 50))
+    if eta <= datetime.now():
+        return [f"{EXEC_ICON} final steps - wrapping up"]
+    return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
+
+
 def eta_detail(server, name):
     """Single expected-completion ETA for the in-flight run. An ETA is ALWAYS
     given while the job is executing (per user 2026-07-27) -- see the long-run
@@ -436,9 +575,26 @@ def eta_detail(server, name):
     The window is HISTORY_N runs rather than 8: this load is bimodal (~2h to ~18h),
     so the extra tail samples let the estimate step out gradually instead of jumping
     straight to the slowest run on record. Degrades to 'now + median' if the live
-    run start can't be read."""
+    run start can't be read.
+
+    Ahead of all three (per user 2026-08-04): if the run is past the SSIS step, the
+    only work left is the short fixed tail, so project from the live step instead
+    -- see _step_eta. Whole-job history is consulted only while the package itself
+    is running, the one phase with no finer signal."""
+    ssis_step = _ssis_step_id(server, name)
+    live = _live_step(server, name)
+    if live and live[0] > ssis_step:
+        stepped = _step_eta(server, name, live[0], live[1])
+        if stepped:
+            return stepped
     fs = _ssis_final_stage_eta()
     if fs:
+        # The milestone's median tail is measured to the PACKAGE's end, but this
+        # digest reports on the JOB, which still has its finisher steps to run
+        # after the package exits. Without this the 'final stage' ETA lands early.
+        post = _step_remaining_secs(server, name, ssis_step + 1)
+        if post:
+            fs += timedelta(seconds=_pct(post, 50))
         if fs > datetime.now():
             return [f"{EXEC_ICON} final stage - ETA ~{_eta_stamp(fs)}"]
         return [f"{EXEC_ICON} final stage - wrapping up"]
@@ -502,10 +658,19 @@ def sql_job(server, name):
     if not row:
         return ("(no data)", "")
     status, step = row[-7], row[-6]
-    if status == '1':                        # Executing -> "Executing Step N (name)" + ETA line
+    if status == '1':                        # Executing -> "Executing Step N/M - name" + ETA line
         # ETA anchored to the live run's start (see eta_detail), superseded by the
         # live SSISDB final-stage ETA once ~88% done. Icon = cycling-arrows.
-        return (f"Executing Step {step}", eta_detail(server, name))
+        # Step count + name added 2026-08-04: 'Step 2' alone doesn't convey that
+        # the heavy SSIS load is step 1 and everything after it is a short tail.
+        names = _step_names(server, name)
+        head = f"Executing Step {step}"
+        if names:
+            head += f"/{max(names)}"
+            label = names.get(int(step)) if str(step).isdigit() else None
+            if label:
+                head += f" - {label}"
+        return (head, eta_detail(server, name))
     # Idle: show the last run's outcome as Successful/Failed ONLY while its
     # COMPLETION falls on today's date; at the start of the next day it reverts to
     # "- Idle" (per user 2026-07-17: "only show as Successful until the start of

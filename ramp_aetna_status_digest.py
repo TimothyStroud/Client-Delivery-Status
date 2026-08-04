@@ -283,17 +283,26 @@ def _recent_full_durations(server, name, n=8):
     return durs
 
 
+STALE_ACTIVITY_DAYS = 4   # see _run_progress; > the longest run on record
+
+
 def _run_progress(server, name):
     """(run_start, current_step_start, current_step_id) for the currently-executing
     run from sysjobactivity, or (None, None, None). A live run has
     stop_execution_date NULL; ordering by session_id DESC picks the current Agent
-    session's row (older orphaned NULL rows sort below it)."""
+    session's row (older orphaned NULL rows sort below it).
+
+    The recency guard is belt-and-braces on that ordering (added 2026-08-04): an
+    Agent restart leaves rows with a NULL stop_execution_date behind (HRP still
+    carries one from 07/18), and if such a row were ever the top hit this would
+    report a weeks-old run as live. 4 days > the longest run on record here."""
     q = ("SET NOCOUNT ON; "
          f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
          "SELECT TOP 1 CONVERT(varchar(19),start_execution_date,120), "
          "  CONVERT(varchar(19),last_executed_step_date,120), last_executed_step_id "
          "FROM msdb.dbo.sysjobactivity WITH (NOLOCK) "
          "WHERE job_id=@jid AND start_execution_date IS NOT NULL AND stop_execution_date IS NULL "
+         f"AND start_execution_date > DATEADD(day,-{STALE_ACTIVITY_DAYS},GETDATE()) "
          "ORDER BY session_id DESC, start_execution_date DESC;")
     out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
                          capture_output=True, text=True, timeout=120)
@@ -327,6 +336,32 @@ def _step_hist(server, name, n=6):
         if len(parts) >= 2 and parts[0].isdigit() and parts[1].lstrip('-').isdigit():
             hist[int(parts[0])] = int(parts[1])
     return hist
+
+
+_STEP_NAMES = {}
+
+
+def _step_names(server, name):
+    """{step_id: step_name} for the job, cached per process (used to label the live
+    step in the digest, e.g. 'Executing Step 4/12 - Build Chimera')."""
+    key = (server, name)
+    if key in _STEP_NAMES:
+        return _STEP_NAMES[key]
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         "SELECT step_id, step_name FROM msdb.dbo.sysjobsteps WHERE job_id=@jid ORDER BY step_id;")
+    names = {}
+    try:
+        out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
+                             capture_output=True, text=True, timeout=120)
+        for line in out.stdout.splitlines():
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) >= 2 and parts[0].isdigit():
+                names[int(parts[0])] = parts[1]
+    except Exception:
+        pass
+    _STEP_NAMES[key] = names
+    return names
 
 
 def _pct(sorted_vals, p):
@@ -477,10 +512,19 @@ def sql_job(server, name):
         return ("(no data)", "")
 
     status, step = row[-7], row[-6]
-    if status == '1':                        # Executing -> "Executing Step N (name)" + ETA line
-        # Step-anchored progressive ETA (see eta_detail); the label keeps the live
-        # step name from sp_help_job, e.g. "Executing Step 4 (Build Chimera)".
-        return (f"Executing Step {step}", eta_detail(server, name))
+    if status == '1':                        # Executing -> "Executing Step N/M - name" + ETA line
+        # Step-anchored progressive ETA (see eta_detail). Step count + name added
+        # 2026-08-04 (the old comment claimed sp_help_job supplied the name, but
+        # nothing actually appended it): 'Step 4' alone doesn't convey that this
+        # job has 12 steps and the heavy SSIS package is step 2.
+        names = _step_names(server, name)
+        head = f"Executing Step {step}"
+        if names:
+            head += f"/{max(names)}"
+            label = names.get(int(step)) if str(step).isdigit() else None
+            if label:
+                head += f" - {label}"
+        return (head, eta_detail(server, name))
     # Idle: show the last run's outcome as Successful/Failed ONLY while its
     # COMPLETION falls on today's date; at the start of the next day it reverts to
     # "- Idle" (per user 2026-07-17: "only show as Successful until the start of
