@@ -440,6 +440,10 @@ LOAD_NAME_REQUIRED = {
     # BCBSFL (weekly Tue): only 'BCBSFL 0110 Claims Load' counts — not CMS
     # Referral Load, Claims Stage, or Claims Start Snap.
     "BCBSFL":            ("claims load",),
+    # TuftsRx: only the 'Tufts RX Claims *' jobs are the delivery. Added
+    # 2026-08-04 per user — a running 'Tufts RX Elig 0110 Load' is an
+    # eligibility file, not the claims delivery, and was painting "L".
+    "TuftsRx":           ("claim",),
     # MMOH (WC) monthly: only 'MMO 0110 WC Load' is the load indicator (per
     # user 2026-06-08 correction — this row is the Workers' Comp load). The
     # "wc load" keyword matches it but not the WC Stage step or any other
@@ -1105,6 +1109,11 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     "NCStateRx",
     "PremeraMedAdvVIS",
     "SamaritanHealth",
+    # TuftsRx per user 2026-08-04: the MONTHLY row is a certification milestone
+    # and "should always be on the 10th of the month" — weekly claims/elig load
+    # activity must not drag it onto today. (The weekly Monday cells still get
+    # their own ✓ per delivered claims file via STAGE_FILE_CELL_CLIENTS.)
+    "TuftsRx",
 }
 
 # Monthly clients that should show an empty Date cell (rather than "No Data")
@@ -1214,7 +1223,12 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     "Kaiser_WA":              (10, 15),
     "Kaiser_WARx":            (10, 15),
     "SamaritanHealth":        (10, 15),
-    "Tufts_PublicPlan":       (10, 15),
+    # Tufts_PublicPlan: pinned to the 10th per user 2026-08-04 ("keep on the
+    # 10th until the next load"). Was (10, 15) with a Friday spread, which in a
+    # month where the 15th is a Saturday rolled the row all the way out to the
+    # 21st. Range end = 10 and no MONTHLY_PLACEMENT_WEEKDAY entry ⇒ the row sits
+    # on the 10th itself (next Monday if the 10th is a weekend).
+    "Tufts_PublicPlan":       (10, 10),
     "BCBSKS":                 (15, 15),
     "BCBSKSMedAdv":           (15, 15),
     "BCBSNC_Rx":              (15, 15),
@@ -1269,7 +1283,10 @@ MONTHLY_PLACEMENT_WEEKDAY = {
     "NCState":                4,  # Fri
     "PremeraMedAdvRx":        0,  # Mon
     "PremeraMedAdvVIS":       1,  # Tue
-    "TuftsRx":                2,  # Wed
+    # TuftsRx removed 2026-08-04 per user: "the Monthly delivery ... should
+    # always be on the 10th of the month". With no spread entry its (10, 10)
+    # range anchors the monthly row to the 10th itself instead of the Wednesday
+    # of the 10th's work-week. (Tufts_PublicPlan likewise has no entry.)
     # Day-15 cluster — spread Mon-Fri of the work-week of the 15th.
     # (AetnaMMSEA omitted — handled separately by nmsp_mmsea_date.)
     "AetnaQNXT":              1,  # Tue
@@ -1280,7 +1297,6 @@ MONTHLY_PLACEMENT_WEEKDAY = {
     "ElixirRx":               1,  # Tue
     "Kaiser_WARx":            2,  # Wed
     "SamaritanHealth":        3,  # Thu
-    "Tufts_PublicPlan":       4,  # Fri
 }
 
 # Monthly clients whose anchor day should snap to the CLOSEST weekday
@@ -3990,6 +4006,28 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # current week (per user 2026-05-26: BCBSFL Elig was missing from June
         # because is_loading_today returned today=5/26 and the row got dropped).
         today_in_month = (today.year == year and today.month == month)
+
+        # 1b) Monthly stage-file clients (Tufts_PublicPlan, MedicalMutualMHS) in
+        # the CURRENT month: delivery evidence is the client's own etl.Tape
+        # (step 1-stage) plus the DHT cert (step 1) — never the RAMP queue. A
+        # load that finishes Successful/Resolved but whose data is then BACKED
+        # OUT leaves no tape row, yet latest_snap_this_month / load_this_month
+        # still saw the queue row and painted a false ✓ on the load day. Per user
+        # 2026-08-04: "the Tufts_PublicPlan load failed and was backed out —
+        # remove from update and keep on the 10th until the next load."
+        # So stay anchored to the expected day: "L" only while a load is
+        # genuinely in flight, "Load Failure" on a real failure, otherwise
+        # "No Data" until the next load actually reaches the tape. Self-
+        # correcting — step 1-stage flips it to ✓ the moment the tape confirms a
+        # loaded claims file, and step 1 to the cert date after that. Scoped to
+        # today_in_month so already-published past-month cells don't change.
+        if (today_in_month and client in STAGE_FILE_CELL_CLIENTS
+                and STAGE_FILE_CELL_CLIENTS[client]["schedule"] == "monthly"):
+            if is_loading_today(client, ramp_queue, ramp_jobs):
+                return expected_date, "L"
+            if has_recent_failure(client, ramp_queue, ramp_jobs, today):
+                return expected_date, "Load Failure"
+            return expected_date, "No Data"
 
         # JHHC Passfile (per user 2026-07-09): the 'JHHC Passfile Email' RAMP
         # job delivers four files (Trauma/Subro × Active/Closed) that then load
