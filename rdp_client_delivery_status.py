@@ -1020,9 +1020,15 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     ("BCBSSCRx", 2026, 8): "No Data",
     # 2026-07-21: BCBSFL Elig — June's file delivered LATE on 7/6 (shown as a
     # separate "BCBSFL Elig (June)" row). That stray 7/6 snap was pulling July's
-    # auto-placement onto 7/6; force "No Data" on July's 25th slot (renders Fri
-    # 7/24) until July's own file arrives. Remove after July delivers.
-    ("BCBSFLEligibilityLoad", 2026, 7): "No Data",
+    # auto-placement onto 7/6; July's 25th slot (renders Fri 7/24) was held at
+    # "No Data" until July's own file arrived.
+    # 2026-08-05 per user: "The BCBSFL Elig on 7/24 loaded successfully on
+    # 8/1/26." 'BCBSFL 0110 Eligibility Load' ran 7/29 14:03 -> 8/1 04:25
+    # (Successful), so July DID deliver — flip the hold to "✓". Keeping it as a
+    # pinned marker (rather than deleting the entry) holds the row on the 7/24
+    # expected cell the user is tracking: build_snap_index attributes the load by
+    # START date, so the auto path would otherwise move the ✓ onto a 7/29 cell.
+    ("BCBSFLEligibilityLoad", 2026, 7): "✓",
     # 2026-07-28: TuftsRx reactivated — all past monthly deliveries certified today
     # (per user). The DHT catch-up cert was still "Email sent, Ready for
     # Certification review" at reactivation and, once flipped, every row carries
