@@ -155,7 +155,15 @@ CLIENT_ALIASES = {
     "BCBSARRx":             ["bcbsarrx"],
     "MedStar":              ["medstar"],
     # HealthNewEngland shows up as "HNE Medical" on the RAMP Dashboard.
-    "HealthNewEngland":     ["healthnewengland", "hnemedical", "hne"],
+    # The bare "hne" alias was REMOVED 2026-08-05: find_matching_jobs does a
+    # SUBSTRING match, and "hne" is a substring of "healthnet…" (healt-HNE-t),
+    # so every HealthNetCA job matched HealthNewEngland too — a Failed
+    # 'HealthNet 0110 Claims Load' painted "Load Failure" on HNE's Thursday
+    # cell (per user: "HealthNewEngland is not in a Load failure status").
+    # "hnemedical" still matches 'HNE Medical 0100 Stage/0110 Load' (the real
+    # delivery jobs) and the base key "healthnewengland" still serves the DHT
+    # cert lookup. Same class of fix as Oscar/Medica in CLIENT_PRIMARY_KEY_OVERRIDE.
+    "HealthNewEngland":     ["healthnewengland", "hnemedical"],
     # AetnaRx queue variants: each distinct JobName prefix becomes its own
     # snap_idx key under JobName-only indexing.
     # "aetnarxclaims" covers the snap step "AetnaRx Claims 0130 Start Snap"
@@ -1062,6 +1070,13 @@ ADDITIONAL_ENTRIES = [
     # it as its own labeled row showing the cert date; the normal weekly Friday
     # 7/24 cell is separately pinned to "No Data" (weekly not yet loading).
     ("weekly", date(2026, 7, 24), "WellCareRx (Ad Hoc)", date(2026, 7, 22), False, None),
+    # 2026-08-05: 'HealthNet 0110 Claims Load' (JobId 1812) Failed 8/5 12:22 —
+    # per user it is an AD HOC RE-LOAD of the 3/20–3/27 data, NOT the weekly
+    # delivery. Surface it as its own labeled row on the failure day; the regular
+    # HealthNetCA Monday rows stay "Inactive" (FORCED_INACTIVE). Update the
+    # marker (or drop this row) once the re-load succeeds.
+    ("weekly", date(2026, 8, 5), "HealthNetCA (Ad Hoc 3/20-3/27)",
+     "Load Failure", True, None),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
