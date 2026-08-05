@@ -610,10 +610,18 @@ def sql_job(server, name):
         # nothing actually appended it): 'Step 4' alone doesn't convey that this
         # job has 12 steps and the heavy SSIS package is step 2.
         names = _step_names(server, name)
-        head = f"Executing Step {step}"
-        if names:
+        # sp_help_job returns current_execution_step ALREADY decorated with the
+        # step name, e.g. '1 (Run AetnaHRP MasterLoad)'. The 2026-08-04 label
+        # change assumed a bare integer, so '/N' was appended AFTER the paren
+        # ('Executing Step 1 (Run AetnaHRP MasterLoad)/9') and str.isdigit() failed,
+        # suppressing the name lookup entirely. Take the leading integer instead
+        # (fixed 2026-08-05) -> 'Executing Step 1/9 - Run AetnaHRP MasterLoad'.
+        m = re.match(r'\s*(\d+)', str(step))
+        sid = int(m.group(1)) if m else None
+        head = f"Executing Step {sid if sid is not None else step}"
+        if names and sid is not None:
             head += f"/{max(names)}"
-            label = names.get(int(step)) if str(step).isdigit() else None
+            label = names.get(sid)
             if label:
                 head += f" - {label}"
         return (head, eta_detail(server, name))
