@@ -779,6 +779,28 @@ CERT_CELL_REMAP = {
     ("NCStateAetna", date(2026, 8, 3)): date(2026, 7, 31),
 }
 
+# --- Monthly cert-to-month reattribution ------------------------------------
+# {(client, cert_date): (year, month)} — the monthly analogue of CERT_CELL_REMAP:
+# a DHT certification that RAN on `cert_date` actually covers the delivery for a
+# DIFFERENT month. latest_cert_in_month() both (a) counts the cert for the target
+# month's tab (rendered on that month's expected day, since the cert date itself
+# falls outside the month) and (b) HIDES it from the month it actually ran in, so
+# one cert can't fill two month tabs.
+#
+# Why: a monthly delivery that arrives late certifies in the following calendar
+# month. Without the remap, step 1 of determine_monthly attributes the cert to
+# the month it ran in — leaving the real delivery month at "No Data" and painting
+# a cert date on a month that hasn't delivered yet.
+#
+# 2026-08-05 per user: "BCBSSCRx will be certified today for the July delivery."
+# The July file loaded 8/5 00:22, snapped 8/5 02:31 and certified 8/5 09:55 → the
+# July tab shows 08/05/26 on its expected (18th-19th) cell and August stays open
+# for its own delivery (held at "No Data" by MONTHLY_MONTH_MARKER_OVERRIDES so the
+# July delivery's 8/5 load can't paint a premature "L" there).
+MONTHLY_CERT_MONTH_REMAP = {
+    ("BCBSSCRx", date(2026, 8, 5)): (2026, 7),
+}
+
 # --- Sticky certifications --------------------------------------------------
 # Once a (client, scheduled-day) cell has rendered a real cert date, remember it
 # so a later DHT status reversion (a row flipping from "Certified" back to e.g.
@@ -986,10 +1008,16 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     # is separately suppressed for Kaiser_WARx in alert_state. Remove once it
     # certifies.
     ("Kaiser_WARx", 2026, 7): "L",
-    # 2026-07-21: BCBSSC RX — only the '0100 Stage' is running, not the '0110
-    # Load' (per user). Force "No Data" on the expected day for July; a real DHT
-    # cert this month still auto-wins (checked before this). Remove after it loads.
-    ("BCBSSCRx", 2026, 7): "No Data",
+    # 2026-08-05: BCBSSCRx's July delivery finally loaded (8/5 00:22), snapped
+    # (8/5 02:31) and CERTIFIED 8/5 09:55 — per user "BCBSSCRx will be certified
+    # today for the July delivery." The July tab now surfaces that cert via
+    # MONTHLY_CERT_MONTH_REMAP (which also hides it from August), so the old
+    # ("BCBSSCRx", 2026, 7) "No Data" hold is gone. August is held at "No Data"
+    # until its OWN delivery loads — otherwise the July delivery's 8/5 load would
+    # satisfy load_this_month and paint a premature "L" on August's 18th/19th
+    # cell. A real August DHT cert still auto-wins (checked before this override).
+    # Remove once August's own file loads.
+    ("BCBSSCRx", 2026, 8): "No Data",
     # 2026-07-21: BCBSFL Elig — June's file delivered LATE on 7/6 (shown as a
     # separate "BCBSFL Elig (June)" row). That stray 7/6 snap was pulling July's
     # auto-placement onto 7/6; force "No Data" on July's 25th slot (renders Fri
@@ -1434,6 +1462,21 @@ L_ON_LOAD_ONLY_CLIENTS = {
 # (ElevanceMMMRx promoted out 2026-06-16 — now a DAILY_CLIENTS client with ✓ on
 # load+snap days; see DAILY_CLIENTS / CLIENT_ALIASES / LOAD_NAME_REQUIRED.)
 IMPLEMENTATION_LOAD_ONLY_CLIENTS = set()
+
+# Weekly cert clients whose "L" means ONLY "a load is running right now". The
+# generic weekly-cert fallback keeps a cell at "L" for the whole week once ANY
+# load/snap activity is indexed (the "CenteneRx & WellCareRx should have an L
+# since they have not been certified" rule), but the Kaiser Pareo weekly feeds
+# load early in the week and don't SNAP until Wednesday afternoon/evening, so a
+# week-long "L" misreads as "still loading" for days after the load finished.
+# Per user 2026-08-05: "Clear the Kaiser weekly 'L' once the load finishes."
+# Cell lifecycle for these clients: "L" while a load is genuinely in flight →
+# blank once it finishes → the Thursday cert date when DHT certifies. Load
+# failures and the Friday-pink escalation are unaffected.
+LOADING_L_ONLY_CLIENTS = {
+    "Kaiser_CO", "Kaiser_GA", "Kaiser_HI", "Kaiser_MASTapestry",
+    "Kaiser_NW", "KaiserNCPareo", "KaiserSCPareo",
+}
 
 # Override the auto-derived primary key for clients whose name is a substring
 # of another client's name (causing spurious substring matches in
@@ -1900,14 +1943,22 @@ def latest_cert_in_month(client, cert_idx, year, month, on_or_before=None):
     this, determine_monthly's `latest_cert(...).month == month` check only ever
     matched the client's most-recent month, leaving every earlier month "No Data".
     """
+    # MONTHLY_CERT_MONTH_REMAP: cert dates explicitly reattributed TO this month
+    # (their CertTimestamp falls outside it) count here; certs reattributed AWAY
+    # from this month are skipped so one cert can't fill two month tabs.
     best = None
     for key in _keys_for_client(client):
         for dt, status in cert_idx.get(key, ()):
             if status != "Certified":
                 continue
-            if dt.year != year or dt.month != month:
+            d = dt.date()
+            tgt = MONTHLY_CERT_MONTH_REMAP.get((client, d))
+            if tgt is not None:
+                if tgt != (year, month):
+                    continue
+            elif dt.year != year or dt.month != month:
                 continue
-            if on_or_before and dt.date() > on_or_before:
+            if on_or_before and d > on_or_before:
                 continue
             if best is None or dt > best:
                 best = dt
@@ -3863,11 +3914,17 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         elif allow_checkmark:
             if snap_in_week(client, day, snap_idx):
                 return "✓"
-        elif in_current_week:
+        elif in_current_week and client not in LOADING_L_ONLY_CLIENTS:
             # Weekly cert client (not snap-only) — if load/snap activity has
             # happened this week and the cert hasn't landed yet, stay L
             # (per user: "CenteneRx & WellCareRx should have an 'L' since
             # they have not been certified").
+            #
+            # LOADING_L_ONLY_CLIENTS (the Kaiser Pareo weekly feeds) opt OUT of
+            # this fallback: their "L" comes only from is_loading_today above, so
+            # the cell clears the moment the load finishes and stays blank
+            # through the Wednesday PM snap until the cert lands. Per user
+            # 2026-08-05.
             if snap_in_week(client, day, snap_idx):
                 return "L"
         # Forced-inactive weekly clients with no prior cert in this cycle
@@ -3981,7 +4038,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         c_month = latest_cert_in_month(client, cert_idx, year, month, on_or_before=today)
         if c_month:
             d = c_month.date()
-            d = next_monday_if_weekend(d) if d.weekday() >= 5 else d
+            if d.year != year or d.month != month:
+                # MONTHLY_CERT_MONTH_REMAP cert from another calendar month (a
+                # late delivery certified after the month rolled over): the cert
+                # date can't be a placement day on this tab (rows whose date
+                # falls outside the month are dropped), so anchor it to this
+                # month's expected day and render the cert date there.
+                d = expected_date
+            else:
+                d = next_monday_if_weekend(d) if d.weekday() >= 5 else d
             return d, c_month.date()
 
         # 1-stage) Monthly stage-file clients (Tufts_PublicPlan, MedicalMutualMHS):

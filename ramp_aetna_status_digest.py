@@ -317,51 +317,103 @@ def _run_progress(server, name):
     return None, None, None
 
 
-def _step_hist(server, name, n=6):
-    """{step_id: avg duration seconds} over the last n successful runs per real
-    step (1..49; excludes the step_id=0 job-outcome row)."""
+# ---- Per-step remaining time (per user 2026-08-05) ---------------------------
+# REPLACES `_step_hist`, which averaged each step's duration over the last 6
+# successful runs and summed the current + remaining steps. Two problems with
+# that, both visible in this job's own history over 120 days:
+#
+#   1. The ARITHMETIC MEAN is badly skewed by outliers here -- step 7 'Execute
+#      DHTStats' averages 1h20m against a 47m median (max 10h21m), step 4 'Build
+#      Chimera' 1h47m vs 1h23m (max 7h18m), step 2 (SSIS) 3h38m vs 2h48m (max
+#      16h37m). Summing skewed means pushed the ETA systematically late.
+#   2. Summing per-step averages assumes the steps are independent, and it can't
+#      use the one live fact available -- how long the current step has ALREADY
+#      been running -- except as a crude "it overran, so restart from now".
+#
+# Measuring step-start-to-JOB-end directly, then survival-filtering on time
+# already spent in the step, fixes both. Backtested walk-forward over 219 runs
+# (_eta_backtest.py): median error 1h18m -> 1h04m, p90 6h23m -> 6h24m, bias
+# -32m -> -20m. This is the same estimator the HRP/Rx digests use.
+#
+# NOTE: this job is NOT given the SSISDB milestone ladder that HRP and Rx use.
+# Measured, it made this job WORSE during the SSIS step (in-SSIS median error
+# 2h32m -> 2h58m) because AetnaRCE_Load.dtsx task tails are far too noisy
+# (sd of end-fraction .22-.26 across every candidate rung). It doesn't need it
+# either: the SSIS step is only 41% of this job's wall-clock, against 85% for HRP
+# and 99% for Rx, so the per-step path below already covers most of the run.
+def _step_remaining_secs(server, name, step_id, days=120):
+    """Ascending historical wall-clock (seconds) from the START of `step_id`
+    through the END of the job, over recent runs that finished successfully.
+
+    sysjobhistory has no run key, and grouping by run_date is wrong (these jobs
+    can legitimately run twice in a day), so each step row is attached to the next
+    step_id=0 'job outcome' row after it. That bucketing is done against ALL
+    outcome rows and only then filtered to successful ones -- bucketing against
+    successes alone would graft a failed run's steps onto the next good run."""
     q = ("SET NOCOUNT ON; "
          f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
-         ";WITH h AS (SELECT step_id, "
-         "(run_duration/10000)*3600+((run_duration/100)%100)*60+(run_duration%100) AS s, "
-         "ROW_NUMBER() OVER (PARTITION BY step_id ORDER BY run_date DESC, run_time DESC) rn "
-         "FROM msdb.dbo.sysjobhistory WITH (NOLOCK) WHERE job_id=@jid AND step_id BETWEEN 1 AND 49 "
-         "AND run_status=1) "
-         f"SELECT step_id, AVG(s) FROM h WHERE rn<={n} GROUP BY step_id ORDER BY step_id;")
-    out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
-                         capture_output=True, text=True, timeout=120)
-    hist = {}
-    for line in out.stdout.splitlines():
-        parts = [p.strip() for p in line.split('|')]
-        if len(parts) >= 2 and parts[0].isdigit() and parts[1].lstrip('-').isdigit():
-            hist[int(parts[0])] = int(parts[1])
-    return hist
+         f"DECLARE @sid int={int(step_id)}; "
+         "WITH h AS (SELECT instance_id, step_id, run_status, "
+         "  (run_duration/10000)*3600+((run_duration/100)%100)*60+(run_duration%100) AS secs "
+         "  FROM msdb.dbo.sysjobhistory WITH (NOLOCK) WHERE job_id=@jid "
+         f"  AND run_date>=CONVERT(int,CONVERT(varchar(8),DATEADD(day,-{int(days)},GETDATE()),112))), "
+         "o AS (SELECT instance_id, run_status FROM h WHERE step_id=0), "
+         "t AS (SELECT h.step_id, h.secs, h.run_status, "
+         "  (SELECT MIN(o.instance_id) FROM o WHERE o.instance_id>h.instance_id) AS rk "
+         "  FROM h WHERE h.step_id>=@sid) "
+         "SELECT SUM(t.secs) FROM t JOIN o ON o.instance_id=t.rk AND o.run_status=1 "
+         "GROUP BY t.rk "
+         "HAVING MIN(t.run_status)=1 AND MAX(CASE WHEN t.step_id=@sid THEN 1 ELSE 0 END)=1 "
+         "ORDER BY 1;")
+    try:
+        out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
+                             capture_output=True, text=True, timeout=120)
+    except Exception:
+        return []
+    return sorted(int(s) for s in (l.strip() for l in out.stdout.splitlines()) if s.isdigit())
 
 
-_STEP_NAMES = {}
+_STEPS_CACHE = {}
 
 
-def _step_names(server, name):
-    """{step_id: step_name} for the job, cached per process (used to label the live
-    step in the digest, e.g. 'Executing Step 4/12 - Build Chimera')."""
+def _steps(server, name):
+    """{step_id: (step_name, subsystem)} for the job, cached per process."""
     key = (server, name)
-    if key in _STEP_NAMES:
-        return _STEP_NAMES[key]
+    if key in _STEPS_CACHE:
+        return _STEPS_CACHE[key]
     q = ("SET NOCOUNT ON; "
          f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
-         "SELECT step_id, step_name FROM msdb.dbo.sysjobsteps WHERE job_id=@jid ORDER BY step_id;")
-    names = {}
+         "SELECT step_id, subsystem, step_name FROM msdb.dbo.sysjobsteps "
+         "WHERE job_id=@jid ORDER BY step_id;")
+    steps = {}
     try:
         out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
                              capture_output=True, text=True, timeout=120)
         for line in out.stdout.splitlines():
             parts = [p.strip() for p in line.split('|')]
-            if len(parts) >= 2 and parts[0].isdigit():
-                names[int(parts[0])] = parts[1]
+            if len(parts) >= 3 and parts[0].isdigit():
+                steps[int(parts[0])] = (parts[2], parts[1])
     except Exception:
         pass
-    _STEP_NAMES[key] = names
-    return names
+    _STEPS_CACHE[key] = steps
+    return steps
+
+
+def _step_names(server, name):
+    """{step_id: step_name} for the job (used to label the live step in the digest,
+    e.g. 'Executing Step 4/12 - Build Chimera')."""
+    return {k: v[0] for k, v in _steps(server, name).items()}
+
+
+def _ssis_step_id(server, name):
+    """The LAST step whose subsystem is SSIS -- the heavy package load, after which
+    only the short T-SQL finishers remain. Read from sysjobsteps rather than
+    hardcoded because the position differs per job (this digest's two jobs are
+    AetnaRCE=2, where step 1 is a TSQL 'Wait for Claims.C20_NEW TableLoad', and
+    NCStateAetna=1) and so it self-heals if a step is inserted ahead of the
+    package. Defaults to 1."""
+    ssis = [k for k, v in _steps(server, name).items() if v[1].upper() == 'SSIS']
+    return max(ssis) if ssis else 1
 
 
 def _pct(sorted_vals, p):
@@ -402,12 +454,15 @@ def _why_longer(durs, beyond_history, projected=False):
             f"only the slower run times still possible"]
 
 
-def _why_step_longer(sid, avg_secs):
-    """Step-path variant (RCE only): this job reports real per-step progress, so
-    when the ETA is pushed out it's because the CURRENT step has outlived its
-    historical average -- say that, with the average from history."""
-    return [f"{NOTE_ICON} why: step {sid} has already run past its usual "
-            f"{_dur_h(avg_secs)}, so the ETA now covers only the steps left after it"]
+def _why_step_longer(sid, typical_secs):
+    """Step-path variant (RCE only, per user 2026-07-27): this job reports real
+    per-step progress, so when the ETA is pushed out it's because the CURRENT step
+    is running past what history says it usually takes to reach the finish from
+    there. `typical_secs` is the MEDIAN of that step-start-to-job-end history (it
+    was the mean of per-step averages before 2026-08-05)."""
+    return [f"{NOTE_ICON} why: step {sid} onward usually finishes the job in "
+            f"{_dur_h(typical_secs)} and we are already past that, so the ETA now "
+            f"reflects only the slower outcomes still possible"]
 
 
 def _dur_h(sec):
@@ -428,44 +483,81 @@ def _eta_stamp(dt):
     return dt.strftime('%m/%d %I:%M %p').lstrip('0')
 
 
+# Survival percentile used inside the live step. Overruns are one-sided -- a step
+# can take arbitrarily longer than usual but not much less -- so a median runs
+# systematically early. Measured over 219 runs, p80 beat p50/p60/p70 on median
+# error, p90 error AND bias. Same value in all three Aetna digests.
+STEP_PCT = 80
+
+
+def _step_eta(server, name, sid, sstart):
+    """ETA lines projected from the live step's start, or None to fall through.
+    Survival-filtered within the step: drop the historical outcomes already ruled
+    out by how long this step has been running, then take the STEP_PCT percentile
+    of what's left. Monotonic inside a step, and free to drop sharply at a step
+    boundary -- which is the point, since this job's T-SQL tail is 59% of its
+    wall-clock across 10 steps."""
+    # Check for the LAST step before consulting history. The trailing 'Success
+    # Step' is a 0-second no-op, so it either writes no history row at all (HRP
+    # step 9 has 3 rows, Rx none) or writes rows of all zeros (RCE step 12 has 12).
+    # The all-zeros case is the trap: every historical outcome is 0s, so any time
+    # at all in the step empties the survival filter and the old ordering reported
+    # 'running long, still processing' for a step with nothing left to do.
+    steps = _steps(server, name)
+    if steps and sid >= max(steps):
+        return [f"{EXEC_ICON} final steps - wrapping up"]
+    rem = _step_remaining_secs(server, name, sid)
+    if not rem:
+        return None
+    in_step = (datetime.now() - sstart).total_seconds()
+    possible = [d for d in rem if d >= in_step]
+    if not possible:
+        return ([f"{EXEC_ICON} final steps - running long, still processing"]
+                + _why_step_longer(sid, _pct(rem, 50)))
+    eta = sstart + timedelta(seconds=_pct(possible, STEP_PCT))
+    if eta <= datetime.now():
+        return [f"{EXEC_ICON} final steps - wrapping up"]
+    line = [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
+    if in_step > _pct(rem, 75):
+        line += _why_step_longer(sid, _pct(rem, 50))
+    return line
+
+
 def eta_detail(server, name):
-    """Progressive expected-completion ETA for the in-flight run. Primary estimate
-    anchors to the CURRENT step's start + the historical average duration of the
-    current and remaining steps (so it never re-adds time already spent in earlier
-    steps, and tightens as the job advances). Falls back to run_start + MEDIAN
-    full-run duration (p50->p75->'running longer than usual') when step progress
-    can't be read."""
+    """Progressive expected-completion ETA for the in-flight run.
+
+    Once the run is past the SSIS step, project from the LIVE step's start using
+    measured step-start-to-job-end history (_step_eta). While the SSIS step itself
+    is running there is no finer signal for this job -- unlike HRP and Rx it gets
+    no SSISDB milestone ladder, because the AetnaRCE package's task tails are too
+    noisy to help (see the note above _step_remaining_secs) -- so fall back to the
+    anchored whole-job survival median.
+
+    The fallback is the SURVIVAL median (drop the historical runs shorter than
+    we've already been running, take the median of what's left), matching the
+    HRP/Rx digests. It replaced a fixed p50->p75 step-up on 2026-08-05; the
+    survival form is what the backtest measured and it can only move the ETA later
+    as outcomes are genuinely eliminated, so it never drifts on 'now'."""
     now = datetime.now()
     start, step_start, sid = _run_progress(server, name)
-    hist = _step_hist(server, name)
-    if step_start and sid is not None and hist:
-        rem_incl = sum(v for s, v in hist.items() if s >= sid)   # current + later steps
-        rem_after = sum(v for s, v in hist.items() if s > sid)   # later steps only
-        eta = step_start + timedelta(seconds=rem_incl)
-        overran = False
-        if eta <= now:                       # current step already overran its average
-            eta = now + timedelta(seconds=rem_after)
-            overran = True
-        if eta <= now:                       # on/after the last step -> essentially done
-            return [f"{EXEC_ICON} final stage - wrapping up"]
-        line = [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
-        if overran:
-            line += _why_step_longer(sid, hist.get(sid, 0))
-        return line
-    # Fallback: anchored full-run median (mirrors HRP/Rx).
+    if step_start and sid is not None and sid > _ssis_step_id(server, name):
+        stepped = _step_eta(server, name, sid, step_start)
+        if stepped:
+            return stepped
     durs = sorted(_recent_full_durations(server, name))
     if not durs:
         return [f"{EXEC_ICON} in progress"]
-    est, hi = _pct(durs, 50), _pct(durs, 75)
     if not start:
-        return [f"{EXEC_ICON} ETA ~{_eta_stamp(now + timedelta(seconds=est))}"]
+        eta = now + timedelta(seconds=_pct(durs, 50))
+        return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
     elapsed = (now - start).total_seconds()
-    if elapsed > hi:
+    still_possible = [d for d in durs if d >= elapsed]
+    if not still_possible:
         return ([f"{EXEC_ICON} running {_dur_h(elapsed)} - longer than usual, still processing"]
                 + _why_longer(durs, True))
-    eta = start + timedelta(seconds=(est if elapsed < est else hi))
+    eta = start + timedelta(seconds=_pct(still_possible, 50))
     line = [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
-    if elapsed > est:
+    if elapsed > _pct(durs, 75):
         return line + _why_longer(durs, False)
     return line
 

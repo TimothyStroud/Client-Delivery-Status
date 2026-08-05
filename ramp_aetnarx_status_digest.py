@@ -325,17 +325,37 @@ def _ceil_15(dt):
 
 
 # ---- Live final-stage signal from SSISDB (per user 2026-07-23) ----------------
-# Mirrors the HRP digest: input volume does NOT predict this load's duration and
-# the Agent job is a single dominant step, so there's no reliable early/mid-run
-# ETA. But the underlying SSIS package (SSISDB on TRGETLPROD2) has a late task that
-# reliably COMPLETES at a stable ~88% of wall-clock; once the live run passes it we
-# project ETA = run_start + elapsed / that_fraction. The milestone is chosen
-# dynamically each call so it self-heals across redeploys; any error -> None -> the
-# anchored median is used instead.
+# Mirrors the HRP digest. Input volume does NOT predict this load's duration, and
+# the SSIS package is 99.0% of the job's wall-clock (the T-SQL steps 2-4 median
+# ~2 min), so the package's own task log is the ONLY mid-run signal there is --
+# per-step history from sysjobhistory has essentially nothing left to pace here.
 SSIS_SERVER = 'TRGETLPROD2'
 SSIS_PKG = 'AetnaRx_MasterLoad_Claims_And_Eligibility.dtsx'
-FS_MAX_FRAC = 0.95   # ignore terminal cleanup tasks pinned at ~99-100% (no lead time)
-FS_MAX_SD = 0.08     # milestone must complete at a stable fraction across runs
+
+# ---- SSIS milestone LADDER (per user 2026-08-05) ------------------------------
+# Was: ONE milestone task at ~84% of the package, leaving the ETA on whole-job
+# history for everything before it. The package logs EVERY task completion, so we
+# now admit a ladder of rungs and use the LATEST one the live run has passed.
+# Backtested walk-forward over 236 runs (_eta_backtest.py): median error 41m ->
+# 33m, p90 7h09m -> 5h04m, bias -30m -> -17m, with a rung available on 36% of
+# in-SSIS ticks.
+#
+# Admissibility is about the TAIL, not the fraction: the ETA is rung_end +
+# median_tail, so the error IS the tail's spread. The old sd(frac) test would
+# happily admit a task that finishes at a rock-steady 0.1% of wall-clock and
+# carries a useless multi-hour tail.
+LADDER_MIN_SAMPLES = 5      # a rung needs real history before we trust its tail
+LADDER_MIN_FRAC = 0.55      # before this, a completion carries no information
+LADDER_MAX_FRAC = 0.97      # after this there's no lead time left to be useful
+LADDER_IQR_FLOOR = 20 * 60  # allow at least this much tail spread...
+LADDER_IQR_REL = 0.35       # ...or this share of the tail, whichever is larger...
+LADDER_IQR_CAP = 90 * 60    # ...but never more than this in absolute terms.
+
+# Survival percentile used inside the live step (was the p50 median). Overruns are
+# one-sided, so a median runs systematically early; p80 beat p50/p60/p70 on median
+# error, p90 error AND bias across the Aetna jobs. Kept identical in all three
+# digests even though this job's T-SQL tail is too short for it to matter much.
+STEP_PCT = 80
 
 
 def _ssis_sql(query):
@@ -356,65 +376,122 @@ def _ssis_sql(query):
     return rows
 
 
-def _ssis_milestone():
-    """(executable_id, median_tail_seconds) for the latest STABLE late milestone
-    task over the last 6 successful runs, or (None, None). Milestone = latest task
-    completing at a consistent fraction of wall-clock (sd <= FS_MAX_SD, <=
-    FS_MAX_FRAC for lead time); we return the MEDIAN tail (run_end - milestone_end),
-    which is roughly fixed in absolute time regardless of load length (validated
-    2026-07-23), so ETA = milestone_end + median_tail is robust on outlier runs."""
+def _ssis_ladder():
+    """{executable_id: median_tail_seconds} -- every package task usable as an ETA
+    rung, judged over the last 8 successful executions. {} on any read error, which
+    simply drops the caller back to whole-job history.
+
+    A rung qualifies when it has LADDER_MIN_SAMPLES history, completes inside
+    [LADDER_MIN_FRAC, LADDER_MAX_FRAC] of package wall-clock, and its tail
+    (run_end - task_end) has a bounded interquartile spread. The tail is used in
+    ABSOLUTE time rather than as a fraction of elapsed because the finalization
+    work after a rung is roughly fixed no matter how long the heavy load ran
+    (validated 2026-07-23: a 14 h Rx run and a 2.5 h one both had ~25 min tails).
+
+    Chosen dynamically rather than hardcoded so the ladder self-heals across
+    package redeploys -- a redeploy renumbers executable_ids, and unknown ids
+    simply fail the sample-count test until they build history."""
     rows = _ssis_sql(
         f"DECLARE @pkg sysname=N'{SSIS_PKG}'; "
-        ";WITH ex AS (SELECT TOP 6 execution_id, start_time, end_time, "
+        ";WITH ex AS (SELECT TOP 8 execution_id, start_time, end_time, "
         "  DATEDIFF(second,start_time,end_time) AS total_sec "
         "  FROM catalog.executions WHERE package_name=@pkg AND status=7 "
         "  AND end_time IS NOT NULL ORDER BY execution_id DESC), "
         "f AS (SELECT es.executable_id, "
         "  CAST(DATEDIFF(second,ex.start_time,es.end_time) AS float)"
         "  /NULLIF(ex.total_sec,0) AS frac, "
-        "  DATEDIFF(second,es.end_time,ex.end_time) AS tail "
+        "  CAST(DATEDIFF(second,es.end_time,ex.end_time) AS float) AS tail "
         "  FROM catalog.executable_statistics es "
         "  JOIN ex ON ex.execution_id=es.execution_id WHERE ex.total_sec>600), "
-        "pick AS (SELECT TOP 1 executable_id FROM f GROUP BY executable_id "
-        f"  HAVING COUNT(*)>=4 AND AVG(frac)<={FS_MAX_FRAC} "
-        f"  AND ISNULL(STDEV(frac),1)<={FS_MAX_SD} ORDER BY AVG(frac) DESC) "
-        "SELECT p.executable_id, (SELECT DISTINCT PERCENTILE_CONT(0.5) "
-        "  WITHIN GROUP (ORDER BY CAST(f2.tail AS float)) OVER() "
-        "  FROM f f2 WHERE f2.executable_id=p.executable_id) FROM pick p;")
-    if rows and len(rows[0]) >= 2:
-        try:
-            return int(rows[0][0]), float(rows[0][1])
-        except Exception:
-            pass
-    return None, None
+        "s AS (SELECT DISTINCT executable_id, "
+        "  COUNT(*) OVER (PARTITION BY executable_id) AS n, "
+        "  AVG(frac) OVER (PARTITION BY executable_id) AS avg_frac, "
+        "  PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY tail) "
+        "    OVER (PARTITION BY executable_id) AS med_tail, "
+        "  PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY tail) "
+        "    OVER (PARTITION BY executable_id) AS p25, "
+        "  PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY tail) "
+        "    OVER (PARTITION BY executable_id) AS p75 FROM f) "
+        "SELECT executable_id, CAST(med_tail AS int) FROM s "
+        f"WHERE n>={LADDER_MIN_SAMPLES} AND med_tail>=0 "
+        f"  AND avg_frac>={LADDER_MIN_FRAC} AND avg_frac<={LADDER_MAX_FRAC} "
+        f"  AND (p75-p25)<={LADDER_IQR_CAP} "
+        f"  AND (p75-p25)<=(CASE WHEN {LADDER_IQR_FLOOR}>{LADDER_IQR_REL}*med_tail "
+        f"                       THEN {LADDER_IQR_FLOOR} ELSE {LADDER_IQR_REL}*med_tail END);")
+    ladder = {}
+    for r in rows:
+        if len(r) >= 2 and r[0].lstrip('-').isdigit() and r[1].lstrip('-').isdigit():
+            ladder[int(r[0])] = int(r[1])
+    return ladder
+
+
+NOTE_ICON = ':information_source:'   # neutral on purpose -- a long run is NOT a failure,
+                                     # so this never uses the red/failure marker (per user
+                                     # 2026-07-27).
+
+
+def _why_longer(durs, beyond_history, projected=False):
+    """One-line, HISTORY-DERIVED explanation of why the ETA moved out (per user
+    2026-07-27: "a small note about why the ETA is longer"). Every number in it
+    comes from this job's OWN recent successful runs -- fastest, slowest, typical,
+    and where the live run sits against them -- so nothing is hardcoded and it
+    can't go stale as the load's profile changes. Kept identical across the three
+    Aetna digests (they're standalone clones, no shared module).
+
+    `projected` says whether the caller is still showing a clock ETA extrapolated
+    from elapsed time (Rx) or has no ETA left to show (HRP/RCE), so the wording
+    matches what's actually on the line above."""
+    if not durs:
+        return []
+    lo, hi, typical, n = durs[0], durs[-1], _pct(durs, 50), len(durs)
+    if beyond_history:
+        tail = ("so the ETA is projected from elapsed time rather than history"
+                if projected else "so recent history no longer bounds the finish")
+        return [f"{NOTE_ICON} why: already past the slowest of the last {n} runs "
+                f"({_dur_h(hi)}), {tail}"]
+    return [f"{NOTE_ICON} why: this load's run time varies (last {n}: {_dur_h(lo)}-{_dur_h(hi)}, "
+            f"typically {_dur_h(typical)}); we are past the typical, so the ETA now reflects "
+            f"only the slower run times still possible"]
 
 
 def _ssis_final_stage_eta():
-    """If the SSIS package is running AND has already completed its stable late
-    milestone task, return projected completion = milestone_end + median_tail.
-    Else None (the JOIN yields no row until the milestone completes -- exactly the
-    'not in the final stretch yet' case)."""
-    mid, tail = _ssis_milestone()
-    if not mid or tail is None or tail < 0:
+    """Projected package completion from the LATEST ladder rung the live execution
+    has passed: rung_end + that rung's median tail. None when the package isn't
+    running or hasn't reached any rung yet -- exactly the 'no finer signal than
+    whole-job history' case.
+
+    Because later rungs have shorter, tighter tails, taking the latest one passed
+    means the estimate tightens progressively through the package instead of
+    staying blind until a single ~84% task fires, which on 2-hourly ticks it
+    frequently never did within the life of a run."""
+    ladder = _ssis_ladder()
+    if not ladder:
         return None
-    # Pick the LATEST genuinely-current running execution (recency guard excludes
-    # orphaned executions left stuck at status=2), THEN check whether IT has
-    # completed the milestone. Doing it in that order matters: a real run that
-    # hasn't reached its milestone yet must return None (fall back to the anchored
-    # median), not silently match some older execution that happens to have one.
+    ids = ','.join(str(int(k)) for k in ladder)
+    # Pick the LATEST genuinely-current running execution (the recency guard
+    # excludes orphaned executions left stuck at status=2 -- there is one from
+    # 2023), THEN ask which rungs IT has passed. Doing it in that order matters: a
+    # real run that has passed no rung yet must return None and fall back, not
+    # silently match an older execution that happens to have rung data.
     rows = _ssis_sql(
-        f"DECLARE @pkg sysname=N'{SSIS_PKG}'; DECLARE @mid bigint={mid}; DECLARE @rid bigint; "
+        f"DECLARE @pkg sysname=N'{SSIS_PKG}'; DECLARE @rid bigint; "
         "SELECT TOP 1 @rid=execution_id FROM catalog.executions "
         "  WHERE package_name=@pkg AND status=2 "
         "  AND start_time>DATEADD(day,-3,GETDATE()) ORDER BY execution_id DESC; "
-        "SELECT CONVERT(varchar(19),s.end_time,120) FROM catalog.executable_statistics s "
-        "  WHERE s.execution_id=@rid AND s.executable_id=@mid;")
-    if not rows:
+        "SELECT TOP 1 CONVERT(varchar(19),s.end_time,120), s.executable_id "
+        "  FROM catalog.executable_statistics s "
+        f"  WHERE s.execution_id=@rid AND s.executable_id IN ({ids}) "
+        "  AND s.end_time IS NOT NULL ORDER BY s.end_time DESC;")
+    if not rows or len(rows[0]) < 2:
         return None
-    mend = _to_dt(rows[0][0])
-    if not mend:
+    rend = _to_dt(rows[0][0])
+    try:
+        tail = ladder[int(rows[0][1])]
+    except (ValueError, KeyError):
         return None
-    return mend + timedelta(seconds=tail)
+    if not rend:
+        return None
+    return rend + timedelta(seconds=tail)
 
 
 # ---- Step-aware ETA (per user 2026-08-04) ------------------------------------
@@ -534,21 +611,23 @@ def _step_eta(server, name, sid, sstart):
     Survival-filtered within the step, like the whole-job estimator: drop the
     outcomes already ruled out by how long this step has been running, then take
     the median of what remains."""
+    # Check for the LAST step before consulting history. The trailing 'Success
+    # Step' is a 0-second no-op, so it either writes no history row at all (HRP
+    # step 9 has 3 rows, Rx none) or writes rows of all zeros (RCE step 12 has 12).
+    # The all-zeros case is the trap: every historical outcome is 0s, so any time
+    # at all in the step empties the survival filter and the old ordering reported
+    # 'running long, still processing' for a step with nothing left to do.
+    steps = _steps(server, name)
+    if steps and sid >= max(steps):
+        return [f"{EXEC_ICON} final steps - wrapping up"]
     rem = _step_remaining_secs(server, name, sid)
     if not rem:
-        # 'Success Step' is a 0-second no-op that doesn't reliably write a history
-        # row, so it can have no samples (it has none here). Landing on the last
-        # step means the job is done bar the outcome row -- say that, rather than
-        # falling through to whole-job history and quoting hours with nothing left.
-        steps = _steps(server, name)
-        if steps and sid >= max(steps):
-            return [f"{EXEC_ICON} final steps - wrapping up"]
         return None
     in_step = (datetime.now() - sstart).total_seconds()
     possible = [d for d in rem if d >= in_step]
     if not possible:
         return [f"{EXEC_ICON} final steps - running long, still processing"]
-    eta = sstart + timedelta(seconds=_pct(possible, 50))
+    eta = sstart + timedelta(seconds=_pct(possible, STEP_PCT))
     if eta <= datetime.now():
         return [f"{EXEC_ICON} final steps - wrapping up"]
     return [f"{EXEC_ICON} ETA ~{_eta_stamp(eta)}"]
