@@ -184,7 +184,17 @@ CLIENT_ALIASES = {
     # WellCareRx: per user 2026-05-18, ancillary jobs (COBC, ABII) are NOT
     # load indicators — exclude their snap_idx keys from matching so that a
     # successful COBC load this week does not trip the "loaded this week" L.
-    "WellCareRx":           ["wellcarerx", "wellcarerxmasterload"],
+    # 2026-08-06: added "wellcarerxmaster" — the REAL snap_idx key. build_snap_index
+    # slices the JobName before the first digit ("WellCareRx Masterload ") then strips
+    # a trailing step word with `(load|stage|snap|...)$` — which has no word boundary,
+    # so it eats the "load" inside "Master*load*" → key "wellcarerxmaster". The
+    # "wellcarerxmasterload" alias below therefore NEVER matched under
+    # _src_matches_client's strict equality, so snap_in_week always returned None and
+    # the Friday cell went blank between load and cert (every week was being patched
+    # by hand via MANUAL_OVERRIDES). Same latent bug shape as UPMC, which already
+    # carries both "upmcmaster" and "upmcmasterload".
+    "WellCareRx":           ["wellcarerx", "wellcarerxmaster",
+                             "wellcarerxmasterload"],
     # Oscar / OscarRx job prefixes. NOTE: the bare "oscar" alias was REMOVED
     # 2026-07-23 — it substring-matched "oscarrx..." in find_matching_jobs and
     # put a false "L" on Oscar Medical from a Ready 'Oscar RX 0110 Load'. Only
@@ -484,7 +494,12 @@ LOAD_NAME_REQUIRED = {
     # WellCareRx: narrowed to the Masterload Load step 2026-06-08 (was
     # "masterload","claim") so 'WellCareRx Masterload 0100 Stage' no longer
     # trips L via the snap-index activity path. Delivery = Masterload 0110 Load.
-    "WellCareRx":        ("masterload 0110 load",),
+    # 2026-08-06: added the 0120 Snap step (same shape as ElevanceMMMRx above) so
+    # is_loading_today keeps the cell at "L" while the snap is still running — a
+    # cert client is supposed to hold L through BOTH steps until certification,
+    # but the load-only keyword cleared it the moment 0110 finished. Still excludes
+    # 0100 Stage / 0130 Post Snap / 0140 MINE Snap and the COBC + ABII jobs.
+    "WellCareRx":        ("masterload 0110 load", "masterload 0120 snap"),
     # BCBSSC (monthly, ~20th): delivery = 'BCBSSC 0110 Load'. build_snap_index
     # indexes Stage jobs with kind="load", so a Ready/Resolved 'BCBSSC 0100
     # Stage' was satisfying load_this_month and painting "L" on the expected day
@@ -1072,11 +1087,18 @@ ADDITIONAL_ENTRIES = [
     ("weekly", date(2026, 7, 24), "WellCareRx (Ad Hoc)", date(2026, 7, 22), False, None),
     # 2026-08-05: 'HealthNet 0110 Claims Load' (JobId 1812) Failed 8/5 12:22 —
     # per user it is an AD HOC RE-LOAD of the 3/20–3/27 data, NOT the weekly
-    # delivery. Surface it as its own labeled row on the failure day; the regular
-    # HealthNetCA Monday rows stay "Inactive" (FORCED_INACTIVE). Update the
-    # marker (or drop this row) once the re-load succeeds.
-    ("weekly", date(2026, 8, 5), "HealthNetCA (Ad Hoc 3/20-3/27)",
-     "Load Failure", True, None),
+    # delivery. Surface it as its own labeled row; the regular HealthNetCA Monday
+    # rows stay "Inactive" (FORCED_INACTIVE).
+    # 2026-08-06 per user: "The HealthNetCA (3/20-3/27) load restarted today at
+    # 7:10a." QueueId 1417891 started 7:11 and is RUNNING (SSIS HealthNetCA
+    # Weekly on TRGETL1, step 2 of 8 "Pull" — the ~3.5h step; prior full runs
+    # 4.5-7.5h). The 8/5 12:22 + 15:26 attempts both died in 0 min and are
+    # superseded, so the row MOVES to 8/6 as "L" instead of keeping the failure.
+    # Flip to "✓" when the load succeeds (or a cert date once certified).
+    # NOTE: HealthNetCA is FORCED_INACTIVE, so resolve_marker can never paint
+    # this activity on the Monday cells — this labeled row is the only surface.
+    ("weekly", date(2026, 8, 6), "HealthNetCA (Ad Hoc 3/20-3/27)",
+     "L", False, None),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
