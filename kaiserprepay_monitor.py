@@ -38,6 +38,11 @@ CERT_DBNAME       = "KaiserPrePayCOB"
 CERT_READY_STATUS = "Email sent, Ready for Certification review"
 CERT_BACKFILL_DAYS = 3
 CERT_LOG_FILE     = r"H:\kaiserprepaycob_certify.log"
+# Manual brake: while this file exists, certification is skipped entirely.
+CERT_HOLD_FILE    = r"H:\kaiserprepay_cert_hold.txt"
+# Ignore in-flight RAMP runs older than this (a hung/orphaned run must not
+# block certification forever).
+CERT_INFLIGHT_LOOKBACK_HOURS = 24
 # If a Load succeeded but its Snap is still not terminal this long after the
 # Load finished, post anyway (flagging the snap) instead of stalling forever.
 SNAP_WAIT_HOURS = 3
@@ -253,6 +258,64 @@ def build_message(stage, load, snap, files, load_date):
     return "\n".join(lines)
 
 
+def cert_gate():
+    """Is it safe to auto-certify right now? -> (ok, reason)
+
+    The DHT row reaches CERT_READY_STATUS *during the 0110 Load*, BEFORE the
+    0120 Snap runs (e.g. 8/6 CertID 1308113: validated 08:45, snap 08:55-09:37),
+    so the DHT status alone is NOT a "snap finished" gate. A day can also have a
+    SECOND cycle (the MA file loads/snaps, then the SC file stages later) - and
+    certifying after the first cycle would certify before the second file's data
+    is in. So require, on top of the DHT status:
+      1. no manual hold file,
+      2. no in-flight Stage/Load/Snap run (EndDate NULL) in the last
+         CERT_INFLIGHT_LOOKBACK_HOURS,
+      3. the most recent Load succeeded, and its Snap exists and succeeded.
+    """
+    if os.path.exists(CERT_HOLD_FILE):
+        try:
+            note = open(CERT_HOLD_FILE, encoding="utf-8").read().strip()[:200]
+        except Exception:
+            note = ""
+        return False, f"manual hold file present ({CERT_HOLD_FILE}){': ' + note if note else ''}"
+
+    inflight = run_sql(
+        "SET NOCOUNT ON; SELECT TOP 1 QueueId, JobId, ISNULL(Status,''), "
+        "CONVERT(varchar(19),StartDate,121) FROM [RAMP].[ramp].[Queue] "
+        f"WHERE JobId IN ({JOB_STAGE},{JOB_LOAD},{JOB_SNAP}) AND EndDate IS NULL "
+        f"AND StartDate >= DATEADD(hour,-{CERT_INFLIGHT_LOOKBACK_HOURS}, GETDATE()) "
+        "ORDER BY QueueId DESC"
+    )
+    if inflight:
+        q, j, st, sd = (inflight[0] + ["", "", "", ""])[:4]
+        names = {str(JOB_STAGE): "0100 Stage", str(JOB_LOAD): "0110 Load", str(JOB_SNAP): "0120 Snap"}
+        return False, (f"cycle in flight: {names.get(j.strip(), 'Job ' + j)} "
+                       f"QueueId={q} status='{st.strip()}' started {sd.strip()} - not finished yet")
+
+    loads = run_sql(
+        "SET NOCOUNT ON; SELECT TOP 1 QueueId, Status, "
+        "CONVERT(varchar(19),StartDate,121), CONVERT(varchar(19),EndDate,121) "
+        f"FROM [RAMP].[ramp].[Queue] WHERE JobId={JOB_LOAD} ORDER BY QueueId DESC"
+    )
+    if not loads:
+        return False, "no 0110 Load run found in RAMP"
+    load = loads[0]
+    load_cls = classify(load[1])
+    if load_cls != "SUCCESS":
+        return False, f"latest 0110 Load QueueId={load[0]} is {load_cls} ('{load[1].strip()}')"
+
+    snap = cycle_snap(load[3], load[2][:10])
+    if not snap:
+        return False, f"no 0120 Snap found yet for Load QueueId={load[0]}"
+    snap_cls = classify(snap[1])
+    if snap_cls != "SUCCESS":
+        return False, (f"0120 Snap QueueId={snap[0]} for Load QueueId={load[0]} "
+                       f"is {snap_cls} ('{snap[1].strip()}')")
+
+    return True, (f"Load QueueId={load[0]} SUCCESS ({fmt_span(load[2], load[3])}), "
+                  f"Snap QueueId={snap[0]} SUCCESS ({fmt_span(snap[2], snap[3])})")
+
+
 def certify_eligible():
     """Certify each KaiserPrePayCOB CertID that is READY but not yet certified.
 
@@ -261,7 +324,15 @@ def certify_eligible():
     (today plus a back-certify window for missed days). Idempotent: once a
     CertID is certified it drops out of the query, so this is safe to run on
     every monitor invocation.
+
+    Gated by cert_gate(): the whole RAMP cycle (0110 Load + 0120 Snap) must have
+    finished successfully first - the DHT status goes ready mid-load.
     """
+    ok, why = cert_gate()
+    if not ok:
+        clog(f"HOLD - not certifying: {why}")
+        return
+    clog(f"gate open: {why}")
     q = (
         "SET NOCOUNT ON; SELECT DISTINCT CAST(CertID AS varchar(30)) "
         "FROM [DHTStats].[DHT].[TableList] "
