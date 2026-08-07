@@ -150,12 +150,14 @@ TOOLS = [
      "filedate:open"),
     ("File Transformer",
      r"\\trgfile1\Operations\Software\_Source\ToolBox\File Transformer\File Transformer.application",
-     ""),
+     "filetransformer:open"),
 ]
 
-# One-time per-machine registration for the filedate: protocol, copied next to
-# the report so other users can self-register by double-clicking it.
-REG_FILE = "Register-FileDate-Protocol.reg"
+# Published next to the report so other users can self-register the protocols by
+# double-clicking the .reg.  The .cmd is the launcher the filetransformer:
+# handler points at, so it has to sit in that same folder.
+REG_FILE = "Register-CMSE-Tools.reg"
+SIDECARS = [REG_FILE, "LaunchFileTransformer.cmd"]
 
 # Loads whose ticket the PCN search can't find (the PCN isn't written in any
 # work item description).  Keyed on the ProductionControlId; a key that is the
@@ -1226,19 +1228,20 @@ def main():
     if written != primary:
         print("[warn] primary path %s was not written" % primary)
 
-    # publish the protocol registration next to each copy of the report
-    src_reg = os.path.join(HERE, REG_FILE)
-    if os.path.exists(src_reg):
+    # publish the protocol registration + ClickOnce launcher next to the report
+    for name in SIDECARS:
+        src = os.path.join(HERE, name)
+        if not os.path.exists(src):
+            print("[warn] %s missing - the tool links may not launch" % src)
+            continue
         for path in OUTPUT_PATHS:
-            dst = os.path.join(os.path.dirname(path), REG_FILE)
-            if os.path.abspath(dst) == os.path.abspath(src_reg):
+            dst = os.path.join(os.path.dirname(path), name)
+            if os.path.abspath(dst) == os.path.abspath(src):
                 continue
             try:
-                shutil.copyfile(src_reg, dst)
+                shutil.copyfile(src, dst)
             except (PermissionError, OSError) as e:
                 print("[warn] couldn't publish %s: %s" % (dst, e))
-    else:
-        print("[warn] %s missing - the filedate: link has no self-service fix" % src_reg)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,50 @@
+Windows Registry Editor Version 5.00
+
+; Registers the "filedate:" and "filetransformer:" URL protocols so the tool
+; links on the CMSE Dashboard (CMSEReport.html) launch their apps directly.
+; Browsers refuse to run an .exe from a file:// link, and a ClickOnce
+; .application needs dfshim rather than a plain exec - a URL protocol handles
+; both cleanly.
+;
+; HKEY_CURRENT_USER only - no administrator rights required. Double-click this
+; file, accept the prompt, then restart the browser.
+;
+; Windows APPENDS the clicked URL to a shell\open\command that contains no %1,
+; so both handlers below are written to tolerate one trailing argument:
+; FileDate.exe simply ignores it, and the File Transformer batch file never
+; references %1. Neither app receives anything caller-controlled - the target
+; paths are hard-coded - so the usual custom-protocol argument-injection hole
+; is closed.
+
+; --- File Date Change (plain exe on the share) -----------------------------
+
+[HKEY_CURRENT_USER\Software\Classes\filedate]
+@="URL:File Date Change"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\Software\Classes\filedate\DefaultIcon]
+@="\\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Data Delivery Documentation\\FileDate.exe,0"
+
+[HKEY_CURRENT_USER\Software\Classes\filedate\shell]
+
+[HKEY_CURRENT_USER\Software\Classes\filedate\shell\open]
+
+[HKEY_CURRENT_USER\Software\Classes\filedate\shell\open\command]
+@="\"\\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Data Delivery Documentation\\FileDate.exe\""
+
+; --- File Transformer (network-deployed ClickOnce, install="true") ---------
+; Goes through LaunchFileTransformer.cmd, published alongside CMSEReport.html.
+; The deployment URL lives in that batch file rather than in this value, so the
+; shell can't substitute its own %2 into the "%20" sequences of the URL. See the
+; comments in LaunchFileTransformer.cmd for the three silent failure modes.
+
+[HKEY_CURRENT_USER\Software\Classes\filetransformer]
+@="URL:File Transformer"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\Software\Classes\filetransformer\shell]
+
+[HKEY_CURRENT_USER\Software\Classes\filetransformer\shell\open]
+
+[HKEY_CURRENT_USER\Software\Classes\filetransformer\shell\open\command]
+@="cmd.exe /d /c \"\\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Delivery Schedule\\Daily Status Reports\\LaunchFileTransformer.cmd\""

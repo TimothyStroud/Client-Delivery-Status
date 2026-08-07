@@ -15,6 +15,7 @@ COBCReport.html
 cobc_report_cache.json
 CMSEReport.html
 cmse_report_cache.json
+LaunchFileTransformer.exe
 _check_report.xlsx
 
 # Cron / sync working files
