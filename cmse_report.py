@@ -137,13 +137,25 @@ STAGING_STATUS = [
     ("14", "Record failed for invalid effective dates"),
 ]
 
-# Tools linked from the dashboard toolbar
+# Tools linked from the dashboard toolbar: (label, UNC path, protocol url or "")
+#
+# A browser will not execute an .exe from a file:// link, so FileDate goes
+# through the per-user "filedate:" URL protocol registered by
+# Register-FileDate-Protocol.reg (which is published next to the report).
+# File Transformer is a ClickOnce .application, which the shell can open
+# directly from a file:// url.
 TOOLS = [
     ("File Date Change",
-     r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Data Delivery Documentation\FileDate.exe"),
+     r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Data Delivery Documentation\FileDate.exe",
+     "filedate:open"),
     ("File Transformer",
-     r"\\trgfile1\Operations\Software\_Source\ToolBox\File Transformer\File Transformer.application"),
+     r"\\trgfile1\Operations\Software\_Source\ToolBox\File Transformer\File Transformer.application",
+     ""),
 ]
+
+# One-time per-machine registration for the filedate: protocol, copied next to
+# the report so other users can self-register by double-clicking it.
+REG_FILE = "Register-FileDate-Protocol.reg"
 
 # Loads whose ticket the PCN search can't find (the PCN isn't written in any
 # work item description).  Keyed on the ProductionControlId; a key that is the
@@ -588,6 +600,8 @@ def build(full=False):
         "st": st_rows,
         "stDef": dict(STAGING_STATUS),
         "tools": [list(t) for t in TOOLS],
+        "regFile": REG_FILE,
+        "regDir": os.path.dirname(OUTPUT_PATHS[0]),
         "adoBase": ADO_WEB,
     }
 
@@ -809,14 +823,22 @@ __EXPORT_CSS__
   // percent-encoded - unencoded spaces are why "File Transformer" never opened.
   const fileUrl = p => 'file:' + p.replace(/\\/g, '/').split('/')
                                   .map(encodeURIComponent).join('/');
-  $('tools').innerHTML = '<span>Tools:</span>' + D.tools.map(([label, path], i) =>
-    (i ? '<span class="sep">|</span>' : '') +
-    `<span><a href="${fileUrl(path)}" target="_blank" rel="noopener" ` +
-    `title="${esc(path)}\n\nOpens in its own app. If the browser blocks it, use ⧉ to ` +
-    `copy the path and paste it into the Windows Run box (Win+R).">${esc(label)}</a>` +
-    `<button class="cp" data-path="${esc(path)}" title="Copy path">⧉</button></span>`).join('')
-    + '<span class="sep">|</span><span style="opacity:.8">blocked by the browser? '
-    + 'copy with ⧉, then Win+R &rarr; paste &rarr; Enter</span>';
+  $('tools').innerHTML = '<span>Tools:</span>' + D.tools.map(([label, path, proto], i) => {
+    // a registered URL protocol launches the app; file:// is the fallback
+    const href = proto || fileUrl(path);
+    const tip = esc(path) + (proto
+      ? '\n\nOpens via the ' + proto.split(':')[0] + ': protocol. Nothing happens? '
+        + 'Run ' + D.regFile + ' once (link at right), then restart the browser.'
+      : '\n\nOpens in its own app. If the browser blocks it, use the copy button '
+        + 'and paste the path into the Windows Run box (Win+R).');
+    return (i ? '<span class="sep">|</span>' : '') +
+      `<span><a href="${href}"${proto ? '' : ' target="_blank" rel="noopener"'} ` +
+      `title="${tip}">${esc(label)}</a>` +
+      `<button class="cp" data-path="${esc(path)}" title="Copy path">⧉</button></span>`;
+  }).join('')
+    + `<span class="sep">|</span><span style="opacity:.8">first time on this PC? run ` +
+      `<a href="${fileUrl(D.regDir + '\\' + D.regFile)}">${esc(D.regFile)}</a> once ` +
+      `&middot; or copy a path with ⧉ and use Win+R</span>`;
   $('tools').addEventListener('click', e => {
     const b = e.target.closest('button.cp'); if (!b) return;
     const p = b.dataset.path;
@@ -1203,6 +1225,20 @@ def main():
         raise SystemExit("[error] no output written")
     if written != primary:
         print("[warn] primary path %s was not written" % primary)
+
+    # publish the protocol registration next to each copy of the report
+    src_reg = os.path.join(HERE, REG_FILE)
+    if os.path.exists(src_reg):
+        for path in OUTPUT_PATHS:
+            dst = os.path.join(os.path.dirname(path), REG_FILE)
+            if os.path.abspath(dst) == os.path.abspath(src_reg):
+                continue
+            try:
+                shutil.copyfile(src_reg, dst)
+            except (PermissionError, OSError) as e:
+                print("[warn] couldn't publish %s: %s" % (dst, e))
+    else:
+        print("[warn] %s missing - the filedate: link has no self-service fix" % src_reg)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,26 @@
+Windows Registry Editor Version 5.00
+
+; Registers the "filedate:" URL protocol so the File Date Change link on the
+; CMSE Dashboard (CMSEReport.html) launches FileDate.exe directly, instead of
+; the browser refusing to run an .exe from a file:// link.
+;
+; HKEY_CURRENT_USER only - no administrator rights required. Double-click this
+; file, accept the prompt, then restart the browser.
+;
+; The command deliberately does NOT contain %1, so nothing from the URL is ever
+; passed to FileDate.exe as an argument. That closes the usual custom-protocol
+; argument-injection hole: "filedate:anything" runs the plain executable.
+
+[HKEY_CURRENT_USER\Software\Classes\filedate]
+@="URL:File Date Change"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\Software\Classes\filedate\DefaultIcon]
+@="\\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Data Delivery Documentation\\FileDate.exe,0"
+
+[HKEY_CURRENT_USER\Software\Classes\filedate\shell]
+
+[HKEY_CURRENT_USER\Software\Classes\filedate\shell\open]
+
+[HKEY_CURRENT_USER\Software\Classes\filedate\shell\open\command]
+@="\"\\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Data Delivery Documentation\\FileDate.exe\""
