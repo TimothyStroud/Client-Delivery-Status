@@ -33,10 +33,12 @@ Windows Registry Editor Version 5.00
 @="\"\\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Data Delivery Documentation\\FileDate.exe\""
 
 ; --- File Transformer (network-deployed ClickOnce, install="true") ---------
-; Goes through LaunchFileTransformer.cmd, published alongside CMSEReport.html.
-; The deployment URL lives in that batch file rather than in this value, so the
-; shell can't substitute its own %2 into the "%20" sequences of the URL. See the
-; comments in LaunchFileTransformer.cmd for the three silent failure modes.
+; Goes through LaunchFileTransformer.vbs, published alongside CMSEReport.html.
+; wscript.exe is used rather than cmd.exe because it creates NO console window,
+; so clicking the link shows nothing but the app. The deployment URL lives in
+; that script rather than in this value, so the shell can't substitute its own
+; %2 into the "%20" sequences of the URL. See the comments in
+; LaunchFileTransformer.vbs for the four silent failure modes.
 
 [HKEY_CURRENT_USER\Software\Classes\filetransformer]
 @="URL:File Transformer"
@@ -47,4 +49,4 @@ Windows Registry Editor Version 5.00
 [HKEY_CURRENT_USER\Software\Classes\filetransformer\shell\open]
 
 [HKEY_CURRENT_USER\Software\Classes\filetransformer\shell\open\command]
-@="cmd.exe /d /c \"\\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Delivery Schedule\\Daily Status Reports\\LaunchFileTransformer.cmd\""
+@="wscript.exe //nologo \"\\\\trgfile1\\Shared\\DIG\\Data Business Delivery Team\\Delivery Schedule\\Daily Status Reports\\LaunchFileTransformer.vbs\""

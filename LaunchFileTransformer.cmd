@@ -1,4 +1,10 @@
 @echo off
+rem FALLBACK ONLY - NOT the launcher in use. LaunchFileTransformer.vbs is, run
+rem by wscript.exe, because cmd.exe flashes a console window and wscript does
+rem not. Keep this file in case VBScript is removed from Windows: publish it via
+rem SIDECARS in cmse_report.py and point the filetransformer: command in
+rem Register-CMSE-Tools.reg back at `cmd.exe /d /c "<this file>"`.
+rem
 rem Argument-ignoring launcher for the File Transformer ClickOnce deployment,
 rem used by the "filetransformer:" URL protocol on the CMSE Dashboard.
 rem

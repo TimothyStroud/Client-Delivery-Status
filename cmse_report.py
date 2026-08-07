@@ -157,7 +157,7 @@ TOOLS = [
 # double-clicking the .reg.  The .cmd is the launcher the filetransformer:
 # handler points at, so it has to sit in that same folder.
 REG_FILE = "Register-CMSE-Tools.reg"
-SIDECARS = [REG_FILE, "LaunchFileTransformer.cmd"]
+SIDECARS = [REG_FILE, "LaunchFileTransformer.vbs"]
 
 # Loads whose ticket the PCN search can't find (the PCN isn't written in any
 # work item description).  Keyed on the ProductionControlId; a key that is the
