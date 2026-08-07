@@ -405,22 +405,24 @@ def main():
         if not status_only and not OPTUM_ENABLED:
             print("   OPTUM_ENABLED=False -- not sending (pending RAW1/2/3 confirmation)")
         elif not status_only:
-            if not force and cell.get('last_period') == pk:
-                print("   already reported this month -- dormant until restart")
+            # Optum is gated PER CYCLE (the RAW tag), not per calendar month
+            # (rewritten 2026-08-07). Month gating had two failure modes: the
+            # load job re-runs as each RAW lands, so its "latest run" can be a
+            # re-run of a PRIOR month's cycle -- reporting it duplicated that
+            # month's email AND burned the current month's once-per-period slot
+            # (what happened 8/3: a 7/30 re-run of cycle 07032026 went out as
+            # "July 2026", leaving the real 08072026 cycle dormant all month).
+            # Keying on the cycle tag reports each cycle exactly once, whenever
+            # it completes -- including a cycle that only finishes after the
+            # month rolls over, which a month-equality check would silence
+            # forever. There is one cycle per month (first Friday), so the
+            # once-a-month cadence is preserved.
+            if not force and cell.get('last_cycle') == tag:
+                print(f"   cycle {tag} already reported -- dormant until next cycle")
             elif not complete:
                 print("   load/snap not both complete -- skip")
             elif not force and cell.get('last_qid') == lqid:
                 print("   this completion already reported -- skip")
-            elif not force and cycle and f"{cycle.year}-{cycle.month:02d}" != pk:
-                # The RAMP load job re-runs as each RAW lands, so its "latest run"
-                # can be a re-run of a PRIOR month's cycle. Reporting it would
-                # (a) duplicate that month's report and (b) burn this month's
-                # once-per-period slot, so the real cycle never gets reported.
-                # This is exactly what happened 2026-08-03: a 7/30 re-run of the
-                # 07032026 cycle went out as "July 2026" in August, leaving the
-                # real 08072026 cycle dormant. (guard added 2026-08-07)
-                print(f"   latest run belongs to cycle {tag} ({cycle:%B %Y}), not the "
-                      f"current period {pk} -- skip, waiting for this month's cycle")
             elif (not all(raw_loaded.values()) and not force and cycle
                   and datetime.now() < cycle + timedelta(days=OPTUM_RAW_SLA_DAYS)):
                 _missing = [l for l, v in raw_loaded.items() if not v]
@@ -432,6 +434,7 @@ def main():
                 print(f"   send -> {res} | {subj}")
                 if res == 'Sent.':
                     cell['last_qid'] = lqid; cell['last_period'] = pk
+                    cell['last_cycle'] = tag        # primary gate (see above)
                     state[OPTUM['key']] = cell
                     sent_any = True
 
