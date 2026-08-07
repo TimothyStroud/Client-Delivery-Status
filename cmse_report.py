@@ -123,6 +123,28 @@ TRACKER_ALIAS = {
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+# ImportStaging.StagingStatus
+STAGING_STATUS = [
+    ("1",  "Record has been acquired from a source and staged in CMSE"),
+    ("2",  "Record is currently in the process of being validated"),
+    ("3",  "Record has been validated \u2014 keep checking. May have to enter ticket"),
+    ("6",  "Record having passed validation, is in the process of being imported "
+           "into the CMSE patient tables"),
+    ("7",  "Record has been imported into the CMSE patient tables"),
+    ("11", "Record failed validation for a reason of invalid SSN"),
+    ("12", "Record failed validation for a reason of invalid DOB"),
+    ("13", "Record failed validation for a reason of invalid last name"),
+    ("14", "Record failed for invalid effective dates"),
+]
+
+# Tools linked from the dashboard toolbar
+TOOLS = [
+    ("File Date Change",
+     r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Data Delivery Documentation\FileDate.exe"),
+    ("File Transformer",
+     r"\\TRGFILE1\Operations\Software\_Source\ToolBox\File Transformer"),
+]
+
 
 # --------------------------------------------------------------------------- #
 # SQL
@@ -177,8 +199,8 @@ def fetch_loads():
                ISNULL(CONVERT(varchar(19), L.ImportCompleteDate, 120), ''),
                ISNULL(L.RecordCount,0), ISNULL(L.ImportSuccessCount,0),
                ISNULL(L.ImportFailedcount,0),
-               ISNULL(L.EntitlementAgeCount,0), ISNULL(L.EntitlementDisabilityCount,0),
-               ISNULL(L.EntitlementEsrdCount,0),
+               ISNULL(CONVERT(varchar(3), L.MIRProcessed), ''),
+               ISNULL(CONVERT(varchar(19), L.MIRProcessedDate, 120), ''),
                ISNULL(L.ProductionControlId,'')
           FROM dbo.SourceLog L (NOLOCK)
           LEFT JOIN dbo.Client C (NOLOCK) ON C.ClientId = L.ClientId
@@ -193,8 +215,8 @@ def fetch_loads():
             "sl": int(r[0]), "src": int(r[1]), "cid": int(r[2]), "client": r[3],
             "entry": r[4], "start": r[5], "done": r[6],
             "rec": int(r[7]), "ok": int(r[8]), "bad": int(r[9]),
-            "age": int(r[10]), "dis": int(r[11]), "esrd": int(r[12]),
-            "pcn": r[13],
+            "mir": r[10], "mird": r[11],
+            "pcn": r[12],
         })
     return loads
 
@@ -232,10 +254,9 @@ def _curl(args, timeout=180):
     return json.loads(p.stdout.lstrip("\ufeff"))
 
 
-def ado_find_pcn(pcn):
-    """Work item ids whose description mentions this PCN, lowest (original) first."""
+def _ado_desc_search(term):
     q = ("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject]='Rawlings' "
-         "AND [System.Description] CONTAINS '%s'" % pcn.replace("'", "''"))
+         "AND [System.Description] CONTAINS '%s'" % term.replace("'", "''"))
     try:
         d = _curl([ADO_BASE + "/_apis/wit/wiql?api-version=5.0",
                    "-H", "Content-Type: application/json",
@@ -243,6 +264,25 @@ def ado_find_pcn(pcn):
     except Exception:
         return []
     return sorted(w["id"] for w in d.get("workItems", []))
+
+
+def ado_find_pcn(pcn):
+    """Work item ids whose description mentions this PCN, lowest (original) first.
+
+    WIQL CONTAINS is word-based, so a suffixed PCN is one token: searching
+    "1079229" does NOT find a description that says "1079229_1".  Try the
+    ProductionControlId exactly as stored first, then fall back to its leading
+    digits (which is what most tickets write).
+    """
+    terms = [pcn]
+    base = re.match(r"\d+", pcn)
+    if base and base.group(0) != pcn:
+        terms.append(base.group(0))
+    for term in terms:
+        hits = _ado_desc_search(term)
+        if hits:
+            return hits
+    return []
 
 
 def ado_details(ids):
@@ -392,10 +432,10 @@ def build(full=False):
     #    is still young (a ticket may be written after the file lands).
     todo = []
     for l in loads:
-        # ProductionControlId is sometimes suffixed ("1079229_1", "801765-2");
-        # ADO descriptions carry the base number, so key on the leading digits.
-        m = re.match(r"\d+", l["pcn"].strip())
-        pcn = m.group(0) if m else ""
+        # Key on the ProductionControlId exactly as stored - it is sometimes
+        # suffixed ("1079229_1", "801765-2") and ado_find_pcn() handles the
+        # fallback to the bare leading digits itself.
+        pcn = l["pcn"].strip()
         l["pcnk"] = pcn
         if not pcn:
             continue
@@ -496,12 +536,16 @@ def build(full=False):
     years = sorted({l["start"][:4] for l in loads} | {str(TRACKER_YEAR)})
     cal_rows = sorted(cal.values(), key=lambda r: (r["client"].lower(), r["ft"]))
 
-    # status/disposition inventory for the reference tab
-    dn_ct, st_ct = defaultdict(int), defaultdict(int)
+    # StagingStatus inventory for the reference tab: every documented status,
+    # plus anything observed that isn't documented yet.
+    st_ct = defaultdict(int)
     for l in loads:
         for dn, st, n in l["stg"]:
-            dn_ct[dn or "(blank)"] += n
             st_ct[st or "(blank)"] += n
+    defined = dict(STAGING_STATUS)
+    st_rows = [[code, desc, st_ct.get(code, 0)] for code, desc in STAGING_STATUS]
+    st_rows += [[code, "", n] for code, n in sorted(st_ct.items())
+                if code not in defined]
 
     return {
         "generated": now.strftime("%Y-%m-%d %H:%M"),
@@ -515,8 +559,9 @@ def build(full=False):
         "clients": clients,
         "specs": [list(s) for s in FILE_SPECS],
         "srcType": {str(k): list(v) for k, v in SOURCE_TYPE.items()},
-        "dn": sorted(dn_ct.items(), key=lambda kv: -kv[1]),
-        "st": sorted(st_ct.items(), key=lambda kv: -kv[1]),
+        "st": st_rows,
+        "stDef": dict(STAGING_STATUS),
+        "tools": [list(t) for t in TOOLS],
         "adoBase": ADO_WEB,
     }
 
@@ -581,16 +626,29 @@ HTML_TEMPLATE = r"""<!doctype html>
   tbody tr:hover td { background:var(--hover); }
   td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
   td.mid, th.mid { text-align:center; }
+  td.bad { color:#c62828; }
   a { color:var(--accent); }
+  #loads td.entry { max-width:44ch; overflow:hidden; text-overflow:ellipsis; }
+  #loads td.mir { cursor:help; border-bottom:1px dotted var(--muted); }
+  #loads th.hint { cursor:help; }
+  /* toolbar tool links */
+  .tools { display:flex; gap:14px; align-items:center; margin:0 0 12px;
+           font-size:12px; color:var(--muted); }
+  .tools a { color:var(--accent); text-decoration:none; font-weight:600; }
+  .tools a:hover { text-decoration:underline; }
+  .tools .cp { background:none; border:0; cursor:pointer; color:var(--muted);
+               font-size:12px; padding:0 0 0 3px; }
+  .tools .cp:hover { color:var(--accent); }
+  .tools .sep { color:var(--border); }
   /* calendar */
-  #cal td.mo { text-align:center; min-width:74px; padding:3px 6px; }
-  #cal td.mo.has { background:var(--ok) !important; }
+  #cal td.mo { text-align:center; min-width:52px; padding:3px 6px;
+               font-variant-numeric:tabular-nums; }
+  #cal td.mo.has { background:var(--ok) !important; color:var(--ok-line);
+                   font-weight:700; }
+  #cal td.mo.trk { color:var(--muted); font-weight:700; }
   #cal td.mo.late { background:var(--late) !important; color:var(--late-text);
                     font-weight:600; }
   #cal td.mo.exp { color:var(--exp-text); }
-  #cal td.mo a { display:block; line-height:1.35; text-decoration:none; }
-  #cal td.mo a:hover { text-decoration:underline; }
-  #cal td.mo .noado { display:block; line-height:1.35; color:var(--muted); }
   #cal td.cli { position:sticky; left:0; background:#fff; z-index:2; font-weight:600; }
   #cal tbody tr:nth-child(even) td.cli { background:var(--band); }
   #cal tbody tr:hover td.cli { background:var(--hover); }
@@ -604,12 +662,17 @@ HTML_TEMPLATE = r"""<!doctype html>
   tr.det th, tr.det td { border-bottom:1px solid #eef1f4; font-size:12px;
                          padding:2px 10px; }
   tr.det thead th { position:static; text-transform:none; letter-spacing:0; }
+  tr.det td.def { white-space:normal; max-width:52ch; color:var(--muted);
+                  line-height:1.4; }
   tr.load td.exp { cursor:pointer; color:var(--accent); user-select:none; width:18px; }
   .legend { display:flex; flex-wrap:wrap; gap:16px; align-items:center;
             margin:10px 0 0; font-size:12px; color:var(--muted); }
   .sw { display:inline-block; width:13px; height:13px; border-radius:3px;
         border:1px solid var(--border); vertical-align:-2px; margin-right:5px; }
   .cards { display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }
+  .cards .col { display:flex; flex-direction:column; gap:16px; align-items:flex-start; }
+  #stkey td.def { white-space:normal; max-width:46ch; line-height:1.45;
+                  color:var(--muted); }
   .card { background:var(--card); border:1px solid var(--border); border-radius:8px;
           overflow:hidden; }
   .card h2 { margin:0; padding:9px 14px; font-size:13px; background:#f7f9fb;
@@ -634,8 +697,8 @@ __EXPORT_CSS__
 <main>
   <div class="controls">
     <div class="seg" id="tabs">
-      <button data-tab="cal" class="active">Calendar</button>
-      <button data-tab="loads">Loads</button>
+      <button data-tab="loads" class="active">Loads</button>
+      <button data-tab="cal">Calendar</button>
       <button data-tab="ref">File Types &amp; Keys</button>
     </div>
     <select id="year" class="cal-only"></select>
@@ -652,19 +715,21 @@ __EXPORT_CSS__
     __EXPORT_UI__
   </div>
 
+  <div class="tools" id="tools"></div>
   <div class="kpis" id="kpis"></div>
 
-  <section id="view-cal">
+  <section id="view-cal" hidden>
     <div class="wrap"><table id="cal"><thead id="cal-head"></thead><tbody id="cal-body"></tbody></table></div>
     <div class="legend">
-      <span><span class="sw" style="background:var(--ok)"></span>Ticket number = loaded to CMSE</span>
+      <span><span class="sw" style="background:var(--ok)"></span><b>X</b> = loaded to CMSE</span>
+      <span><b style="color:var(--muted)">X</b> = tracker shows loaded, no CMSE load</span>
       <span><span class="sw" style="background:var(--exp)"></span>E = expected</span>
       <span><span class="sw" style="background:var(--late)"></span>Late &ndash; outreach date</span>
       <span id="cal-note"></span>
     </div>
   </section>
 
-  <section id="view-loads" hidden>
+  <section id="view-loads">
     <div class="wrap"><table id="loads"><thead id="loads-head"></thead><tbody id="loads-body"></tbody></table></div>
     <div class="legend"><span>Click a row to expand its ImportStaging breakdown
       (EntryName / DNDispositionCode / StagingStatus / records).</span>
@@ -673,21 +738,25 @@ __EXPORT_CSS__
 
   <section id="view-ref" hidden>
     <div class="cards">
-      <div class="card"><h2>File Type &mdash; layout</h2><div class="body">
-        <table id="specs"></table></div>
-        <p class="note">From the MMSEA&nbsp;-&nbsp;2026 tab of ClientTracker.2026.xlsx.</p></div>
-      <div class="card"><h2>SourceId key</h2><div class="body">
-        <table id="srckey"></table></div>
-        <p class="note">Bold rows are the SourceIds this dashboard reports on.</p></div>
-      <div class="card wide"><h2>Client key</h2><div class="body">
-        <table id="clikey"></table></div>
-        <p class="note">ClientId / ClientName from cmse_new..Client, joined to
-          ClientCodeLookup for the SMART client codes.</p></div>
-      <div class="card"><h2>DNDispositionCode</h2><div class="body">
-        <table id="dnkey"></table></div>
-        <p class="note">Record counts across every load in window.</p></div>
-      <div class="card"><h2>StagingStatus</h2><div class="body">
-        <table id="stkey"></table></div></div>
+      <div class="col">
+        <div class="card"><h2>File Type &mdash; layout</h2><div class="body">
+          <table id="specs"></table></div>
+          <p class="note">From the MMSEA&nbsp;-&nbsp;2026 tab of ClientTracker.2026.xlsx.</p></div>
+        <div class="card"><h2>StagingStatus</h2><div class="body">
+          <table id="stkey"></table></div>
+          <p class="note">Record counts across every load in window.</p></div>
+      </div>
+      <div class="col">
+        <div class="card"><h2>SourceId key</h2><div class="body">
+          <table id="srckey"></table></div>
+          <p class="note">Bold rows are the SourceIds this dashboard reports on.</p></div>
+      </div>
+      <div class="col">
+        <div class="card wide"><h2>Client key</h2><div class="body">
+          <table id="clikey"></table></div>
+          <p class="note">ClientId / ClientName from cmse_new..Client, joined to
+            ClientCodeLookup for the SMART client codes.</p></div>
+      </div>
     </div>
   </section>
 </main>
@@ -705,8 +774,21 @@ __EXPORT_CSS__
   const nf = n => (n == null ? '' : Number(n).toLocaleString('en-US'));
 
   const latestYear = D.years[D.years.length - 1];
-  let S = { tab:'cal', year:latestYear, client:'', source:'', ticket:'', q:'',
+  let S = { tab:'loads', year:latestYear, client:'', source:'', ticket:'', q:'',
             sortK:'sl', sortD:-1, open:new Set() };
+
+  // ---- tool links ---------------------------------------------------------
+  $('tools').innerHTML = '<span>Tools:</span>' + D.tools.map(([label, path], i) =>
+    (i ? '<span class="sep">|</span>' : '') +
+    `<span><a href="file:${path.replace(/\\/g,'/')}" title="${esc(path)}">${esc(label)}</a>` +
+    `<button class="cp" data-path="${esc(path)}" title="Copy path">⧉</button></span>`).join('');
+  $('tools').addEventListener('click', e => {
+    const b = e.target.closest('button.cp'); if (!b) return;
+    const p = b.dataset.path;
+    if (navigator.clipboard) navigator.clipboard.writeText(p);
+    const old = b.textContent; b.textContent = '✓';
+    setTimeout(() => { b.textContent = old; }, 900);
+  });
 
   // ---- filter widgets -----------------------------------------------------
   $('year').innerHTML = D.years.map(y => `<option${y===S.year?' selected':''}>${y}</option>`).join('');
@@ -763,21 +845,18 @@ __EXPORT_CSS__
         const ym = S.year + '-' + String(i+1).padStart(2,'0');
         const loads = r.m[ym] || [];
         if (loads.length) {
-          const seen = new Set();
-          const inner = loads.map(x => {
-            const t = `${x.file}\n${x.d} ${MN[i]} ${S.year} \u00b7 SourceLogId ${x.sl}`
-                    + `\nPCN ${x.pcn||'-'} \u00b7 ${nf(x.rec)} records`;
-            if (x.wi) {
-              if (seen.has(x.wi)) return '';
-              seen.add(x.wi);
-              return `<a href="${D.adoBase}${x.wi}" target="_blank" title="${esc(t)}">${x.wi}</a>`;
-            }
-            return `<span class="noado" title="${esc(t)}">\u25aa ${x.sl}</span>`;
-          }).join('');
-          return `<td class="mo has">${inner}</td>`;
+          const t = `${loads.length} file${loads.length>1?'s':''} loaded ${MN[i]} ${S.year}\n`
+                  + loads.map(x => `\u00b7 ${x.file} (${MN[i]} ${x.d}, ${nf(x.rec)} records)`)
+                         .join('\n');
+          return `<td class="mo has" title="${esc(t)}">X</td>`;
         }
         const tr = isTrackerYear ? r.tr[String(i+1)] : null;
-        if (tr) return `<td class="mo ${tr.late?'late':'exp'}">${esc(tr.v)}</td>`;
+        if (tr) {
+          // the tracker writes a bare ticket number to mean "loaded to CMSE"
+          if (!tr.late && /^\d+$/.test(tr.v))
+            return `<td class="mo trk" title="Tracker shows loaded (${esc(tr.v)}); no CMSE load this month">X</td>`;
+          return `<td class="mo ${tr.late?'late':'exp'}">${esc(tr.v)}</td>`;
+        }
         return '<td class="mo"></td>';
       }).join('');
       return `<tr><td class="cli">${esc(r.client)}</td><td class="mid">${r.cid||''}</td>` +
@@ -790,23 +869,17 @@ __EXPORT_CSS__
   const LCOLS = [
     ['', '', null],
     ['sl', 'SourceLogId', 'num'],
-    ['wi', 'ADO', 'mid'],
-    ['pcn', 'PCN', 'mid'],
+    ['src', 'SourceId', 'mid hint'],
+    ['ft', 'File Type', null],
     ['client', 'Client Name', null],
     ['cid', 'Client Id', 'mid'],
-    ['src', 'SourceId', 'mid'],
-    ['srcname', 'Source Name', null],
-    ['ft', 'File Type', null],
-    ['file', 'Entry Name', null],
+    ['file', 'Entry Name', 'entry'],
     ['start', 'Import Start', null],
     ['done', 'Import Complete', null],
     ['rec', 'Records', 'num'],
     ['ok', 'Success', 'num'],
-    ['bad', 'Failed', 'num'],
-    ['age', 'Age', 'num'],
-    ['dis', 'Disability', 'num'],
-    ['esrd', 'ESRD', 'num'],
-    ['wis', 'Ticket State', null],
+    ['bad', 'Failed', 'num bad'],
+    ['wi', 'ADO Ticket', 'mid'],
   ];
 
   function sortLoads(rows) {
@@ -822,7 +895,9 @@ __EXPORT_CSS__
   function renderLoads() {
     const rows = sortLoads(filteredLoads());
     $('loads-head').innerHTML = '<tr>' + LCOLS.map(([k, lbl, cls]) =>
-      k ? `<th class="${cls||''} sortable" data-k="${k}">${lbl}${S.sortK===k?(S.sortD>0?' \u25b2':' \u25bc'):''}</th>`
+      k ? `<th class="${cls||''} sortable" data-k="${k}"` +
+          (k === 'src' ? ' title="Hover a SourceId cell for its SourceName"' : '') +
+          `>${lbl}${S.sortK===k?(S.sortD>0?' \u25b2':' \u25bc'):''}</th>`
         : '<th></th>').join('') + '</tr>';
 
     if (!rows.length) { $('loads-body').innerHTML =
@@ -834,30 +909,40 @@ __EXPORT_CSS__
       const wiCell = l.wi
         ? `<a href="${D.adoBase}${l.wi}" target="_blank" title="${esc(l.wit)}">${l.wi}</a>`
         : '<span class="pill none">none</span>';
-      const st = l.wis ? `<span class="pill ${l.wis==='Closed'?'closed':'open'}">${esc(l.wis)}</span>` : '';
+      // Aetna (ClientId 5) carries the MIR flags; only that client gets the tooltip
+      const isAetna = l.client === 'Aetna' && l.cid === 5;
+      const mirTip = isAetna
+        ? `MIRProcessed: ${l.mir === '1' ? 'Yes' : l.mir === '0' ? 'No' : '\u2014'}`
+          + `\nMIRProcessedDate: ${l.mird || '\u2014'}`
+        : '';
+      const cliCell = isAetna
+        ? `<td class="mir" title="${esc(mirTip)}">${esc(l.client)}</td>`
+        : `<td>${esc(l.client)}</td>`;
       out.push(`<tr class="load" data-sl="${l.sl}">` +
         `<td class="exp">${open?'\u2212':'+'}</td>` +
-        `<td class="num">${l.sl}</td><td class="mid">${wiCell}</td>` +
-        `<td class="mid">${esc(l.pcn)}</td><td>${esc(l.client)}</td>` +
-        `<td class="mid">${l.cid||''}</td><td class="mid">${l.src}</td>` +
-        `<td>${esc(SRC[l.src]||'')}</td><td>${esc(l.ft)}</td>` +
-        `<td title="${esc(l.entry)}">${esc(l.file)}</td>` +
+        `<td class="num">${l.sl}</td>` +
+        `<td class="mid" title="${esc(SRC[l.src]||'')}">${l.src}</td>` +
+        `<td>${esc(l.ft)}</td>` + cliCell +
+        `<td class="mid">${l.cid||''}</td>` +
+        `<td class="entry" title="${esc(l.entry)}">${esc(l.file)}</td>` +
         `<td>${esc(l.start)}</td><td>${esc(l.done)}</td>` +
         `<td class="num">${nf(l.rec)}</td><td class="num">${nf(l.ok)}</td>` +
-        `<td class="num">${nf(l.bad)}</td><td class="num">${nf(l.age)}</td>` +
-        `<td class="num">${nf(l.dis)}</td><td class="num">${nf(l.esrd)}</td>` +
-        `<td>${st}</td></tr>`);
+        `<td class="num bad">${nf(l.bad)}</td>` +
+        `<td class="mid">${wiCell}</td></tr>`);
       if (open) {
         const tot = l.stg.reduce((s, r) => s + r[2], 0);
         const body = l.stg.length
           ? l.stg.map(([dn, sts, n]) =>
               `<tr><td>${esc(l.file)}</td><td class="mid">${esc(dn)||'\u2014'}</td>` +
-              `<td class="mid">${esc(sts)||'\u2014'}</td><td class="num">${nf(n)}</td></tr>`).join('')
-            + `<tr class="dim"><td colspan="3"><b>Total</b></td><td class="num"><b>${nf(tot)}</b></td></tr>`
-          : '<tr class="dim"><td colspan="4">No ImportStaging rows for this SourceLogId.</td></tr>';
+              `<td class="mid">${esc(sts)||'\u2014'}</td>` +
+              `<td class="def">${esc(D.stDef[sts]||'')}</td>` +
+              `<td class="num">${nf(n)}</td></tr>`).join('')
+            + `<tr class="dim"><td colspan="4"><b>Total</b></td><td class="num"><b>${nf(tot)}</b></td></tr>`
+          : '<tr class="dim"><td colspan="5">No ImportStaging rows for this SourceLogId.</td></tr>';
         out.push(`<tr class="det"><td colspan="${LCOLS.length}"><table><thead><tr>` +
           '<th>EntryName</th><th class="mid">DNDispositionCode</th>' +
-          '<th class="mid">StagingStatus</th><th class="num">Records</th>' +
+          '<th class="mid">StagingStatus</th><th>StagingStatus definition</th>' +
+          '<th class="num">Records</th>' +
           `</tr></thead><tbody>${body}</tbody></table></td></tr>`);
       }
     }
@@ -889,12 +974,12 @@ __EXPORT_CSS__
       D.clients.map(c => `<tr><td class="num">${c.id}</td><td><b>${esc(c.name)}</b></td>` +
         `<td>${esc(c.codes||'')}</td></tr>`).join('') + '</tbody>';
 
-    const kv = (id, arr, lbl) => $(id).innerHTML =
-      `<thead><tr><th>${lbl}</th><th class="num">Records</th></tr></thead><tbody>` +
-      arr.map(([k, n]) => `<tr><td>${esc(k)}</td><td class="num">${nf(n)}</td></tr>`).join('') +
-      '</tbody>';
-    kv('dnkey', D.dn, 'DNDispositionCode');
-    kv('stkey', D.st, 'StagingStatus');
+    $('stkey').innerHTML = '<thead><tr><th class="num">Status</th><th>Definition</th>' +
+      '<th class="num">Records</th></tr></thead><tbody>' +
+      D.st.map(([code, desc, n]) =>
+        `<tr class="${n?'':'dim'}"><td class="num"><b>${esc(code)}</b></td>` +
+        `<td class="def">${esc(desc) || '<i>undocumented</i>'}</td>` +
+        `<td class="num">${n ? nf(n) : '—'}</td></tr>`).join('') + '</tbody>';
   }
 
   // ---- KPIs ---------------------------------------------------------------
@@ -995,12 +1080,12 @@ __EXPORT_CSS__
         rows: rows.map(r => [r.client, r.cid || '', r.ft, r.freq, r.hand,
           ...MN.map((_, i) => {
             const ym = S.year + '-' + String(i+1).padStart(2,'0');
-            const l = r.m[ym];
-            if (l) return [...new Set(l.map(x => x.wi || ('SL ' + x.sl)))].join(' / ');
+            if (r.m[ym]) return 'X';
             const tr = isT ? r.tr[String(i+1)] : null;
-            return tr ? tr.v : '';
+            if (!tr) return '';
+            return (!tr.late && /^\d+$/.test(tr.v)) ? 'X' : tr.v;
           })]),
-        note: 'TRGRepSQL3 / CMSE_New \u00b7 ticket number = loaded to CMSE, E = expected',
+        note: 'TRGRepSQL3 / CMSE_New \u00b7 X = loaded to CMSE, E = expected',
         rowsPerSlide: 12, fontSz: 800,
       };
     }
@@ -1011,12 +1096,11 @@ __EXPORT_CSS__
         title: 'CMSE Dashboard \u2014 SourceLog',
         subtitle: (S.client || 'All clients') + ' \u00b7 ' + rows.length +
                   ' loads \u00b7 generated ' + D.generated,
-        headers: ['SourceLogId','ADO','PCN','Client Name','Client Id','SourceId',
-                  'Source Name','File Type','EntryName','Import Start','Import Complete',
-                  'Records','Success','Failed','Age','Disability','ESRD','Ticket State'],
-        rows: rows.map(l => [l.sl, l.wi||'', l.pcn, l.client, l.cid, l.src,
-          SRC[l.src]||'', l.ft, l.entry, l.start, l.done, l.rec, l.ok, l.bad,
-          l.age, l.dis, l.esrd, l.wis||'']),
+        headers: ['SourceLogId','SourceId','Source Name','File Type','Client Name',
+                  'Client Id','EntryName','Import Start','Import Complete',
+                  'Records','Success','Failed','ADO Ticket','PCN'],
+        rows: rows.map(l => [l.sl, l.src, SRC[l.src]||'', l.ft, l.client, l.cid,
+          l.entry, l.start, l.done, l.rec, l.ok, l.bad, l.wi||'', l.pcn]),
         note: 'cmse_new..SourceLog, SourceId ' + D.scope.join(', '),
         rowsPerSlide: 12, fontSz: 700,
       };
