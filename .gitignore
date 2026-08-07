@@ -13,6 +13,8 @@ MissingPayDates*.html
 MissingPayDates*.xlsx
 COBCReport.html
 cobc_report_cache.json
+CMSEReport.html
+cmse_report_cache.json
 _check_report.xlsx
 
 # Cron / sync working files
