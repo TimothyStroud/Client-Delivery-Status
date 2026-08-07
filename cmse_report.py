@@ -142,8 +142,21 @@ TOOLS = [
     ("File Date Change",
      r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Data Delivery Documentation\FileDate.exe"),
     ("File Transformer",
-     r"\\TRGFILE1\Operations\Software\_Source\ToolBox\File Transformer"),
+     r"\\trgfile1\Operations\Software\_Source\ToolBox\File Transformer\File Transformer.application"),
 ]
+
+# Loads whose ticket the PCN search can't find (the PCN isn't written in any
+# work item description).  Keyed on the ProductionControlId; a key that is the
+# bare base number also covers its suffixed variants ("9537705" -> "9537705_01").
+PCN_ADO_OVERRIDE = {
+    "9537705": 931813,   # Kaiser HEW 2026-02-17/18 (base + _01.._04)
+    "991597":  941594,   # HealthNet HEW 2026-03-31
+    "984687":  940095,   # Excellus MSP 2026-03-25
+    "984688":  940095,
+    "984690":  940095,
+    "984691":  940095,
+    "984692":  940095,
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -252,6 +265,16 @@ def _curl(args, timeout=180):
     if not p.stdout:
         raise RuntimeError("empty response from ADO")
     return json.loads(p.stdout.lstrip("\ufeff"))
+
+
+def pcn_override(pcn):
+    """Hand-supplied work item for a PCN, honouring base-number keys."""
+    if pcn in PCN_ADO_OVERRIDE:
+        return PCN_ADO_OVERRIDE[pcn]
+    base = re.match(r"\d+", pcn or "")
+    if base:
+        return PCN_ADO_OVERRIDE.get(base.group(0))
+    return None
 
 
 def _ado_desc_search(term):
@@ -437,7 +460,8 @@ def build(full=False):
         # fallback to the bare leading digits itself.
         pcn = l["pcn"].strip()
         l["pcnk"] = pcn
-        if not pcn:
+        l["wiover"] = pcn_override(pcn)
+        if not pcn or l["wiover"]:
             continue
         if pcn in cache["pcn"]:
             continue
@@ -463,6 +487,8 @@ def build(full=False):
     for l in loads:
         for wi in cache["pcn"].get(l.get("pcnk") or "", []):
             wanted_wi.add(wi)
+        if l.get("wiover"):
+            wanted_wi.add(l["wiover"])
     missing_wi = [w for w in wanted_wi if str(w) not in cache["wi"]]
     if missing_wi:
         print("[info] ADO details for %d work items..." % len(missing_wi))
@@ -479,7 +505,7 @@ def build(full=False):
 
     # -- attach ADO + staging to each load, prefer an MMSEA-tagged ticket
     for l in loads:
-        hits = cache["pcn"].get(l.get("pcnk") or "", [])
+        hits = [l["wiover"]] if l.get("wiover") else cache["pcn"].get(l.get("pcnk") or "", [])
         pick = None
         for wi in hits:
             det = cache["wi"].get(str(wi), {})
@@ -724,7 +750,8 @@ __EXPORT_CSS__
       <span><span class="sw" style="background:var(--ok)"></span><b>X</b> = loaded to CMSE</span>
       <span><b style="color:var(--muted)">X</b> = tracker shows loaded, no CMSE load</span>
       <span><span class="sw" style="background:var(--exp)"></span>E = expected</span>
-      <span><span class="sw" style="background:var(--late)"></span>Late &ndash; outreach date</span>
+      <span><span class="sw" style="background:var(--late)"></span>Not loaded &ndash; late / outreach
+        <span style="opacity:.75">(hover for the tracker date)</span></span>
       <span id="cal-note"></span>
     </div>
   </section>
@@ -778,14 +805,29 @@ __EXPORT_CSS__
             sortK:'sl', sortD:-1, open:new Set() };
 
   // ---- tool links ---------------------------------------------------------
+  // A UNC path becomes file://host/share/... and every segment must be
+  // percent-encoded - unencoded spaces are why "File Transformer" never opened.
+  const fileUrl = p => 'file:' + p.replace(/\\/g, '/').split('/')
+                                  .map(encodeURIComponent).join('/');
   $('tools').innerHTML = '<span>Tools:</span>' + D.tools.map(([label, path], i) =>
     (i ? '<span class="sep">|</span>' : '') +
-    `<span><a href="file:${path.replace(/\\/g,'/')}" title="${esc(path)}">${esc(label)}</a>` +
-    `<button class="cp" data-path="${esc(path)}" title="Copy path">⧉</button></span>`).join('');
+    `<span><a href="${fileUrl(path)}" target="_blank" rel="noopener" ` +
+    `title="${esc(path)}\n\nOpens in its own app. If the browser blocks it, use ⧉ to ` +
+    `copy the path and paste it into the Windows Run box (Win+R).">${esc(label)}</a>` +
+    `<button class="cp" data-path="${esc(path)}" title="Copy path">⧉</button></span>`).join('')
+    + '<span class="sep">|</span><span style="opacity:.8">blocked by the browser? '
+    + 'copy with ⧉, then Win+R &rarr; paste &rarr; Enter</span>';
   $('tools').addEventListener('click', e => {
     const b = e.target.closest('button.cp'); if (!b) return;
     const p = b.dataset.path;
-    if (navigator.clipboard) navigator.clipboard.writeText(p);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(p);
+    } else {                                  // file:// pages often lack the async API
+      const ta = document.createElement('textarea');
+      ta.value = p; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      document.body.removeChild(ta);
+    }
     const old = b.textContent; b.textContent = '✓';
     setTimeout(() => { b.textContent = old; }, 900);
   });
@@ -855,7 +897,10 @@ __EXPORT_CSS__
           // the tracker writes a bare ticket number to mean "loaded to CMSE"
           if (!tr.late && /^\d+$/.test(tr.v))
             return `<td class="mo trk" title="Tracker shows loaded (${esc(tr.v)}); no CMSE load this month">X</td>`;
-          return `<td class="mo ${tr.late?'late':'exp'}">${esc(tr.v)}</td>`;
+          // not loaded: a red cell keeps its colour but shows no date and no "E"
+          if (tr.late)
+            return `<td class="mo late" title="Not loaded &mdash; tracker outreach/late: ${esc(tr.v)}"></td>`;
+          return `<td class="mo exp">${esc(tr.v)}</td>`;
         }
         return '<td class="mo"></td>';
       }).join('');
@@ -878,7 +923,8 @@ __EXPORT_CSS__
     ['done', 'Import Complete', null],
     ['rec', 'Records', 'num'],
     ['ok', 'Success', 'num'],
-    ['bad', 'Failed', 'num bad'],
+    ['bad', 'Failed', 'num'],
+    ['pcn', 'PCN', 'mid'],
     ['wi', 'ADO Ticket', 'mid'],
   ];
 
@@ -927,7 +973,8 @@ __EXPORT_CSS__
         `<td class="entry" title="${esc(l.entry)}">${esc(l.file)}</td>` +
         `<td>${esc(l.start)}</td><td>${esc(l.done)}</td>` +
         `<td class="num">${nf(l.rec)}</td><td class="num">${nf(l.ok)}</td>` +
-        `<td class="num bad">${nf(l.bad)}</td>` +
+        `<td class="num${l.bad ? ' bad' : ''}">${nf(l.bad)}</td>` +
+        `<td class="mid">${esc(l.pcn)}</td>` +
         `<td class="mid">${wiCell}</td></tr>`);
       if (open) {
         const tot = l.stg.reduce((s, r) => s + r[2], 0);
@@ -1082,8 +1129,8 @@ __EXPORT_CSS__
             const ym = S.year + '-' + String(i+1).padStart(2,'0');
             if (r.m[ym]) return 'X';
             const tr = isT ? r.tr[String(i+1)] : null;
-            if (!tr) return '';
-            return (!tr.late && /^\d+$/.test(tr.v)) ? 'X' : tr.v;
+            if (!tr || tr.late) return '';
+            return /^\d+$/.test(tr.v) ? 'X' : tr.v;
           })]),
         note: 'TRGRepSQL3 / CMSE_New \u00b7 X = loaded to CMSE, E = expected',
         rowsPerSlide: 12, fontSz: 800,
@@ -1098,9 +1145,9 @@ __EXPORT_CSS__
                   ' loads \u00b7 generated ' + D.generated,
         headers: ['SourceLogId','SourceId','Source Name','File Type','Client Name',
                   'Client Id','EntryName','Import Start','Import Complete',
-                  'Records','Success','Failed','ADO Ticket','PCN'],
+                  'Records','Success','Failed','PCN','ADO Ticket'],
         rows: rows.map(l => [l.sl, l.src, SRC[l.src]||'', l.ft, l.client, l.cid,
-          l.entry, l.start, l.done, l.rec, l.ok, l.bad, l.wi||'', l.pcn]),
+          l.entry, l.start, l.done, l.rec, l.ok, l.bad, l.pcn, l.wi||'']),
         note: 'cmse_new..SourceLog, SourceId ' + D.scope.join(', '),
         rowsPerSlide: 12, fontSz: 700,
       };
