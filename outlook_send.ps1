@@ -1,5 +1,12 @@
-$params = Get-Content "C:\Users\tls2\.claude\projects\H--\_email_params.json" -Raw | ConvertFrom-Json
-$resultFile = "C:\Users\tls2\.claude\projects\H--\_send_result.txt"
+param(
+    # Per-call unique paths supplied by send_via_outlook.py (2026-08-07). The
+    # defaults are the legacy shared paths, kept so any old caller still works.
+    [string]$ParamsFile = "C:\Users\tls2\.claude\projects\H--\_email_params.json",
+    [string]$ResultFile = "C:\Users\tls2\.claude\projects\H--\_send_result.txt"
+)
+
+$params = Get-Content $ParamsFile -Raw | ConvertFrom-Json
+$resultFile = $ResultFile
 try {
     $outlook = New-Object -ComObject Outlook.Application
     $ns = $outlook.GetNamespace("MAPI")

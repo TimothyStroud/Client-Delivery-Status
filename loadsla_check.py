@@ -343,7 +343,14 @@ Monthly client (first Friday) &middot; Success = each RAW loaded + snapped withi
 </table>
 <p style="color:#999;font-size:11px">Automated load-completion SLA update generated from RAMP. RAW load dates via OptumPBMRx.etl.Tape (Load Start = FileCreateDate, Load Completion = FileLoadDate); Snap Date = the {OPTUM['snap_name']} run following each load.</p>
 </body></html>"""
-    subj = f"SLA Update - {OPTUM['load_name']} ({le.strftime('%B %Y') if le else ''}) - {'SUCCESS' if ok else 'FAILED SLA'}"
+    # Label the month from the CYCLE tag, not the load EndDate: the load job
+    # re-runs as each RAW lands, so EndDate can spill into the next month
+    # (a 7/30 re-run of the 07032026 cycle is still the July report).
+    try:
+        _label = datetime(int(tag[4:8]), int(tag[0:2]), int(tag[2:4])).strftime('%B %Y')
+    except (ValueError, IndexError):
+        _label = le.strftime('%B %Y') if le else ''
+    subj = f"SLA Update - {OPTUM['load_name']} ({_label}) - {'SUCCESS' if ok else 'FAILED SLA'}"
     return subj, body, ok
 
 
@@ -404,6 +411,16 @@ def main():
                 print("   load/snap not both complete -- skip")
             elif not force and cell.get('last_qid') == lqid:
                 print("   this completion already reported -- skip")
+            elif not force and cycle and f"{cycle.year}-{cycle.month:02d}" != pk:
+                # The RAMP load job re-runs as each RAW lands, so its "latest run"
+                # can be a re-run of a PRIOR month's cycle. Reporting it would
+                # (a) duplicate that month's report and (b) burn this month's
+                # once-per-period slot, so the real cycle never gets reported.
+                # This is exactly what happened 2026-08-03: a 7/30 re-run of the
+                # 07032026 cycle went out as "July 2026" in August, leaving the
+                # real 08072026 cycle dormant. (guard added 2026-08-07)
+                print(f"   latest run belongs to cycle {tag} ({cycle:%B %Y}), not the "
+                      f"current period {pk} -- skip, waiting for this month's cycle")
             elif (not all(raw_loaded.values()) and not force and cycle
                   and datetime.now() < cycle + timedelta(days=OPTUM_RAW_SLA_DAYS)):
                 _missing = [l for l, v in raw_loaded.items() if not v]
