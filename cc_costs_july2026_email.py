@@ -1,77 +1,110 @@
 r"""
-One-off Claude cost email for JULY 2026, sent on request (2026-08-10).
+One-off Claude cost email for JULY 2026.
 
-Context: David Levinger asked (#proj_july_claude_costs, 2026-08-07 6:42pm) that
-everyone move to `cc-classify cap-report` (new in v0.12.1+), which auto-selects
-the previous month and uploads a standard-format file to S3.
+First sent 2026-08-10 07:39 reporting $461.48 with two blockers (no v0.12.2
+binary, no AWS). RESENT the same day after both were resolved and a third,
+worse problem surfaced.
 
-Two blockers on this box, both reported honestly in the email body:
-  1. cap-report needs cc-classify >= 0.12.1. This machine has the v0.7.0 Windows
-     build CJ posted to Slack. vlognow/cc-classify is a private repo: the GitHub
-     API and the release asset both 404 unauthenticated, there is no `gh` CLI or
-     token here, and there is no cargo/crates.io path either. So cap-report
-     cannot be run until someone supplies the v0.12.2 Windows zip.
-  2. The S3 upload needs the machinify-dev AWS account over SSO. There is no AWS
-     CLI and no ~/.aws/config on this box, so even with the new binary this would
-     be a `cap-report --local` run (same position Margaret Lane reported).
+What changed for the resend:
+  1. cap-report UNBLOCKED. Derek Leverenz posted the v0.12.2 Windows build to
+     #proj_july_claude_costs at 11:07am. Installed to cc-classify-bin\v0122\.
+  2. Pricing patch REMOVED. v0.12.2 prices the Claude 5 family natively at
+     exactly the rates that were patched into config.toml, and adds gpt-5.6-*
+     rows that the patch would have silently dropped (a [[pricing]] block
+     replaces the built-in table rather than merging).
+  3. S3 still unavailable -- no machinify-dev AWS profile -- so cap-report was
+     run with --local and the rollup CSV is embedded below and posted to Slack.
+  4. TRANSCRIPT RETENTION LOSS. cc-classify reads ~/.claude/projects/**/*.jsonl,
+     and Claude Code deletes transcripts older than cleanupPeriodDays (default
+     30) at startup. Between the 7:39am run and 11:20am the same day a /clear
+     triggered that cleanup and erased 1-9 July: $461.48/107 sessions became
+     $374.97/79, on BOTH binaries. $86.51 (19%) unrecoverable -- transcripts are
+     gitignored and were not in the recycle bin, a shadow copy, or OneDrive.
+     cleanupPeriodDays is now pinned to 3650 in ~/.claude/settings.json.
 
-What this email DOES report: July 2026 from the v0.7.0 binary, with the pricing
-table patched in config.toml. That patch matters -- v0.7.0's built-in table only
-globs *opus-4*/*sonnet-4*/*haiku-4*, so every claude-opus-5 turn (i.e. nearly all
-of this box's usage) was silently priced at $0. Unpatched July read $428.16;
-correctly priced it is $461.48.
+So $461.48 is the truer July figure and $374.97 is all the tool can now
+reproduce. Both are stated in the email rather than picking one silently.
 """
 import os
 import sys
+import io
 import html as _html
 
 BASE = r'C:\Users\tls2\.claude\projects\H--'
 sys.path.insert(0, BASE)
 from send_via_outlook import send
-from cc_costs_monthly_email import run_exe, parse_total, pre
+from cc_costs_monthly_email import run_exe, parse_total, pre, run_cap_report
 
 TO = 'timothy.stroud@machinify.com'
 SINCE, UNTIL, LABEL = '2026-07-01', '2026-07-31', 'July 2026'
 
+PRE_PRUNE_TOTAL = '$461.48'
+PRE_PRUNE_SESSIONS = 107
+PRE_PRUNE_TOKENS = '488,654,092'
+SLACK_LINK = 'https://machinify.slack.com/archives/C0B8K5U4U7P/p1786376708834119'
 
-def build_html(report_txt, init_txt, sess_txt, total):
+
+def build_html(report_txt, init_txt, sess_txt, total, cap_txt, cap_csv_text):
     css = "font-family:Segoe UI,Arial,sans-serif;font-size:13px;"
-    warn = ("background:#fff4e5;border-left:4px solid #ff9800;padding:10px 14px;"
-            "margin:12px 0;font-size:12.5px;")
+    alert = ("background:#fdecea;border-left:4px solid #d93025;padding:10px 14px;"
+             "margin:12px 0;font-size:12.5px;")
+    ok = ("background:#e6f4ea;border-left:4px solid #188038;padding:10px 14px;"
+          "margin:12px 0;font-size:12.5px;")
     note = ("background:#e8f4fd;border-left:4px solid #2f5496;padding:10px 14px;"
             "margin:12px 0;font-size:12.5px;")
     p = [f"<div style='{css}'>"]
-    p.append(f"<h2 style='color:#2f5496;margin-bottom:2px;'>Claude Cost Report &mdash; {LABEL}</h2>")
-    p.append(f"<p style='color:#666;margin-top:0;'>Total spend: <b>{total}</b> "
-             f"across 107 sessions, ~488.7M tokens. One initiative: "
-             f"<b>RDP Data Operations</b> (R&amp;D, capitalizable), ~98% capitalizable.</p>")
+    p.append(f"<h2 style='color:#2f5496;margin-bottom:2px;'>Claude Cost Report &mdash; {LABEL} "
+             "<span style='font-size:13px;color:#d93025;'>(corrected resend)</span></h2>")
+    p.append(f"<p style='color:#666;margin-top:0;'>Supersedes the 7:39am email. "
+             f"Two figures, both real:<br>"
+             f"&bull; <b>{PRE_PRUNE_TOTAL}</b> &mdash; {PRE_PRUNE_SESSIONS} sessions, "
+             f"~{PRE_PRUNE_TOKENS} tokens. Captured 7:39am, before transcripts were pruned. "
+             f"<b>The truer number.</b><br>"
+             f"&bull; <b>{total}</b> &mdash; what <code>cap-report</code> can reproduce now, "
+             f"and therefore what the standard CSV below says.<br>"
+             f"One initiative: <b>RDP Data Operations</b> (R&amp;D, capitalizable), ~98% capitalizable.</p>")
 
-    p.append(f"<div style='{warn}'><b>This is not the new <code>cap-report</code> output.</b> "
-             "David's 8/7 note asks everyone to upgrade to cc-classify v0.12.1+ and run "
-             "<code>cc-classify cap-report</code>, which picks last month automatically and "
-             "uploads a standard file to S3. Two things block that on this machine:"
+    p.append(f"<div style='{alert}'><b>Why the number dropped $86.51 in four hours.</b> "
+             "cc-classify prices the local Claude Code transcripts in "
+             "<code>~\\.claude\\projects\\**\\*.jsonl</code>. Claude Code <b>deletes transcripts older "
+             "than <code>cleanupPeriodDays</code> (default 30) at startup</b>. A <code>/clear</code> "
+             "mid-morning triggered that cleanup and erased <b>1&ndash;9 July</b>. The same July window "
+             f"returned {PRE_PRUNE_TOTAL} / {PRE_PRUNE_SESSIONS} sessions at 7:39am and {total} / 79 "
+             "sessions at 11:20am &mdash; on <i>both</i> the 0.7.0 and 0.12.2 binaries, so this is data "
+             "loss, not a version difference.<br><br>"
+             "<b>Unrecoverable:</b> the transcripts are gitignored in the auto-synced repo, and were not "
+             "in the Recycle Bin, a shadow copy, or OneDrive.<br><br>"
+             "<b>Fixed going forward:</b> <code>\"cleanupPeriodDays\": 3650</code> is now pinned in "
+             "<code>%USERPROFILE%\\.claude\\settings.json</code>. Do not lower it &mdash; every month "
+             "reported more than ~30 days late is otherwise an undercount, and that likely applies to "
+             "other people's channel numbers too. Flagged in Slack: "
+             f"<a href='{SLACK_LINK}'>#proj_july_claude_costs</a>.</div>")
+
+    p.append(f"<div style='{ok}'><b>Both previous blockers are cleared.</b>"
              "<ol style='margin:6px 0 0 18px;padding:0;'>"
-             "<li><b>No v0.12.2 binary.</b> <code>vlognow/cc-classify</code> is a private repo &mdash; "
-             "the releases API and the <code>...-pc-windows-msvc.zip</code> asset both return 404 "
-             "unauthenticated, and there is no <code>gh</code> CLI, GitHub token, or cargo toolchain "
-             "on this box. The installed build is the v0.7.0 Windows zip CJ posted to Slack back in June, "
-             "which has no <code>cap-report</code> command. "
-             "<i>Fix: someone with repo access posts the v0.12.2 Windows zip to Slack, same as CJ did for 0.7.0.</i></li>"
-             "<li><b>No AWS access.</b> No AWS CLI and no <code>~/.aws/config</code> here, so the S3 upload "
-             "can't happen either &mdash; this would be a <code>cap-report --local</code> run and a CSV posted "
-             "to the channel, the same workaround Margaret Lane used.</i></li>"
+             "<li><b>v0.12.2 installed.</b> Derek Leverenz posted the Windows build to "
+             "#proj_july_claude_costs at 11:07am today; it is now at "
+             "<code>cc-classify-bin\\v0122\\cc-classify.exe</code> and <code>cap-report</code> runs.</li>"
+             "<li><b>Pricing patch removed.</b> v0.12.2 prices <code>*opus-5*</code> at $5/$25 per MTok "
+             "(cache-write $6.25, cache-read $0.50) natively &mdash; identical to the hand-patched rates &mdash; "
+             "and adds <code>gpt-5.6-*</code> rows the patch would have silently dropped, since a "
+             "<code>[[pricing]]</code> block replaces the built-in table rather than merging. "
+             "Old config kept at <code>config.toml.v0.7.0-pricing-patch.bak</code>.</li>"
+             "<li><b>S3 still unavailable</b> &mdash; no <code>machinify-dev</code> AWS profile on this box "
+             "(<code>cap-report</code> fails with \"A region must be set\"), so this is a "
+             "<code>--local</code> run, same as Margaret Lane and Joshua Hart. The CSV is below and has "
+             "been posted to the channel.</li>"
              "</ol></div>")
 
-    p.append(f"<div style='{note}'><b>Pricing correction &mdash; the number moved.</b> "
-             "v0.7.0's built-in pricing table only matches <code>*opus-4*</code>, <code>*sonnet-4*</code> "
-             "and <code>*haiku-4*</code>. Every <code>claude-opus-5</code> turn &mdash; effectively all of this "
-             "box's usage &mdash; was unpriced and counted as <b>$0</b>. I added the Claude 5 rates "
-             "(Opus 5 $5/$25 per MTok, cache-write 5m $6.25, cache-read $0.50) to "
-             "<code>config.toml</code>. July reads <b>$461.48</b> corrected, vs <b>$428.16</b> before. "
-             "The automated 8/1 email you already received used the uncorrected figure.<br><br>"
-             "Note the <code>[[pricing]]</code> block <i>replaces</i> the built-in table rather than merging, "
-             "so the stock opus-4/sonnet-4/haiku-4 rows are restated in the config too. All of this becomes "
-             "unnecessary once the real v0.12.2 binary is installed &mdash; it prices the 5 family natively.</div>")
+    p.append("<h3 style='color:#2f5496;'>cap-report rollup CSV (the finance artifact)</h3>")
+    p.append(pre(cap_csv_text))
+    p.append(pre(cap_txt))
+
+    p.append(f"<div style='{note}'><b>Still open:</b> which July figure gets filed. "
+             f"{total} is the clean tool-generated artifact; {PRE_PRUNE_TOTAL} is the truer number from "
+             "the same tool and config a few hours earlier. Asked David Levinger to choose in the channel. "
+             "A corrected CSV was deliberately <i>not</i> hand-written, because the token and engaged-minute "
+             "detail for the deleted sessions is gone and inventing it would corrupt a machine-read file.</div>")
 
     p.append("<h3 style='color:#2f5496;'>Capitalization report</h3>")
     p.append(pre(report_txt))
@@ -80,10 +113,11 @@ def build_html(report_txt, init_txt, sess_txt, total):
     p.append("<h3 style='color:#2f5496;'>Sessions</h3>")
     p.append(pre(sess_txt))
     p.append("<p style='color:#888;font-size:11px;margin-top:14px;'>"
-             "Initiative mapping (H:\\ &rarr; \"RDP Data Operations\", capitalizable R&amp;D) and the pricing "
-             "patch live in <code>%USERPROFILE%\\.config\\cc-classify\\config.toml</code>. Buckets and Cap% are "
-             "computed by cc-classify itself. The monthly Windows task \"CC Monthly Cost Email\" has been "
-             "disabled pending the cap-report cutover.</p>")
+             "Initiative mapping (H:\\ &rarr; \"RDP Data Operations\", capitalizable R&amp;D) lives in "
+             "<code>%USERPROFILE%\\.config\\cc-classify\\config.toml</code>. Buckets and Cap% are computed "
+             "by cc-classify itself. The monthly Windows task \"CC Monthly Cost Email\" is re-enabled "
+             "(day 1, 8:00 AM) and now runs <code>cap-report</code> automatically, falling back to "
+             "<code>--local</code> when S3 is unavailable.</p>")
     p.append("</div>")
     return "".join(p)
 
@@ -92,11 +126,16 @@ def main():
     report_txt = run_exe('report', SINCE, UNTIL)
     init_txt = run_exe('initiatives', SINCE, UNTIL)
     sess_txt = run_exe('sessions', SINCE, UNTIL)
+    cap_txt, cap_csv = run_cap_report('2026-07')
+    cap_csv_text = '(rollup CSV not produced)'
+    if cap_csv and os.path.exists(cap_csv):
+        cap_csv_text = io.open(cap_csv, encoding='utf-8').read().rstrip('\n')
     total = parse_total(report_txt)
-    html = build_html(report_txt, init_txt, sess_txt, total)
-    subject = f"Claude Cost Report - {LABEL} - {total} (cap-report blocked - see note)"
+    html = build_html(report_txt, init_txt, sess_txt, total, cap_txt, cap_csv_text)
+    subject = (f"Claude Cost Report - {LABEL} - {PRE_PRUNE_TOTAL} pre-prune / {total} reproducible "
+               f"(CORRECTED RESEND)")
     result = send(to=TO, subject=subject, body=html)
-    print(f"{LABEL}: {total} | email -> {TO} | {result}")
+    print(f"{LABEL}: {total} (pre-prune {PRE_PRUNE_TOTAL}) | email -> {TO} | {result}")
 
 
 if __name__ == '__main__':
