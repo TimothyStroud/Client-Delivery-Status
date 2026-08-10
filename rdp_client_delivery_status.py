@@ -772,6 +772,16 @@ MANUAL_OVERRIDES = {
     # prior week's band; this override surfaces it on the current Thu 7/23 cell to
     # match the sibling Kaiser feeds. Remove once next week's cycle certifies.)
     ("Kaiser_NW",     date(2026, 7, 23)): date(2026, 7, 23),
+    # 2026-08-10 per user: "the UPMC certification today will be for the 8/6
+    # delivery." UPMC (weekly Thu) loaded 8/8 20:44-21:24 (QueueId 1419512) and
+    # DHT sat at "Email sent, Ready for Certification review" (StatTimestamp
+    # 8/8 21:13), leaving the 8/6 cell a pink "!". Pin today's cert date on 8/6.
+    # (Once DHT flips to Certified this pin is redundant but harmless: the cert's
+    # StatTimestamp 8/8 is a Saturday, so stat_week_monday -> 8/3 and cert_in_week
+    # attributes it to this same Thu 8/6 cell. No CERT_CELL_REMAP needed.) The
+    # separate load that started today 8/10 00:52 (QueueId 1420054, still Ready)
+    # is the NEXT cycle and paints "L" on Thu 8/13 — unaffected.
+    ("UPMC",          date(2026, 8, 6)):  date(2026, 8, 10),
     # 2026-07-29: HealthNetCA (weekly Mon, FORCED_INACTIVE) is loading again, but
     # per user all Monday cells must stay Inactive until the data is reviewed for
     # activate/Snap/Certify. The prior cell-by-cell "L"-suppression pins (e.g.
@@ -1085,20 +1095,13 @@ ADDITIONAL_ENTRIES = [
     # it as its own labeled row showing the cert date; the normal weekly Friday
     # 7/24 cell is separately pinned to "No Data" (weekly not yet loading).
     ("weekly", date(2026, 7, 24), "WellCareRx (Ad Hoc)", date(2026, 7, 22), False, None),
-    # 2026-08-05: 'HealthNet 0110 Claims Load' (JobId 1812) Failed 8/5 12:22 —
-    # per user it is an AD HOC RE-LOAD of the 3/20–3/27 data, NOT the weekly
-    # delivery. Surface it as its own labeled row; the regular HealthNetCA Monday
-    # rows stay "Inactive" (FORCED_INACTIVE).
-    # 2026-08-06 per user: "The HealthNetCA (3/20-3/27) load restarted today at
-    # 7:10a." QueueId 1417891 started 7:11 and is RUNNING (SSIS HealthNetCA
-    # Weekly on TRGETL1, step 2 of 8 "Pull" — the ~3.5h step; prior full runs
-    # 4.5-7.5h). The 8/5 12:22 + 15:26 attempts both died in 0 min and are
-    # superseded, so the row MOVES to 8/6 as "L" instead of keeping the failure.
-    # Flip to "✓" when the load succeeds (or a cert date once certified).
-    # NOTE: HealthNetCA is FORCED_INACTIVE, so resolve_marker can never paint
-    # this activity on the Monday cells — this labeled row is the only surface.
-    ("weekly", date(2026, 8, 6), "HealthNetCA (Ad Hoc 3/20-3/27)",
-     "L", False, None),
+    # 2026-08-05/08-06: a `HealthNetCA (Ad Hoc 3/20-3/27)` row lived here for the
+    # ad hoc re-load of the 3/20–3/27 data (JobId 1812; failed 8/5, restarted
+    # 8/6 07:10). REMOVED 2026-08-10 per user: "The HealthNetCA (3/20-3/27) can
+    # be removed. The file was backed out and on hold for now." HealthNetCA stays
+    # FORCED_INACTIVE, so the regular Monday cells continue to read "Inactive"
+    # and no HealthNetCA activity surfaces anywhere. Re-add a labeled row here if
+    # the re-load is picked back up.
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
