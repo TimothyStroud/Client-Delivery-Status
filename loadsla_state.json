@@ -7,7 +7,11 @@
     "last_qid": 1419940,
     "last_period": "2026-W33"
   },
-  "optum_pbm": {},
+  "optum_pbm": {
+    "last_qid": 1420251,
+    "last_period": "2026-08",
+    "last_cycle": "08072026"
+  },
   "caresource": {
     "last_qid": 1416376,
     "last_period": "2026-W32"

@@ -75,6 +75,11 @@ OPTUM = {
 # they're still incomplete this many days after the cycle (first Friday) do we
 # report FAILED SLA. Prevents the premature-FAILED seen on 2026-07-01.
 OPTUM_RAW_SLA_DAYS = 5
+# The vendor does not always stamp RAW1/2/3 with the SAME filename date: in the
+# August 2026 cycle RAW2/RAW3 were 08072026 but RAW1 was 08082026. Any RAW whose
+# filename date is within this many days of the newest one is treated as the same
+# data cycle. Cycles are ~a month apart, so there's no risk of merging two.
+OPTUM_CYCLE_WINDOW_DAYS = 4
 
 GREEN = '#1a7f37'
 RED   = '#c00000'
@@ -205,7 +210,11 @@ def optum_raw_status():
     Rows at ANY ProcessStatus are read (not just loaded), so a RAW still in flight
     shows its current status/timestamps. The cycle tag (MMDDYYYY) is derived from
     the RAW filenames themselves, so it follows the actual data cycle rather than a
-    re-running load job's StartDate (which drifts as RAW files trickle in)."""
+    re-running load job's StartDate (which drifts as RAW files trickle in).
+
+    RAW1/2/3 do not always carry the same filename date, so the newest tags are
+    clustered into one cycle (see OPTUM_CYCLE_WINDOW_DAYS) and the returned tag is
+    the EARLIEST in that cluster -- the real cycle date the SLA window keys off."""
     query = ("SET NOCOUNT ON; SELECT ProcessStatus, "
              "CONVERT(varchar(19), FileCreateDate, 120), "
              "CONVERT(varchar(19), FileLoadDate, 120), FileName FROM etl.Tape "
@@ -215,7 +224,7 @@ def optum_raw_status():
          '-h', '-1', '-s', '\t', '-Q', query],
         capture_output=True, text=True)
     rx = re.compile(r'(RAW[123])_(\d{8})', re.I)
-    by_cycle = {}   # MMDDYYYY tag -> {label: (ps, started, completed)}
+    by_cycle = {}   # MMDDYYYY tag -> {label: [(ps, started, completed, base), ...]}
     for line in out.stdout.splitlines():
         parts = line.split('\t')
         if len(parts) < 4:
@@ -231,18 +240,41 @@ def optum_raw_status():
         started = parse_dt(cre.replace(' ', 'T')) if cre and cre != 'NULL' else None
         completed = parse_dt(ld.replace(' ', 'T')) if ld and ld != 'NULL' else None
         base = fname.replace('/', '\\').split('\\')[-1]
-        by_cycle.setdefault(m.group(2), {})[m.group(1).upper()] = (ps, started, completed, base)
+        (by_cycle.setdefault(m.group(2), {})
+                 .setdefault(m.group(1).upper(), []).append((ps, started, completed, base)))
     if not by_cycle:
         return {lbl: _blank_raw() for lbl in OPTUM['raw_labels']}, '?'
 
     def _cd(t):
         return date(int(t[4:8]), int(t[0:2]), int(t[2:4]))
-    tag = max(by_cycle, key=_cd)          # most recent data cycle present
-    rows = by_cycle[tag]
+
+    # Cluster the newest filename dates into a single data cycle, then merge their
+    # rows. Without this, a RAW1 stamped a day later than RAW2/RAW3 lands in its
+    # own bucket and the other two read as MISSING (false FAILED SLA).
+    tags = sorted(by_cycle, key=_cd, reverse=True)
+    cluster = [tags[0]]
+    for t in tags[1:]:
+        if (_cd(cluster[-1]) - _cd(t)).days > OPTUM_CYCLE_WINDOW_DAYS:
+            break
+        cluster.append(t)
+    tag = cluster[-1]                     # earliest tag in the cycle
+    rows = {}
+    for t in cluster:
+        for lbl, cands in by_cycle[t].items():
+            rows.setdefault(lbl, []).extend(cands)
+
+    def _best(cands):
+        """A RAW can be re-delivered after it already loaded (a fresh staging row
+        for the same filename), so prefer a completed load over an in-flight one."""
+        done = [c for c in cands if c[0] == 50 and c[2] is not None]
+        if done:
+            return max(done, key=lambda c: c[2])
+        return max(cands, key=lambda c: (c[0], c[1] or datetime.min))
+
     detail = {}
     for lbl in OPTUM['raw_labels']:
         if lbl in rows:
-            ps, started, completed, base = rows[lbl]
+            ps, started, completed, base = _best(rows[lbl])
             detail[lbl] = {'loaded': (ps == 50 and completed is not None),
                            'status': _ps_label(ps), 'started': started,
                            'completed': completed, 'file': base}
@@ -400,6 +432,20 @@ def main():
         raw_loaded = {l: d['loaded'] for l, d in raw_found.items()}
         print(f"[optum_pbm] LoadQ={lqid} LoadEnd={lend} SnapEnd={send_end} tag={tag} RAW={raw_loaded}")
         complete = bool(lend and send_end)
+        if not complete and all(raw_loaded.values()):
+            # A re-delivered RAW kicks off a NEW load run, so LatestJobRun can be
+            # in flight long after the cycle itself is provably finished (8/10:
+            # RAW1 was re-sent and re-staged two days after the cycle's own
+            # load+snap had all completed). If every RAW loaded and each has a
+            # finished snap, report the cycle now instead of waiting on rework.
+            _snaps = optum_snap_runs()
+            complete = all(
+                any(r['start'] and d['completed'] and r['start'] >= d['completed'] and r['end']
+                    for r in _snaps)
+                for d in raw_found.values())
+            if complete:
+                print("   latest load run still in flight (re-delivery), but all "
+                      "RAWs loaded + snapped -- reporting the cycle")
         pk = period_key('monthly')  # Optum is monthly: report once/month, restart 1st weekday
         cell = state.get(OPTUM['key'], {})
         if not status_only and not OPTUM_ENABLED:
