@@ -8,8 +8,10 @@ and match #proj_july_claude_costs. Sent via the Outlook-COM interactive-task sen
 
 Also runs `cap-report` (v0.12.1+) to produce the standardised rollup CSV that
 finance collects. S3 upload needs an authenticated machinify-dev AWS profile,
-which this box does not have, so it falls back to `--local` and the CSV path is
-included in the email for manual posting to #proj_july_claude_costs.
+which this box does not have, so it falls back to `--local`, and the CSV is then
+COPIED TO THE DESKTOP so it can be dragged straight into #proj_july_claude_costs.
+The email is the "file is ready to be moved" notification: its subject and the
+banner at the top of the body both carry the Desktop path.
 
 Scheduled by Windows Task "CC Monthly Cost Email" (day 1, 8:00 AM, interactive
 logon so Outlook COM has a session).
@@ -23,6 +25,7 @@ pinned to 3650 in %USERPROFILE%\.claude\settings.json; do not lower it.
 import os
 import sys
 import html as _html
+import shutil
 import subprocess
 import re
 from datetime import datetime, timedelta
@@ -35,6 +38,33 @@ sys.path.insert(0, BASE)
 from send_via_outlook import send
 
 TO = 'timothy.stroud@machinify.com'
+
+
+def desktop_dir():
+    """The user's Desktop, tolerating OneDrive Known Folder redirection."""
+    home = os.environ.get('USERPROFILE') or os.path.expanduser('~')
+    cands = [os.path.join(home, 'Desktop')]
+    od = os.environ.get('OneDrive') or os.environ.get('OneDriveCommercial')
+    if od:
+        cands.insert(0, os.path.join(od, 'Desktop'))
+    for c in cands:
+        if os.path.isdir(c):
+            return c
+    return cands[-1]
+
+
+def place_on_desktop(csv_path):
+    """Copy the rollup CSV to the Desktop for drag/drop into Slack. Keeps the
+    exact cap-report filename so the posted file matches what finance expects.
+    Returns (desktop_path_or_None, note)."""
+    if not csv_path or not os.path.exists(csv_path):
+        return None, 'no CSV produced, nothing copied to the Desktop'
+    dest = os.path.join(desktop_dir(), os.path.basename(csv_path))
+    try:
+        shutil.copy2(csv_path, dest)
+        return dest, f'copied to the Desktop: {dest}'
+    except Exception as e:
+        return None, f'could not copy to the Desktop ({e}); use {csv_path}'
 
 
 def prev_month_window(today=None):
@@ -121,19 +151,26 @@ def pre(text):
             "overflow-x:auto;'>" + _html.escape(text) + "</pre>")
 
 
-def build_html(label, report_txt, init_txt, sess_txt, total, cap_txt='', cap_csv=''):
+def build_html(label, report_txt, init_txt, sess_txt, total, cap_txt='', cap_csv='',
+               desktop_csv=''):
     css = "font-family:Segoe UI,Arial,sans-serif;font-size:13px;"
     p = [f"<div style='{css}'>"]
     p.append(f"<h2 style='color:#2f5496;margin-bottom:2px;'>Claude Cost Report &mdash; {label}</h2>")
     p.append(f"<p style='color:#666;margin-top:0;'>Total spend: <b>{total}</b>. "
              f"Source: official <code>cc-classify.exe</code> v0.12.2 (matches #proj_july_claude_costs).</p>")
+    if desktop_csv:
+        p.append("<div style='border:2px solid #2f5496;background:#eef3fb;padding:10px 12px;"
+                 "margin:12px 0;'><b style='color:#2f5496;'>File is ready to be moved.</b><br>"
+                 f"<code>{_html.escape(os.path.basename(desktop_csv))}</code> is on your "
+                 "<b>Desktop</b> &mdash; drag it into <b>#proj_july_claude_costs</b>.<br>"
+                 f"<span style='color:#666;font-size:11px;'>{_html.escape(desktop_csv)}</span></div>")
     if cap_txt:
         p.append("<h3 style='color:#2f5496;'>cap-report (finance submission)</h3>")
         p.append(pre(cap_txt))
         if cap_csv:
-            p.append(f"<p style='color:#a33;'><b>Action required:</b> paste the contents of "
-                     f"<code>{_html.escape(cap_csv)}</code> into #proj_july_claude_costs "
-                     f"(S3 upload is unavailable on this box).</p>")
+            p.append(f"<p style='color:#a33;'><b>Action required:</b> post the rollup CSV to "
+                     f"#proj_july_claude_costs (S3 upload is unavailable on this box). "
+                     f"Master copy: <code>{_html.escape(cap_csv)}</code></p>")
     p.append("<h3 style='color:#2f5496;'>Capitalization report</h3>")
     p.append(pre(report_txt))
     p.append("<h3 style='color:#2f5496;'>Initiatives</h3>")
@@ -154,11 +191,17 @@ def main():
     init_txt = run_exe('initiatives', since, until)
     sess_txt = run_exe('sessions', since, until)
     cap_txt, cap_csv = run_cap_report(since[:7])
+    desktop_csv, desk_note = place_on_desktop(cap_csv)
+    cap_txt = (cap_txt or '') + f'\nDesktop: {desk_note}'
     total = parse_total(report_txt)
-    html = build_html(label, report_txt, init_txt, sess_txt, total, cap_txt, cap_csv or '')
+    html = build_html(label, report_txt, init_txt, sess_txt, total, cap_txt,
+                      cap_csv or '', desktop_csv or '')
     subject = f"Claude Cost Report - {label} - {total}"
+    if desktop_csv:
+        subject += " - CSV on your Desktop, ready to post to Slack"
     result = send(to=TO, subject=subject, body=html)
-    print(f"{label}: {total} | cap-csv: {cap_csv or 'n/a'} | email -> {TO} | {result}")
+    print(f"{label}: {total} | cap-csv: {cap_csv or 'n/a'} | {desk_note} | "
+          f"email -> {TO} | {result}")
 
 
 if __name__ == '__main__':
