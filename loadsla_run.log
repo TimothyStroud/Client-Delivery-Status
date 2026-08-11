@@ -586,3 +586,11 @@ State saved.
 [optum_pbm] LoadQ=1419637 LoadEnd=2026-08-09T08:39:31.483 SnapEnd=2026-08-09T08:49:17.143 tag=08082026 RAW={'RAW1': True, 'RAW2': False, 'RAW3': False}
    RAW not all loaded yet (RAW2, RAW3); within 5-day window of cycle 08082026 -- waiting, no report
 State saved.
+[caresource] (weekly) QueueId=1420416 Status=Ready End=None period=2026-W33
+   still running / not complete -- skip
+[wellmark] (weekly) QueueId=1419940 Status=Successful End=2026-08-10T02:17:58.727 period=2026-W33
+   already reported this period -- dormant until restart
+[healthspring_fwa] (monthly) QueueId=1418957 Status=Successful End=2026-08-07T22:22:15.657 period=2026-08
+   already reported this period -- dormant until restart
+[optum_pbm] LoadQ=1420251 LoadEnd=None SnapEnd=2026-08-09T08:49:17.143 tag=08072026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   cycle 08072026 already reported -- dormant until next cycle
