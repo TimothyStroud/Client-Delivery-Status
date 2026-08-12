@@ -546,57 +546,94 @@ def _eta_line(eta, note=""):
     return f" - ETA ~{eta:%H:%M}" + (f" ({note})" if note else "")
 
 
-def start_detail(run):
-    """One extra line for the STARTED message: what the job is really waiting on
-    and when it is likely to finish. Returns '' if nothing useful is known --
-    every lookup here is best-effort and must never break the alert."""
-    try:
-        jobid = run["jobid"]
-        agents = AGENT_JOBS.get(jobid, [])
+# A RAMP entry that opens right AFTER its agent job already finished is just a
+# close-out stub: on 8/12 the 0110 Load queue entry ran 11:44-11:49 (5m) while
+# the SSIS MasterLoad had run 07:47-11:26 under an earlier, never-started entry.
+# Treat the work as already done when the last agent run ended within this many
+# minutes before the RAMP entry opened (observed 18m for that stub; the nearest
+# genuine "next cycle" gap was ~3h on 8/10, so 60m separates the two cleanly).
+WORK_DONE_WINDOW_MIN = 60
 
-        if jobid == JOB_MASTER_SNAP:
-            # The Snap is a SqlAgentMonitor gate over three agent jobs. Report
-            # whichever one is actually running -- that is the true blocker.
-            for server, job in agents:
-                live = agent_live(server, job)
-                if not live:
-                    continue
-                st, step = live
-                elapsed = (datetime.now() - st).total_seconds()
-                hist = agent_history(server, job)
-                typical = _pct(hist, STEP_PCT)
-                label = AGENT_LABEL.get(job, job)
-                bits = [f":hourglass_flowing_sand: waiting on {label} "
-                        f"(running {_dur_txt(elapsed)}"
-                        + (f", typically {_dur_txt(typical)}" if typical else "") + ")"]
-                if typical:
-                    bits.append(_eta_line(st + timedelta(seconds=typical)).lstrip(" -").strip())
-                return "   " + " - ".join(b for b in bits if b)
-            # Nothing running: pace off the Snap's own RAMP history.
-            hist = ramp_history(jobid)
-            typical = _pct(hist, STEP_PCT)
-            if typical:
-                return (f"   :hourglass_flowing_sand: typically {_dur_txt(typical)}"
-                        + _eta_line(run["start"] + timedelta(seconds=typical)))
-            return ""
 
-        # The two LOAD jobs: SSIS is the whole story, so use the milestone ladder
-        # when the package has cleared a rung, else the package's own history.
-        for server, job in agents:
-            pkg = SSIS_PKG.get(job)
-            if not pkg:
-                continue
+def _work_eta(run, agents):
+    """(eta, note, description, done) describing the WORK behind a RAMP job.
+
+    `done=True` means the agent work has already completed for this cycle, so
+    there is no work left to project and the RAMP entry is merely closing out --
+    the caller must NOT then fall back to whole-job history, which would invent
+    a multi-hour ETA for a five-minute stub."""
+    for server, job in agents:
+        pkg = SSIS_PKG.get(job)
+        if pkg:
             eta, note = ssis_eta(pkg[0], pkg[1])
             if eta:
-                return f"   :hourglass_flowing_sand: SSIS {pkg[1]} running{_eta_line(eta, note)}"
-            hist = agent_history(server, job)
-            typical = _pct(hist, STEP_PCT)
+                return eta, note, f"SSIS {pkg[1]} running", False
+
+        live = agent_live(server, job)
+        label = AGENT_LABEL.get(job, job)
+        typical = _pct(agent_history(server, job), STEP_PCT)
+
+        if live:
+            elapsed = (datetime.now() - live[0]).total_seconds()
             if typical:
-                live = agent_live(server, job)
-                anchor = live[0] if live else run["start"]
-                return (f"   :hourglass_flowing_sand: {AGENT_LABEL.get(job, job)} typically "
-                        f"{_dur_txt(typical)}" + _eta_line(anchor + timedelta(seconds=typical)))
-        return ""
+                return (live[0] + timedelta(seconds=typical), "",
+                        f"waiting on {label} (running {_dur_txt(elapsed)}, "
+                        f"typically {_dur_txt(typical)})", False)
+            return None, "", f"waiting on {label} (running {_dur_txt(elapsed)})", False
+
+        # Not running. Did it already run for THIS cycle?
+        last = agent_last_run(server, job, since=run["start"] - timedelta(hours=12))
+        if last:
+            st, en, ok = last
+            if en >= run["start"] - timedelta(minutes=WORK_DONE_WINDOW_MIN):
+                mark = "" if ok else " (FAILED)"
+                return (None, "", f"{label} already ran {st:%H:%M}-{en:%H:%M} "
+                        f"({_dur_txt((en - st).total_seconds())}){mark}", True)
+
+        if typical:
+            return (run["start"] + timedelta(seconds=typical), "",
+                    f"{label} typically {_dur_txt(typical)}", False)
+    return None, "", "", False
+
+
+def start_detail(run):
+    """One extra line for the STARTED message: what the job is really waiting on
+    and when it is likely to finish.
+
+    TWO anchors, and we take the LATER of them:
+      (a) the work -- SSIS ladder, else the agent job's own duration history;
+      (b) the RAMP queue job's own duration history.
+    A RAMP job cannot close before its agent work finishes, and RAMP adds fixed
+    polling overhead on top of it. Measured on COBC 8/12: 1m 43s of real work
+    (SSIS 65s + Datahealth 21s + DHTStats 17s) inside a 14m 14s RAMP span -- 88%
+    overhead. Pacing on (a) alone announced 'ETA ~13:25' for a job that closed at
+    13:37:44. RAMP history for that job is p50 7m / p80 9m, so anchor (b) is the
+    one that actually describes when the channel sees 'FINISHED'.
+
+    Returns '' if nothing useful is known -- every lookup is best-effort and must
+    never break the alert."""
+    try:
+        jobid = run["jobid"]
+        eta_work, note, what, done = _work_eta(run, AGENT_JOBS.get(jobid, []))
+
+        if done:
+            # Work finished; RAMP is only closing the queue entry out. Say that
+            # plainly rather than projecting an ETA history can't support.
+            return f"   :hourglass_flowing_sand: {what}; RAMP closing out"
+
+        typical_ramp = _pct(ramp_history(jobid), STEP_PCT)
+        eta_ramp = (run["start"] + timedelta(seconds=typical_ramp)) if typical_ramp else None
+
+        if eta_work and eta_ramp:
+            eta = max(eta_work, eta_ramp)
+        else:
+            eta = eta_work or eta_ramp
+        if not eta:
+            return f"   :hourglass_flowing_sand: {what}" if what else ""
+        if not what:
+            what = f"typically {_dur_txt(typical_ramp)}"
+        # The ladder note only belongs on the line when the ladder set the ETA.
+        return f"   :hourglass_flowing_sand: {what}{_eta_line(eta, note if eta == eta_work else '')}"
     except Exception as e:
         log(f"  (start_detail unavailable: {e})")
         return ""
