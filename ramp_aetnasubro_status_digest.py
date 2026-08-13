@@ -134,7 +134,12 @@ def job_run(jobid):
 # it by hand). Both get a green check.
 RAMP_OK = ('Successful', 'Resolved')
 
-EXEC_ICON = ':arrows_counterclockwise:'   # in-progress marker for the main line
+EXEC_ICON = ':arrows_counterclockwise:'   # in-progress marker for the ETA line
+
+# Per user 2026-08-13: a RAMP job actively Running gets :loading: (a workspace
+# custom emoji), not the hourglass. Queued/Idle/Waiting keep :hourglass_flowing_sand:
+# -- the distinction is "moving right now" vs "waiting its turn".
+RUNNING_ICON = ':loading:'
 
 
 def _to_dt(v):
@@ -174,7 +179,7 @@ def ramp_line(jobid):
         return (status, f"started {fmt(start)} | completed {fmt(end)}")
     if not start:
         return (":hourglass_flowing_sand: Queued", "not yet started")
-    return (":hourglass_flowing_sand: Running", f"started {fmt(start)} | not yet complete")
+    return (f"{RUNNING_ICON} Running", f"started {fmt(start)} | not yet complete")
 
 
 def fmt_dt(d, t):
@@ -485,7 +490,7 @@ def snap_line(load_jobid, snap_jobid):
         return (status, f"started {fmt(start)} | completed {fmt(end)}")
     if not start:
         return (":hourglass_flowing_sand: Queued", "not yet started")
-    return (":hourglass_flowing_sand: Running", f"started {fmt(start)} | not yet complete")
+    return (f"{RUNNING_ICON} Running", f"started {fmt(start)} | not yet complete")
 
 
 def _ramp_sql(query):
