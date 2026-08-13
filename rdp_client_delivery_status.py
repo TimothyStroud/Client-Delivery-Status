@@ -563,6 +563,32 @@ LOAD_NAME_REQUIRED = {
     # counts. Excludes CAQH, COBC, Claris Health, MSPI, Rx, Daily Passfile —
     # all of which have their own 0110 Load lines.
     "BCBSNC":            ("bcbsnc claims 0110 load",),
+    # AetnaRCE / NCStateAetna (both DAILY, driven by the shared 'Aetna RCE 310
+    # ETL Load'). Added 2026-08-13: EVERY 'Aetna RCE *' job collapses to the same
+    # snap-index key "aetnarce", and build_snap_index stores non-snap steps with
+    # kind="load" — so a Successful 'Aetna RCE 300 ETL Stage' (or a Resolved
+    # 'Aetna RCE 400 Daily Snap' card, or 'Aetna RCE 210 CM9 Load') painted a
+    # false "✓" on the day's cell even though the ETL Load had not started. Per
+    # user 2026-08-13: "the 8/13/26 load for AetnaRCE & NCStateAetna have not
+    # started yet." The delivery signal for both clients is the 310 ETL Load
+    # only; NCStateAetna also keeps its own weekly delivery snap.
+    "AetnaRCE":          ("310 etl load",),
+    "NCStateAetna":      ("310 etl load", "ncstateaetna 0110 snap"),
+}
+
+# Soft, self-clearing cell labels — {(client, day): label}. Unlike
+# MANUAL_OVERRIDES (which always wins), a soft label renders ONLY while the
+# auto-resolved marker is still empty ("" / "No Data"). The moment real activity
+# appears — "L" when the load starts, "✓" when it lands, or a cert date — the
+# live marker takes over and the label disappears with no manual cleanup.
+#
+# 2026-08-13 per user: the 8/13 AetnaRCE / NCStateAetna load had not started —
+# both are behind, held up by the monthly 'Aetna 0110 Subro Load' (Ready since
+# 06:18). 'Aetna RCE 300 ETL Stage' finished 08:38 but the 310 ETL Load has not
+# begun, so the cells would otherwise be blank.
+SOFT_OVERRIDES = {
+    ("AetnaRCE",     date(2026, 8, 13)): "Delayed",
+    ("NCStateAetna", date(2026, 8, 13)): "Delayed",
 }
 
 # Manual cell overrides — (client, scheduled_date) → marker. Marker can be:
@@ -4279,6 +4305,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             marker = resolve_marker(client, day, allow_checkmark=True, allow_week_window=False)
         else:  # monthly
             marker = resolve_marker(client, day, allow_checkmark=True, allow_week_window=False)
+        # Soft, self-clearing label (SOFT_OVERRIDES): applies only while nothing
+        # has happened yet, and is treated as manual so the sticky-cert cache
+        # can't restore a stale ✓ over it. Real activity ("L" / "✓" / cert date)
+        # always wins. Per user 2026-08-13 (AetnaRCE / NCStateAetna delayed).
+        if not from_manual and marker in ("", "No Data"):
+            soft = SOFT_OVERRIDES.get((client, day))
+            if soft is not None:
+                marker = soft
+                from_manual = True
         alert  = alert_state(client, day, marker)
         # An explicit manual blank ("") means the team has intentionally emptied
         # this cell — never pink-shade it (otherwise a live has_recent_failure on
