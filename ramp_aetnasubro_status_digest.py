@@ -388,6 +388,161 @@ def eta_detail(server, name):
     return line
 
 
+# ---- RAMP-job ETA (per user 2026-08-13: "add an ETA with the AetnaSubro Updates")
+# eta_detail above only ever puts an ETA on the SQL masterload's own line. But
+# 'DTS AetnaSubro MasterLoad' is just the FIRST of this RAMP job's eight tasks:
+# once it finishes, 'Aetna 0110 Subro Load' stays Running for another ~6 h while
+# task 600 monitors 'SSIS AetnaRCE Sync AetnaSubro' -- and that whole phase used to
+# show no ETA at all, which is exactly the state the digest was in when the user
+# asked for one (08/13: masterload done 01:32 AM, RAMP job still running).
+#
+# So the RAMP line projects from whatever task is ACTIVE right now, read out of the
+# run's own JobXml:
+#     ETA = ETA(the SQL Agent job that task is waiting on) + measured tail
+# where the tail is the median historical gap from THAT job finishing to the RAMP
+# queue's own EndDate. Measuring the tail per-monitored-job is what keeps this
+# correct at every phase: measured from the masterload the tail legitimately
+# includes the ~6 h sync that follows it, measured from the sync it's just the
+# ~11 min of trailing QueueJob/ETLTapeManager work.
+#
+# Nothing is hardcoded to a task list or a job name, so this self-heals if the RAMP
+# task chain is re-configured (it was last edited 08/13).
+
+MONITORED_PCT = 80   # Survival percentile for the monitored job, matching the other
+                     # Aetna digests' STEP_PCT. A median runs systematically early
+                     # because overruns are one-sided: a job can take arbitrarily
+                     # longer than usual but not much less.
+
+
+def _sql_server(alias):
+    """RAMP writes SQL hosts without the TRG prefix ('etl2', 'ETL2'); sqlcmd needs
+    the real hostname. Anything already prefixed (TRGVSSISPROD1) passes through."""
+    a = (alias or '').strip().upper()
+    if not a:
+        return None
+    return a if a.startswith('TRG') else 'TRG' + a
+
+
+def _active_ramp_task(jobid):
+    """(index, total, taskname, server, sql_job_name) for the task the RAMP run is
+    on right now, parsed from LatestJobRun.JobXml.
+
+    RAMP marks finished tasks 'complete' and skipped ones 'inactive', so the FIRST
+    'active' task in sequence order is the live one -- verified 2026-08-13, where
+    task 500 (SqlAgentKickOff) was 'complete' having launched the sync at 06:18:49
+    and task 600 (SqlAgentMonitor on the same job) was 'active'.
+
+    server/sql_job_name come back None for tasks not waiting on a SQL Agent job
+    (RampQueueCheck, QueueJob). Returns None if there's no active task or the XML
+    can't be parsed."""
+    xml = job_run(jobid).get('JobXml') or ''
+    tasks = re.findall(
+        r'<task taskname="([^"]+)" status="([^"]+)" sequence="(\d+)"(.*?)</task>',
+        xml, re.S)
+    if not tasks:
+        return None
+    tasks.sort(key=lambda t: int(t[2]))
+    for i, (nm, st, _seq, body) in enumerate(tasks, start=1):
+        if st != 'active':
+            continue
+        m = re.search(r'<jobname server="([^"]*)"[^>]*>([^<]+)</jobname>', body)
+        return (i, len(tasks), nm,
+                _sql_server(m.group(1)) if m else None,
+                m.group(2).strip() if m else None)
+    return None
+
+
+def _job_completions(server, name, n=15):
+    """End datetimes of the last n SUCCESSFUL runs of a SQL Agent job (start +
+    duration off the step_id=0 outcome rows), newest first."""
+    q = ("SET NOCOUNT ON; "
+         f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+         f"SELECT TOP {int(n)} run_date, run_time, run_duration FROM msdb.dbo.sysjobhistory WITH (NOLOCK) "
+         "WHERE job_id=@jid AND step_id=0 AND run_status=1 ORDER BY run_date DESC, run_time DESC;")
+    try:
+        out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
+                             capture_output=True, text=True, timeout=120)
+    except Exception:
+        return []
+    ends = []
+    for line in out.stdout.splitlines():
+        parts = [p.strip() for p in line.split('|')]
+        if len(parts) >= 3 and parts[0].isdigit():
+            try:
+                d, t, dur = int(parts[0]), int(parts[1]), int(parts[2])
+                start = datetime(d // 10000, (d // 100) % 100, d % 100,
+                                 t // 10000, (t // 100) % 100, t % 100)
+                dur_s = (dur // 10000) * 3600 + ((dur // 100) % 100) * 60 + (dur % 100)
+                ends.append(start + timedelta(seconds=dur_s))
+            except Exception:
+                continue
+    return ends
+
+
+def _monitored_tail_secs(server, name, jobid, n=15):
+    """Median seconds from `name` finishing to the RAMP job's queue EndDate, over
+    recent successful RAMP runs. None when it can't be measured.
+
+    Each queue EndDate is paired with the LATEST completion of `name` at/before it;
+    pairings more than 3 days apart are dropped as belonging to different cycles
+    (this feed is monthly, so a mispairing would otherwise inject a ~30-day gap)."""
+    ends = _job_completions(server, name, n)
+    if not ends:
+        return None
+    qrows = _ramp_sql(
+        f"SELECT TOP {int(n)} CONVERT(varchar(19), EndDate, 120) FROM [ramp].[Queue] "
+        f"WHERE JobId = {int(jobid)} AND Status = 'Successful' AND EndDate IS NOT NULL "
+        "ORDER BY QueueId DESC")
+    gaps = []
+    for r in qrows:
+        qe = _to_dt(r[0]) if r else None
+        if not qe:
+            continue
+        prior = [e for e in ends if e <= qe]
+        if not prior:
+            continue
+        gap = (qe - max(prior)).total_seconds()
+        if 0 <= gap <= 3 * 86400:
+            gaps.append(gap)
+    if not gaps:
+        return None
+    return _pct(sorted(gaps), 50)
+
+
+def ramp_eta_lines(jobid):
+    """ETA line(s) for the RAMP load while it is Running -- see the block comment
+    above. Names the live task so the ETA is interpretable, and degrades honestly:
+    a task not waiting on a SQL Agent job, or one already past every historical
+    outcome, gets no clock time rather than a made-up one."""
+    act = _active_ramp_task(jobid)
+    if not act:
+        return []
+    idx, total, taskname, server, sql_name = act
+    label = f"task {idx}/{total}"
+    if not (server and sql_name):
+        return [f"{EXEC_ICON} {label} - {taskname}, in progress"]
+    label += f" - {sql_name}"
+    durs = sorted(_recent_full_durations(server, sql_name, n=12))
+    start = _current_run_start(server, sql_name)
+    if not durs or not start:
+        return [f"{EXEC_ICON} {label}, in progress"]
+    elapsed = (datetime.now() - start).total_seconds()
+    possible = [d for d in durs if d >= elapsed]
+    if not possible:
+        return ([f"{EXEC_ICON} {label} - running {_dur_h(elapsed)}, "
+                 f"longer than usual, still processing"] + _why_longer(durs, True))
+    eta = start + timedelta(seconds=_pct(possible, MONITORED_PCT))
+    tail = _monitored_tail_secs(server, sql_name, jobid)
+    if tail:
+        eta += timedelta(seconds=tail)
+    if eta <= datetime.now():
+        return [f"{EXEC_ICON} {label} - wrapping up"]
+    line = [f"{EXEC_ICON} {label} | ETA ~{_eta_stamp(eta)}"]
+    if elapsed > _pct(durs, 75):
+        return line + _why_longer(durs, False)
+    return line
+
+
 def last_completion(server, name):
     """Datetime the job's most recent run FINISHED = start + duration from the
     step_id=0 (job outcome) row in sysjobhistory. None if unavailable."""
@@ -637,6 +792,12 @@ def main():
     lines.append(f"Aetna 0110 Subro Load {head}".rstrip())
     if detail:                      # a detail-less status (see snap_line) must not
         lines.append(detail)        # leave a stray blank line in the message
+    # ETA only while the run is genuinely in flight. Gate on the queue having no
+    # EndDate rather than on _active_ramp_task alone: a run that failed or was
+    # manually resolved partway leaves trailing tasks marked 'active' in its XML,
+    # which would otherwise produce an ETA for a job that already stopped.
+    if not job_run(SUBRO_JOBID).get('EndDate'):
+        lines.extend(ramp_eta_lines(SUBRO_JOBID))
     lines.append("")
 
     head, detail = snap_line(SUBRO_JOBID, SNAP_JOBID)
