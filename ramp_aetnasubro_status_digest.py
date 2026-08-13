@@ -475,13 +475,18 @@ def snap_line(load_jobid, snap_jobid):
     """Status body for the Snap RAMP job. Do NOT show the snap as Successful until
     it has finished for the CURRENT load; a resolved snap predating the current
     load's completion (or a load still running) is stale -> shown as waiting, not a
-    green check. A Failed snap still surfaces as a red X regardless."""
+    green check. A Failed snap still surfaces as a red X regardless.
+
+    Per user 2026-08-13, the stale case carries NO detail line: the PRIOR cycle's
+    successful snap ('last snap Successful 07/14 ..., ran before this load
+    completed') isn't wanted here -- for a monthly feed it's a month-old timestamp
+    that says nothing about the load in flight. Only the current cycle's snap gets
+    a timestamp."""
     lr = job_run(snap_jobid)
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
     if end and status in RAMP_OK and not snap_is_current(load_jobid, snap_jobid):
-        return (":hourglass_flowing_sand: Waiting to snap current load",
-                f"last snap {status} {fmt(end)}, ran before this load completed")
+        return (":hourglass_flowing_sand: Waiting to snap current load", "")
     if end and status in RAMP_OK:
         return (f":white_check_mark: {status}", f"started {fmt(start)} | completed {fmt(end)}")
     if end and status == 'Failed':
@@ -630,12 +635,14 @@ def main():
 
     head, detail = ramp_line(SUBRO_JOBID)
     lines.append(f"Aetna 0110 Subro Load {head}".rstrip())
-    lines.append(detail)
+    if detail:                      # a detail-less status (see snap_line) must not
+        lines.append(detail)        # leave a stray blank line in the message
     lines.append("")
 
     head, detail = snap_line(SUBRO_JOBID, SNAP_JOBID)
     lines.append(f"Aetna 0120 Subro Start Snap {head}".rstrip())
-    lines.append(detail)
+    if detail:
+        lines.append(detail)
     lines.append("")
 
     _stage_qid, stage_end, files = last_stage_batch()
