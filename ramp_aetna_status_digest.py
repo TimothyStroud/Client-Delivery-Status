@@ -253,9 +253,10 @@ def _sp_help_job(server, name):
 # ANCHORING FIX 2026-07-23 (per user "can AetnaRCE/NCState follow the same method"):
 # HRP/Rx are single SSIS packages, so they anchor to run start + median full-run
 # duration and tighten via a live SSISDB milestone. RCE/NCState DON'T fit that: the
-# 'SSIS AetnaRCE Daily Process' job is genuinely multi-step (12 steps -- the SSIS
-# package is only step 2 of 12; the bulk is stored-proc steps 3-11 like Build
-# Chimera / Loop Claims / DHTStats), and NCState is a dominant SSIS step 1 + a small
+# 'SSIS AetnaRCE Daily Process' job is genuinely multi-step (12 steps DEFINED but
+# only 2-7 reachable since 07/24/2026, see _flow_end_step -- the SSIS package is
+# just step 2; the bulk is stored-proc steps 3-7 like Build Chimera / Run Minimum
+# Trust / DHTStats), and NCState is a dominant SSIS step 1 + a small
 # stored-proc tail. So the "same method" here is applied to the SQL Agent STEP
 # progression instead of SSISDB: anchor to the CURRENT step's start + the historical
 # average of the current and remaining steps. This (a) fixes the OLD `remaining_secs`
@@ -349,7 +350,15 @@ def _step_remaining_secs(server, name, step_id, days=120):
     can legitimately run twice in a day), so each step row is attached to the next
     step_id=0 'job outcome' row after it. That bucketing is done against ALL
     outcome rows and only then filtered to successful ones -- bucketing against
-    successes alone would graft a failed run's steps onto the next good run."""
+    successes alone would graft a failed run's steps onto the next good run.
+
+    LAYOUT FILTER 2026-08-14: runs that executed PAST the current flow end are
+    dropped (MAX(step_id)<=@end). AetnaRCE stopped running steps 8-11 on 07/24, so
+    within the 120-day window the old 12-step runs carry a step-7-to-job-end tail
+    that no longer exists -- for step 7 they measured 59m-7h05m against 39m-2h05m
+    for the runs that now quit there, which pushed the in-step ETA hours late."""
+    end = _flow_end_step(server, name)
+    tail = f" AND MAX(t.step_id)<={int(end)}" if end else ""
     q = ("SET NOCOUNT ON; "
          f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
          f"DECLARE @sid int={int(step_id)}; "
@@ -363,7 +372,8 @@ def _step_remaining_secs(server, name, step_id, days=120):
          "  FROM h WHERE h.step_id>=@sid) "
          "SELECT SUM(t.secs) FROM t JOIN o ON o.instance_id=t.rk AND o.run_status=1 "
          "GROUP BY t.rk "
-         "HAVING MIN(t.run_status)=1 AND MAX(CASE WHEN t.step_id=@sid THEN 1 ELSE 0 END)=1 "
+         "HAVING MIN(t.run_status)=1 AND MAX(CASE WHEN t.step_id=@sid THEN 1 ELSE 0 END)=1"
+         f"{tail} "
          "ORDER BY 1;")
     try:
         out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-Q', q],
@@ -374,35 +384,89 @@ def _step_remaining_secs(server, name, step_id, days=120):
 
 
 _STEPS_CACHE = {}
+_START_CACHE = {}
+
+
+def _int(s):
+    try:
+        return int(s)
+    except Exception:
+        return None
 
 
 def _steps(server, name):
-    """{step_id: (step_name, subsystem)} for the job, cached per process."""
+    """{step_id: (step_name, subsystem, on_success_action, on_success_step_id)} for
+    the job, cached per process. Also caches sysjobs.start_step_id (for
+    _flow_end_step) in _START_CACHE under the same key.
+
+    step_name is selected LAST and re-joined so a '|' inside a step name can only
+    affect itself, never shift the numeric columns."""
     key = (server, name)
     if key in _STEPS_CACHE:
         return _STEPS_CACHE[key]
     q = ("SET NOCOUNT ON; "
          f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
-         "SELECT step_id, subsystem, step_name FROM msdb.dbo.sysjobsteps "
-         "WHERE job_id=@jid ORDER BY step_id;")
-    steps = {}
+         "SELECT s.step_id, s.subsystem, s.on_success_action, s.on_success_step_id, "
+         "  j.start_step_id, s.step_name "
+         "FROM msdb.dbo.sysjobsteps s JOIN msdb.dbo.sysjobs j ON j.job_id=s.job_id "
+         "WHERE s.job_id=@jid ORDER BY s.step_id;")
+    steps, start = {}, None
     try:
         out = subprocess.run(['sqlcmd', '-S', server, '-E', '-W', '-h', '-1', '-s', '|', '-Q', q],
                              capture_output=True, text=True, timeout=120)
         for line in out.stdout.splitlines():
             parts = [p.strip() for p in line.split('|')]
-            if len(parts) >= 3 and parts[0].isdigit():
-                steps[int(parts[0])] = (parts[2], parts[1])
+            if len(parts) >= 6 and parts[0].isdigit():
+                steps[int(parts[0])] = ('|'.join(parts[5:]).strip(), parts[1],
+                                        _int(parts[2]), _int(parts[3]))
+                if start is None:
+                    start = _int(parts[4])
     except Exception:
         pass
     _STEPS_CACHE[key] = steps
+    _START_CACHE[key] = start
     return steps
 
 
 def _step_names(server, name):
     """{step_id: step_name} for the job (used to label the live step in the digest,
-    e.g. 'Executing Step 4/12 - Build Chimera')."""
+    e.g. 'Executing Step 4/7 - Build Chimera')."""
     return {k: v[0] for k, v in _steps(server, name).items()}
+
+
+# msdb.dbo.sysjobsteps.on_success_action codes.
+_GOTO_NEXT, _GOTO_STEP = 3, 4
+
+
+def _flow_end_step(server, name):
+    """Highest step id the job can actually REACH on its success path -- i.e. the
+    denominator for 'Executing Step N/M'. None if the steps can't be read.
+
+    Why this is NOT max(step_id) (per user 2026-08-14, "the AetnaRCE Job Activity
+    [is] 7 steps instead of 12"): the job still DEFINES 12 steps, but step 7
+    'Execute DHTStats' is set to quit-with-success, so steps 8-11 (the
+    Loop Claims.* moves, which now run as their own 'Temp AetnaRCE ... Table Loop'
+    jobs) and the trailing no-op 'Success Step' never execute -- sysjobhistory
+    confirms nothing has run past step 7 since 07/24/2026. Walking the on_success
+    chain from sysjobs.start_step_id yields 7 and self-heals if the flow is
+    rewired again. No effect on NCStateAetna, whose 5 steps all run."""
+    steps = _steps(server, name)
+    if not steps:
+        return None
+    sid = _START_CACHE.get((server, name)) or min(steps)
+    seen, last = set(), sid
+    while sid in steps and sid not in seen:
+        seen.add(sid)
+        last = max(last, sid)
+        act = steps[sid][2]
+        if act == _GOTO_NEXT:
+            nxt = [k for k in sorted(steps) if k > sid]
+            sid = nxt[0] if nxt else None
+        elif act == _GOTO_STEP:
+            sid = steps[sid][3]
+        else:                       # quit with success / failure -> the flow ends here
+            break
+    return last
 
 
 def _ssis_step_id(server, name):
@@ -495,14 +559,19 @@ def _step_eta(server, name, sid, sstart):
     Survival-filtered within the step: drop the historical outcomes already ruled
     out by how long this step has been running, then take the STEP_PCT percentile
     of what's left. Monotonic inside a step, and free to drop sharply at a step
-    boundary -- which is the point, since this job's T-SQL tail is 59% of its
-    wall-clock across 10 steps."""
+    boundary -- which is the point, since this job's T-SQL tail is the majority of
+    its wall-clock (59% measured under the pre-07/24 12-step layout)."""
     # Check for the LAST step before consulting history. The trailing 'Success
     # Step' is a 0-second no-op, so it either writes no history row at all (HRP
     # step 9 has 3 rows, Rx none) or writes rows of all zeros (RCE step 12 has 12).
     # The all-zeros case is the trap: every historical outcome is 0s, so any time
     # at all in the step empties the survival filter and the old ordering reported
     # 'running long, still processing' for a step with nothing left to do.
+    #
+    # This guard stays on max(steps), NOT _flow_end_step: the flow end is now step
+    # 7 'Execute DHTStats', which is real work (39m-2h05m) and must keep its ETA.
+    # Only a defined-but-unreachable no-op tail (step 12) should short-circuit, and
+    # that is only ever hit by a manual start at that step.
     steps = _steps(server, name)
     if steps and sid >= max(steps):
         return [f"{EXEC_ICON} final steps - wrapping up"]
@@ -607,8 +676,8 @@ def sql_job(server, name):
     if status == '1':                        # Executing -> "Executing Step N/M - name" + ETA line
         # Step-anchored progressive ETA (see eta_detail). Step count + name added
         # 2026-08-04 (the old comment claimed sp_help_job supplied the name, but
-        # nothing actually appended it): 'Step 4' alone doesn't convey that this
-        # job has 12 steps and the heavy SSIS package is step 2.
+        # nothing actually appended it): 'Step 4' alone doesn't convey how many
+        # steps the job runs or that the heavy SSIS package is step 2.
         names = _step_names(server, name)
         # sp_help_job returns current_execution_step ALREADY decorated with the
         # step name, e.g. '1 (Run AetnaHRP MasterLoad)'. The 2026-08-04 label
@@ -620,7 +689,9 @@ def sql_job(server, name):
         sid = int(m.group(1)) if m else None
         head = f"Executing Step {sid if sid is not None else step}"
         if names and sid is not None:
-            head += f"/{max(names)}"
+            # Denominator = the last step the flow can REACH, not max(step_id):
+            # AetnaRCE defines 12 steps but quits at 7 (see _flow_end_step).
+            head += f"/{_flow_end_step(server, name) or max(names)}"
             label = names.get(sid)
             if label:
                 head += f" - {label}"
