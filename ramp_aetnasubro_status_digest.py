@@ -86,6 +86,43 @@ def _claim_slot(msg=None):
     os.replace(tmp, STATE_FILE)
 
 
+# ---- Quiet between cycles (per user 2026-08-14) -------------------------------
+# "The next Aetna Subro Load will be next month, so do not continue to add as
+# 'Idle'. Only populate again when the MasterLoad starts."
+#
+# Content dedupe alone did NOT achieve that. After a cycle closes the text still
+# changes on its own: the SQL line flips ':white_check_mark: Successful <today>' to
+# ':hourglass_flowing_sand: Idle - last run ...' the moment the date rolls over, and
+# that counted as news -- which is exactly what posted an Idle digest at 04:37 on
+# 08/14. So a FINISHED cycle is now reported at most once and then the digest goes
+# silent until a new cycle opens (a new QueueId appears in flight, or the MasterLoad
+# starts executing).
+#
+# The seal is deliberately NOT set the instant the load closes: if the snap hasn't
+# finished yet the completion digest would read 'loaded (snap pending)' and could
+# never be corrected. So the cycle stays open for one more post until the snap is
+# terminal -- or until the grace window expires, because a snap that hasn't run
+# within it isn't coming and leaving the cycle unsealed would let the midnight Idle
+# flip through, i.e. the very thing this gate exists to stop.
+CLOSED_SNAP_GRACE_HOURS = 12
+
+
+def _seal_cycle(qid):
+    """Record that a finished cycle's outcome has been reported -> stay silent."""
+    st = _load_state()
+    st['closed_posted_qid'] = qid
+    tmp = STATE_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(st, f)
+    os.replace(tmp, STATE_FILE)
+
+
+def _sql_executing(server, name):
+    """True if a SQL Agent job is running right now (sp_help_job status 1)."""
+    row = _sp_help_job(server, name)
+    return bool(row) and row[-7] == '1'
+
+
 # (server, SQL Agent job name, display label).
 SQL_JOBS = [
     ("TRGETL2", "DTS AetnaSubro MasterLoad", "DTS AetnaSubro MasterLoad"),
@@ -617,12 +654,25 @@ def sql_job(server, name):
 
 
 def snap_is_current(load_jobid, snap_jobid):
-    """True if the snap's latest run belongs to the CURRENT load -- i.e. the snap
-    STARTED at/after the load's latest completion. A load that hasn't completed yet
-    has no current snap (returns False), so a snap from a prior cycle is never
-    credited to this one."""
-    load_end = _to_dt(job_run(load_jobid).get('EndDate'))
-    snap_start = _to_dt(job_run(snap_jobid).get('StartDate'))
+    """True if the snap's latest run belongs to the CURRENT load, matched on RAMP's
+    OWN parent link: the snap queue row's ParentId is the load's QueueId.
+
+    The original test was `snap_start >= load_end`, cloned from the HRP digest, and
+    it is WRONG for Subro (reported by user 2026-08-14: a snap that finished 5:12 PM
+    still showed as 'pending'). This RAMP job queues the snap at task 700 while task
+    800 (ETLTapeManager) is still running, so the snap legitimately STARTS BEFORE the
+    load's own EndDate -- on 08/13 the snap started 17:03:56 against a load EndDate
+    of 17:07:11, three minutes earlier. ParentId has no such race (snap QID 1422880
+    -> ParentId 1422467 = that load).
+
+    Falls back to the timestamp test only when ParentId is absent/0."""
+    load = job_run(load_jobid)
+    snap = job_run(snap_jobid)
+    lqid, parent = load.get('QueueId'), snap.get('ParentId')
+    if parent and lqid:
+        return parent == lqid
+    load_end = _to_dt(load.get('EndDate'))
+    snap_start = _to_dt(snap.get('StartDate'))
     return bool(load_end and snap_start and snap_start >= load_end)
 
 
@@ -780,6 +830,19 @@ def main():
         print("NO_POST: evening extension, no load active/completed today")
         return
 
+    # Quiet between cycles -- see CLOSED_SNAP_GRACE_HOURS. A cycle is OPEN while the
+    # RAMP load has no EndDate, or while the MasterLoad is executing (which covers a
+    # load kicked off outside RAMP, per the user's "only populate again when the
+    # MasterLoad starts").
+    load = job_run(SUBRO_JOBID)
+    load_qid = load.get('QueueId')
+    load_end = _to_dt(load.get('EndDate'))
+    cycle_open = (not load_end) or any(_sql_executing(s, n) for s, n, _l in SQL_JOBS)
+    if not force and not cycle_open and _load_state().get('closed_posted_qid') == load_qid:
+        print(f"NO_POST: cycle {load_qid} finished and already reported - silent "
+              "until the next MasterLoad starts")
+        return
+
     # PLAIN-TEXT format: the webhook renders only :emoji: (no *bold*/`code`/color).
     lines = ["AETNA SUBRO - STATUS UPDATE", ""]
     for server, name, label in SQL_JOBS:
@@ -820,6 +883,15 @@ def main():
         print("NO_POST: status unchanged since last post")
         return
     _claim_slot(msg)
+    # Seal a finished cycle once its outcome is fully told: the snap is terminal for
+    # THIS load, or the load failed (nothing further to report), or the snap's grace
+    # window has passed. After that this digest says nothing until a new cycle opens.
+    if not cycle_open and load_qid:
+        snap = job_run(SNAP_JOBID)
+        snap_done = bool(snap.get('EndDate')) and snap_is_current(SUBRO_JOBID, SNAP_JOBID)
+        aged = bool(load_end) and (datetime.now() - load_end) > timedelta(hours=CLOSED_SNAP_GRACE_HOURS)
+        if snap_done or aged or load.get('Status') == 'Failed':
+            _seal_cycle(load_qid)
     print("SLACK|" + msg.replace("\n", "\\n"))
 
 
