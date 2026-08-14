@@ -417,7 +417,13 @@ WEEKLY_CLIENTS = {
 # to AUTO_INACTIVE_EXCLUDE so the RAMP auto-sweep can't re-flag them) — they now
 # render real cert/snap history. MedicalMutualMHS ADDED (monthly stage-file client
 # not yet delivering) → shows "Inactive".
-FORCED_INACTIVE = {"HealthNetCA", "MedicalMutualMHS"}
+# 2026-08-14 per user: HealthNetCA REACTIVATED — "loaded backfill of 3/20 to 3/27
+# data, which will be certified today. Please remove 'Inactive' from HealthNetCA
+# and put (3/20-3/27) next to name." Removed from FORCED_INACTIVE (its Monday
+# cells now render real load/cert state) + added to AUTO_INACTIVE_EXCLUDE so the
+# RAMP auto-sweep can't re-flag it while the 0100/0110 jobs are still disabled.
+# The backfill window is shown via CLIENT_DISPLAY_NAME → "HealthNetCA (3/20-3/27)".
+FORCED_INACTIVE = {"MedicalMutualMHS"}
 
 # Date-gated inactivation: {client: cutoff_date}. Cells on/after the cutoff show
 # "Inactive"; cells BEFORE the cutoff render their normal history (cert dates /
@@ -808,12 +814,10 @@ MANUAL_OVERRIDES = {
     # separate load that started today 8/10 00:52 (QueueId 1420054, still Ready)
     # is the NEXT cycle and paints "L" on Thu 8/13 — unaffected.
     ("UPMC",          date(2026, 8, 6)):  date(2026, 8, 10),
-    # 2026-07-29: HealthNetCA (weekly Mon, FORCED_INACTIVE) is loading again, but
-    # per user all Monday cells must stay Inactive until the data is reviewed for
-    # activate/Snap/Certify. The prior cell-by-cell "L"-suppression pins (e.g.
-    # 7/20) are no longer needed — resolve_marker now returns "Inactive" for any
-    # forced-inactive client on any non-certified cell, so resumed load activity
-    # can't paint "L" on the current-week Monday.
+    # 2026-07-29: HealthNetCA (weekly Mon) was FORCED_INACTIVE while its resumed
+    # loads were under review, so no cell-by-cell "L"-suppression pins were needed.
+    # 2026-08-14: HealthNetCA left FORCED_INACTIVE (3/20-3/27 backfill certified
+    # today) — its Monday cells now resolve normally from cert/load activity.
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
@@ -1277,6 +1281,9 @@ ADHOC_MONTHLY_SNAP_CLIENTS = {
 # Override display name for a client (the label only; client_key stays the same).
 CLIENT_DISPLAY_NAME = {
     "BCBSFLEligibilityLoad": "BCBSFL Elig",
+    # 2026-08-14 per user: the current HealthNetCA delivery is the 3/20–3/27
+    # backfill (certified today) — show the covered window next to the name.
+    "HealthNetCA":           "HealthNetCA (3/20-3/27)",
     "MMOH":                  "MMOH (WC)",
     "MMOHRxMonthly":         "MMOHRx",
     "WellpointRxElig":       "WellpointRx Elig",
@@ -3362,8 +3369,11 @@ def auto_inactive_from_ramp(jobs):
 # HealthNetCA & MedicalMutualMHS still Inactive") — keep them out of the sweep so
 # a still-disabled RAMP job can't re-flag them Inactive; their real cert/snap
 # history renders instead.
+# HealthNetCA added 2026-08-14: reactivated per user (3/20-3/27 backfill loaded,
+# certified today). Its 0100 Stage / 0110 Load jobs may still be disabled in RAMP,
+# so keep it out of the sweep and let the cert/load activity win.
 AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan", "TuftsRx",
-                        "ESIPBMRx", "Tufts_Audit_CIT"}
+                        "ESIPBMRx", "Tufts_Audit_CIT", "HealthNetCA"}
 
 
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
