@@ -5,7 +5,7 @@ Modeled on the "Paid Dates - Medical" static-HTML dashboards and on the
 MMSEA-2026 tab of
   \\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule\2026\ClientTracker.2026.xlsx
 
-Three tabs:
+Four tabs:
   1. Calendar  - Client / File Type / Frequency / Handling + Jan..Dec grid, one
                  cell per month holding the ADO ticket number(s) of the loads
                  that landed that month ("E" = expected, carried over from the
@@ -14,7 +14,9 @@ Three tabs:
                  SourceLogId desc, expandable to the per-file ImportStaging
                  breakdown (EntryName / DNDispositionCode / StagingStatus /
                  record counts).
-  3. Reference - the File Type / Display Length table that sits to the right of
+  3. MMSEA_Report - the layout of MMSEA_Report_20250605.xlsx: one row per
+                 SourceLog x StagingStatus, in the spreadsheet's column order.
+  4. Reference - the File Type / Display Length table that sits to the right of
                  the calendar on the Excel tab, plus the SourceId->SourceName
                  key, the Client/ClientId key and the legend.
 
@@ -159,6 +161,63 @@ TOOLS = [
 REG_FILE = "Register-CMSE-Tools.reg"
 SIDECARS = [REG_FILE, "LaunchFileTransformer.vbs"]
 
+# "R or T" from the MMSEA_Report spreadsheet, keyed on (ClientId, SourceId).
+#
+# The value is constant per feed - all 782 loads in MMSEA_Report_20250605.xlsx
+# agree, with no (client, file type) pair carrying both letters - but nothing in
+# cmse_new drives it, so the lookup is transcribed from that spreadsheet.  Feeds
+# that started after it was taken (HARVARDP, Kaiser_WA, BSCA_FACETS, Excellus)
+# aren't in it and render blank until someone supplies their letter.
+RT_BY_FEED = {
+    (2,   4): "R",   # Emblem / Hew Response File
+    (2,   5): "R",   # Emblem / MSP Response File
+    (3,   4): "R",   # United / Hew Response File
+    (3,   5): "T",   # United / MSP Response File
+    (5,  19): "T",   # Aetna / Aetna Traditional AIS NonMSP File
+    (5,  20): "T",   # Aetna / Aetna Traditional AIS MSP
+    (6,   4): "R",   # CareFirst / Hew Response File
+    (6,   5): "T",   # CareFirst / MSP Response File
+    (6,   6): "T",   # CareFirst / Non MSP Response File
+    (12,  4): "R",   # HealthNet / Hew Response File
+    (12,  5): "R",   # HealthNet / MSP Response File
+    (16,  4): "R",   # TUFTS / Hew Response File
+    (16,  5): "T",   # TUFTS / MSP Response File
+    (17,  4): "T",   # Medical Mutual of Ohio / Hew Response File
+    (17,  5): "R",   # Medical Mutual of Ohio / MSP Response File
+    (31,  4): "R",   # BCBS NC / Hew Response File
+    (31,  5): "R",   # BCBS NC / MSP Response File
+    (36,  5): "R",   # BCBS SC / MSP Response File
+    (37,  5): "R",   # Premera Blue Cross / MSP Response File
+    (37,  6): "T",   # Premera Blue Cross / Non MSP Response File
+    (41,  4): "T",   # BCBSKS / Hew Response File
+    (41,  5): "T",   # BCBSKS / MSP Response File
+    (42,  4): "R",   # Cigna / Hew Response File
+    (42,  5): "R",   # Cigna / MSP Response File
+    (42,  6): "T",   # Cigna / Non MSP Response File
+    (43,  4): "R",   # Kaiser / Hew Response File
+    (43,  5): "R",   # Kaiser / MSP Response File
+    (44,  5): "T",   # Cambia / MSP Response File
+    (44,  6): "T",   # Cambia / Non MSP Response File
+    (45,  4): "T",   # Oscar / Hew Response File
+    (45,  5): "T",   # Oscar / MSP Response File
+    (46,  5): "R",   # BCBSFL / MSP Response File
+    (46,  6): "R",   # BCBSFL / Non MSP Response File
+    (48,  5): "R",   # GEHA / MSP Response File
+    (48,  6): "R",   # GEHA / Non MSP Response File
+    (61,  5): "T",   # JohnsHopkins / MSP Response File
+    (62,  4): "T",   # Medica / Hew Response File
+    (62,  5): "T",   # Medica / MSP Response File
+    (63,  5): "T",   # BCBSVT / MSP Response File
+    (102, 5): "T",   # HealthNewEngland / MSP Response File
+}
+
+# Columns of the MMSEA_Report spreadsheet that nothing in cmse_new reproduces.
+# Verified 2026-08-14 against MMSEA_Report_20250605.xlsx: two loads with
+# near-identical ImportStaging profiles (HNE MSP 32225 and GEHA MSP 31824) carry
+# 0%/0% and 100%/100%, so no record-level predicate can produce them - they come
+# from outside this database.  Rendered blank rather than guessed.
+UNSOURCED_COLUMNS = ["E %", "MC %", "# of Invs"]
+
 # Loads whose ticket the PCN search can't find (the PCN isn't written in any
 # work item description).  Keyed on the ProductionControlId; a key that is the
 # bare base number also covers its suffixed variants ("9537705" -> "9537705_01").
@@ -228,7 +287,9 @@ def fetch_loads():
                ISNULL(L.ImportFailedcount,0),
                ISNULL(CONVERT(varchar(3), L.MIRProcessed), ''),
                ISNULL(CONVERT(varchar(19), L.MIRProcessedDate, 120), ''),
-               ISNULL(L.ProductionControlId,'')
+               ISNULL(L.ProductionControlId,''),
+               ISNULL(L.EntitlementAgeCount,0), ISNULL(L.EntitlementDisabilityCount,0),
+               ISNULL(L.EntitlementEsrdCount,0)
           FROM dbo.SourceLog L (NOLOCK)
           LEFT JOIN dbo.Client C (NOLOCK) ON C.ClientId = L.ClientId
          WHERE L.SourceId IN (%s) AND L.ImportStartDate >= '%s'
@@ -244,6 +305,7 @@ def fetch_loads():
             "rec": int(r[7]), "ok": int(r[8]), "bad": int(r[9]),
             "mir": r[10], "mird": r[11],
             "pcn": r[12],
+            "age": int(r[13]), "dis": int(r[14]), "esrd": int(r[15]),
         })
     return loads
 
@@ -265,6 +327,37 @@ def fetch_staging(source_log_ids):
         for r in rows:
             if r[0].isdigit():
                 out[int(r[0])].append([r[1], r[2], int(r[3])])
+    return out
+
+
+def fetch_unique_members(source_log_ids):
+    """The spreadsheet's "U M Count" -> {sl: n}.
+
+    Verified against MMSEA_Report_20250605.xlsx: it is the number of distinct
+    SSN + last name + first initial + DOB combinations in ImportStaging.  Not
+    distinct SSN (26733 has 139, the sheet says 141) and not SSN + DOB alone
+    (140).  Dropping DOB from the key agrees on small files but silently
+    over-collapses big ones - it was wrong on 50 of the 86 loads the dashboard
+    and the spreadsheet share.  Middle initial and HIC number are NOT part of
+    the key.
+    """
+    out = {}
+    ids = sorted(source_log_ids)
+    for i in range(0, len(ids), 200):
+        chunk = ids[i:i + 200]
+        rows = sql("""
+            SELECT I.SourceLogId,
+                   COUNT(DISTINCT ISNULL(I.PatientSSN,'') + '|'
+                                + ISNULL(I.PatientLastName,'') + '|'
+                                + ISNULL(I.PatientFirstInitial,'') + '|'
+                                + ISNULL(CONVERT(varchar(10), I.PatientDOB, 112),''))
+              FROM dbo.ImportStaging I (NOLOCK)
+             WHERE I.SourceLogId IN (%s)
+          GROUP BY I.SourceLogId
+        """ % ",".join(map(str, chunk)), timeout=1800)
+        for r in rows:
+            if r[0].isdigit():
+                out[int(r[0])] = int(r[1])
     return out
 
 
@@ -420,13 +513,13 @@ def read_tracker():
 
 def load_cache(full):
     if full or not os.path.exists(CACHE):
-        return {"staging": {}, "pcn": {}, "pcn_checked": {}, "wi": {}}
+        return {"staging": {}, "um": {}, "pcn": {}, "pcn_checked": {}, "wi": {}}
     try:
         with open(CACHE, "r", encoding="utf-8") as f:
             c = json.load(f)
     except Exception:
-        return {"staging": {}, "pcn": {}, "pcn_checked": {}, "wi": {}}
-    for k in ("staging", "pcn", "pcn_checked", "wi"):
+        return {"staging": {}, "um": {}, "pcn": {}, "pcn_checked": {}, "wi": {}}
+    for k in ("staging", "um", "pcn", "pcn_checked", "wi"):
         c.setdefault(k, {})
     return c
 
@@ -457,12 +550,30 @@ def build(full=False):
     recent_cut = (now - timedelta(days=30)).strftime("%Y-%m-%d")
     want = {l["sl"] for l in loads
             if str(l["sl"]) not in cache["staging"] or l["start"][:10] >= recent_cut}
+    before = {str(sl): cache["staging"].get(str(sl)) for sl in want}
     if want:
         print("[info] ImportStaging rollup for %d SourceLogIds..." % len(want))
         t0 = time.time()
         got = fetch_staging(want)
         for sl in want:
             cache["staging"][str(sl)] = got.get(sl, [])
+        print("[info]   %.0fs" % (time.time() - t0))
+
+    # -- "U M Count" for the MMSEA_Report tab.  COUNT(DISTINCT ...) over a
+    #    multi-million-row Aetna file is minutes, not seconds, so unlike the
+    #    rollup this is only redone when the load is new or its ImportStaging
+    #    rollup actually changed - re-querying the whole 30-day window every
+    #    morning would add several minutes to the 5am run for nothing.
+    want_um = {l["sl"] for l in loads
+               if str(l["sl"]) not in cache["um"]
+               or (l["sl"] in want
+                   and before[str(l["sl"])] != cache["staging"][str(l["sl"])])}
+    if want_um:
+        print("[info] unique-member count for %d SourceLogIds..." % len(want_um))
+        t0 = time.time()
+        got = fetch_unique_members(want_um)
+        for sl in want_um:
+            cache["um"][str(sl)] = got.get(sl, 0)
         print("[info]   %.0fs" % (time.time() - t0))
 
     # -- ADO: resolve each PCN once.  Unresolved PCNs are retried while the load
@@ -538,6 +649,8 @@ def build(full=False):
         l["ft"] = SOURCE_TYPE.get(l["src"], ("?", "?"))[0]
         l["spec"] = SOURCE_TYPE.get(l["src"], ("?", "?"))[1]
         l["file"] = l["entry"].rsplit("\\", 1)[-1]
+        l["um"] = cache["um"].get(str(l["sl"]), 0)
+        l["rt"] = RT_BY_FEED.get((l["cid"], l["src"]), "")
 
     tracker, tracker_note = read_tracker()
     if tracker_note:
@@ -601,6 +714,7 @@ def build(full=False):
         "srcType": {str(k): list(v) for k, v in SOURCE_TYPE.items()},
         "st": st_rows,
         "stDef": dict(STAGING_STATUS),
+        "unsourced": UNSOURCED_COLUMNS,
         "tools": [list(t) for t in TOOLS],
         "regFile": REG_FILE,
         "regDir": os.path.dirname(OUTPUT_PATHS[0]),
@@ -673,6 +787,11 @@ HTML_TEMPLATE = r"""<!doctype html>
   #loads td.entry { max-width:44ch; overflow:hidden; text-overflow:ellipsis; }
   #loads td.mir { cursor:help; border-bottom:1px dotted var(--muted); }
   #loads th.hint { cursor:help; }
+  /* MMSEA_Report */
+  #mmsea td.entry { max-width:46ch; overflow:hidden; text-overflow:ellipsis; }
+  #mmsea td.na { color:#b9bfc7; cursor:help; }
+  #mmsea th.na { color:#b9bfc7; cursor:help; }
+  #mmsea td.sts { cursor:help; }
   /* toolbar tool links */
   .tools { display:flex; gap:14px; align-items:center; margin:0 0 12px;
            font-size:12px; color:var(--muted); }
@@ -741,11 +860,12 @@ __EXPORT_CSS__
     <div class="seg" id="tabs">
       <button data-tab="loads" class="active">Loads</button>
       <button data-tab="cal">Calendar</button>
+      <button data-tab="mmsea">MMSEA_Report</button>
       <button data-tab="ref">File Types &amp; Keys</button>
     </div>
     <select id="year" class="cal-only"></select>
     <select id="client"></select>
-    <select id="source" class="loads-only"></select>
+    <select id="source"></select>
     <select id="ticket" class="loads-only">
       <option value="">All loads</option>
       <option value="y">Has ADO ticket</option>
@@ -777,6 +897,15 @@ __EXPORT_CSS__
     <div class="legend"><span>Click a row to expand its ImportStaging breakdown
       (EntryName / DNDispositionCode / StagingStatus / records).</span>
       <button class="link" id="expand-all">Expand all</button></div>
+  </section>
+
+  <section id="view-mmsea" hidden>
+    <div class="wrap"><table id="mmsea"><thead id="mmsea-head"></thead><tbody id="mmsea-body"></tbody></table></div>
+    <div class="legend">
+      <span>Layout of <b>MMSEA_Report_20250605.xlsx</b> &mdash; one row per load
+        per StagingStatus.</span>
+      <span id="mmsea-note"></span>
+    </div>
   </section>
 
   <section id="view-ref" hidden>
@@ -818,7 +947,7 @@ __EXPORT_CSS__
 
   const latestYear = D.years[D.years.length - 1];
   let S = { tab:'loads', year:latestYear, client:'', source:'', ticket:'', q:'',
-            sortK:'sl', sortD:-1, open:new Set() };
+            sortK:'sl', sortD:-1, msortK:'', msortD:1, open:new Set() };
 
   // ---- tool links ---------------------------------------------------------
   // A UNC path becomes file://host/share/... and every segment must be
@@ -874,12 +1003,14 @@ __EXPORT_CSS__
   const hay = l => [l.client, l.file, l.entry, l.pcn, l.wi, l.wit, l.sl, SRC[l.src], l.ft]
                      .join(' ').toLowerCase();
 
-  function filteredLoads() {
+  // the ticket dropdown is a Loads-tab control; MMSEA_Report passes useTicket=false
+  function filteredLoads(useTicket) {
     const q = S.q.toLowerCase();
+    const t = useTicket === false ? '' : S.ticket;
     return D.loads.filter(l =>
       (!S.client || l.client === S.client) &&
       (!S.source || String(l.src) === S.source) &&
-      (S.ticket !== 'y' || l.wi) && (S.ticket !== 'n' || !l.wi) &&
+      (t !== 'y' || l.wi) && (t !== 'n' || !l.wi) &&
       (!q || hay(l).includes(q)));
   }
 
@@ -1020,6 +1151,106 @@ __EXPORT_CSS__
     $('loads-body').innerHTML = out.join('');
   }
 
+  // ---- MMSEA_Report -------------------------------------------------------
+  // Column order is the MMSEA_Report_20250605.xlsx column order.  E %, MC % and
+  // # of Invs have no counterpart anywhere in cmse_new (see UNSOURCED_COLUMNS
+  // in the generator) so they render as an em-dash rather than a guess.
+  const MCOLS = [
+    ['client',  'Client',               null],
+    ['ftname',  'File Type',            null],
+    ['rt',      'R or T',               'mid'],
+    ['idate',   'Import Date',          null],
+    ['epct',    'E %',                  'num na'],
+    ['mcpct',   'MC %',                 'num na'],
+    ['rec',     'Import Count',         'num'],
+    ['ok',      'Success',              'num'],
+    ['bad',     'Failed',               'num'],
+    ['age',     'Age',                  'num'],
+    ['dis',     'Dis',                  'num'],
+    ['esrd',    'ESRD',                 'num'],
+    ['um',      'U M Count',            'num'],
+    ['invs',    '# of Invs',            'num na'],
+    ['st',      'Staging Status',       'mid sts'],
+    ['stn',     'Staging Status Count', 'num'],
+    ['sl',      'SourceLogID',          'num'],
+    ['file',    'File Name',            'entry'],
+  ];
+  const MNA = new Set(D.unsourced || []);
+  const NA_TIP = 'Not available from cmse_new — this column comes from '
+               + 'outside the CMSE database and is left blank.';
+
+  function mmseaRows() {
+    const out = [];
+    for (const l of filteredLoads(false)) {
+      const agg = {};
+      (l.stg || []).forEach(([dn, st, n]) => {
+        const k = (st || '').trim();
+        agg[k] = (agg[k] || 0) + n;
+      });
+      const base = { client:l.client, ftname:SRC[l.src] || '', rt:l.rt || '',
+                     idate:(l.start || '').slice(0, 10), rec:l.rec, ok:l.ok, bad:l.bad,
+                     age:l.age, dis:l.dis, esrd:l.esrd, um:l.um, sl:l.sl,
+                     file:l.file, entry:l.entry, src:l.src, ft:l.ft };
+      const stats = Object.keys(agg).sort((a, b) => Number(a) - Number(b));
+      if (!stats.length) out.push(Object.assign({ st:'', stn:null }, base));
+      else stats.forEach(s => out.push(Object.assign({ st:s, stn:agg[s] }, base)));
+    }
+    // spreadsheet order: client, file type, newest import first
+    const k = S.msortK, d = S.msortD;
+    if (k) {
+      out.sort((a, b) => {
+        const x = a[k] == null ? '' : a[k], y = b[k] == null ? '' : b[k];
+        if (typeof x === 'number' && typeof y === 'number') return (x - y) * d;
+        return String(x).localeCompare(String(y), undefined, {numeric:true}) * d;
+      });
+    } else {
+      out.sort((a, b) =>
+        a.client.localeCompare(b.client) || a.ftname.localeCompare(b.ftname) ||
+        b.idate.localeCompare(a.idate) || b.sl - a.sl ||
+        String(a.st).localeCompare(String(b.st), undefined, {numeric:true}));
+    }
+    return out;
+  }
+
+  function renderMmsea() {
+    const rows = mmseaRows();
+    $('mmsea-head').innerHTML = '<tr>' + MCOLS.map(([k, lbl, cls]) =>
+      `<th class="${cls || ''} sortable" data-k="${k}"` +
+      (MNA.has(lbl) ? ` title="${esc(NA_TIP)}"` : '') +
+      `>${esc(lbl)}${S.msortK === k ? (S.msortD > 0 ? ' ▲' : ' ▼') : ''}</th>`)
+      .join('') + '</tr>';
+
+    if (!rows.length) { $('mmsea-body').innerHTML =
+      `<tr><td colspan="${MCOLS.length}" class="empty">No rows match.</td></tr>`; return; }
+
+    $('mmsea-body').innerHTML = rows.map(r => {
+      const stTip = r.st ? (D.stDef[r.st] || 'undocumented StagingStatus') : '';
+      return '<tr>' +
+        `<td>${esc(r.client)}</td>` +
+        `<td>${esc(r.ftname)}</td>` +
+        `<td class="mid">${esc(r.rt)}</td>` +
+        `<td>${esc(r.idate)}</td>` +
+        `<td class="num na" title="${esc(NA_TIP)}">—</td>` +
+        `<td class="num na" title="${esc(NA_TIP)}">—</td>` +
+        `<td class="num">${nf(r.rec)}</td>` +
+        `<td class="num">${nf(r.ok)}</td>` +
+        `<td class="num${r.bad ? ' bad' : ''}">${nf(r.bad)}</td>` +
+        `<td class="num">${nf(r.age)}</td>` +
+        `<td class="num">${nf(r.dis)}</td>` +
+        `<td class="num">${nf(r.esrd)}</td>` +
+        `<td class="num">${nf(r.um)}</td>` +
+        `<td class="num na" title="${esc(NA_TIP)}">—</td>` +
+        `<td class="mid sts" title="${esc(stTip)}">${esc(r.st) || '—'}</td>` +
+        `<td class="num">${r.stn == null ? '—' : nf(r.stn)}</td>` +
+        `<td class="num">${r.sl}</td>` +
+        `<td class="entry" title="${esc(r.entry)}">${esc(r.file)}</td></tr>`;
+    }).join('');
+
+    $('mmsea-note').textContent = MNA.size
+      ? '⚠ ' + [...MNA].join(', ') + ' are not held in cmse_new and stay blank.'
+      : '';
+  }
+
   // ---- reference ----------------------------------------------------------
   function renderRef() {
     $('specs').innerHTML = '<thead><tr><th>File Type</th><th class="num">Display Length</th>' +
@@ -1074,6 +1305,14 @@ __EXPORT_CSS__
                ['With ADO ticket', rows.filter(l => l.wi).length],
                ['No ADO ticket', rows.filter(l => !l.wi).length],
                ['Clients', new Set(rows.map(l => l.client)).size]];
+    } else if (S.tab === 'mmsea') {
+      const loads = filteredLoads(false);
+      cards = [['Loads', loads.length],
+               ['Rows', mmseaRows().length],
+               ['Import count', loads.reduce((s, l) => s + l.rec, 0)],
+               ['Unique members', loads.reduce((s, l) => s + (l.um || 0), 0)],
+               ['Failed', loads.reduce((s, l) => s + l.bad, 0)],
+               ['Clients', new Set(loads.map(l => l.client)).size]];
     } else {
       cards = [['File types', D.specs.length], ['Source types in scope', D.scope.length],
                ['Clients', D.clients.length]];
@@ -1086,14 +1325,17 @@ __EXPORT_CSS__
   function render() {
     $('view-cal').hidden = S.tab !== 'cal';
     $('view-loads').hidden = S.tab !== 'loads';
+    $('view-mmsea').hidden = S.tab !== 'mmsea';
     $('view-ref').hidden = S.tab !== 'ref';
     document.querySelectorAll('.cal-only').forEach(e => e.hidden = S.tab !== 'cal');
     document.querySelectorAll('.loads-only').forEach(e => e.hidden = S.tab !== 'loads');
+    $('source').hidden = !(S.tab === 'loads' || S.tab === 'mmsea');
     $('client').hidden = S.tab === 'ref';
     $('search').hidden = S.tab === 'ref';
     renderKpis();
     if (S.tab === 'cal') renderCal();
     else if (S.tab === 'loads') renderLoads();
+    else if (S.tab === 'mmsea') renderMmsea();
     else renderRef();
   }
 
@@ -1114,6 +1356,7 @@ __EXPORT_CSS__
   });
   $('clear').addEventListener('click', () => {
     S.client = S.source = S.ticket = S.q = ''; S.year = latestYear; S.open.clear();
+    S.msortK = ''; S.msortD = 1;
     $('client').value = ''; $('source').value = ''; $('ticket').value = '';
     $('search').value = ''; $('year').value = latestYear; render();
   });
@@ -1122,6 +1365,15 @@ __EXPORT_CSS__
     const k = th.dataset.k;
     if (S.sortK === k) S.sortD = -S.sortD; else { S.sortK = k; S.sortD = 1; }
     renderLoads();
+  });
+  $('mmsea-head').addEventListener('click', e => {
+    const th = e.target.closest('th[data-k]'); if (!th) return;
+    const k = th.dataset.k;
+    if (S.msortK === k) {
+      if (S.msortD < 0) { S.msortK = ''; S.msortD = 1; }   // third click = sheet order
+      else S.msortD = -1;
+    } else { S.msortK = k; S.msortD = 1; }
+    renderMmsea();
   });
   $('loads-body').addEventListener('click', e => {
     const tr = e.target.closest('tr.load'); if (!tr) return;
@@ -1174,6 +1426,22 @@ __EXPORT_CSS__
           l.entry, l.start, l.done, l.rec, l.ok, l.bad, l.pcn, l.wi||'']),
         note: 'cmse_new..SourceLog, SourceId ' + D.scope.join(', '),
         rowsPerSlide: 12, fontSz: 700,
+      };
+    }
+    if (S.tab === 'mmsea') {
+      const rows = mmseaRows();
+      return {
+        name: 'MMSEA_Report',
+        title: 'CMSE Dashboard — MMSEA Report',
+        subtitle: (S.client || 'All clients') + ' · ' + rows.length +
+                  ' rows · generated ' + D.generated,
+        headers: MCOLS.map(c => c[1]),
+        rows: rows.map(r => [r.client, r.ftname, r.rt, r.idate, '', '',
+          r.rec, r.ok, r.bad, r.age, r.dis, r.esrd, r.um, '',
+          r.st, r.stn == null ? '' : r.stn, r.sl, r.file]),
+        note: 'cmse_new..SourceLog + ImportStaging · '
+              + (D.unsourced || []).join(', ') + ' are not held in cmse_new',
+        rowsPerSlide: 12, fontSz: 600,
       };
     }
     return {
