@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-r"""CMSE Dashboard - MMSEA response-file loading, calendar + load list + reference.
+r"""MMSEA_MSPi_CMSE Dashboard - MMSEA response-file loading + MSPI file loading.
 
 Modeled on the "Paid Dates - Medical" static-HTML dashboards and on the
 MMSEA-2026 tab of
   \\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule\2026\ClientTracker.2026.xlsx
 
-Four tabs:
+Formerly two separate dashboards (CMSEReport.html + MSPIReport.html), merged
+2026-08-14.  Six tabs:
   1. Calendar  - Client / File Type / Frequency / Handling + Jan..Dec grid, one
                  cell per month holding the ADO ticket number(s) of the loads
                  that landed that month ("E" = expected, carried over from the
@@ -16,12 +17,19 @@ Four tabs:
                  record counts).
   3. MMSEA_Report - the layout of MMSEA_Report_20250605.xlsx: one row per
                  SourceLog x StagingStatus, in the spreadsheet's column order.
-  4. Reference - the File Type / Display Length table that sits to the right of
+  4. MSPi Monthly - the MSPI dashboard's client/contract x Jan..Dec matrix of
+                 files loaded, ported unchanged.
+  5. MSPi Report - the layout of "MSPI Report_20250605.xlsx", which is an export
+                 of MSP.Report.MSPIMonthlyReport (a table that stopped being
+                 refreshed at TapeID 3949 / 2026-05-01).  Computed live so it
+                 stays current; verified column-for-column against that table.
+  6. Reference - the File Type / Display Length table that sits to the right of
                  the calendar on the Excel tab, plus the SourceId->SourceName
                  key, the Client/ClientId key and the legend.
 
 Data:
   TRGRepSQL3 / cmse_new    Source, SourceLog, ImportStaging, Client, ClientCodeLookup
+  TRGINTP3 / MSP           etl.Tape + history.DET / history.PRM / history.MSP
   ADO / TFS                MMSEA work items, matched to a load by its PCN
                            (SourceLog.ProductionControlId) appearing in the
                            work-item description.
@@ -55,6 +63,17 @@ DATABASE = "cmse_new"
 SOURCE_IDS = [4, 5, 6, 12, 13, 14, 15, 18, 19, 20]
 WINDOW_START = "2025-01-01"
 
+# ---- MSPI (merged in from the standalone MSPI File Report, 2026-08-14) ------
+MSPI_SERVER = "TRGINTP3"
+MSPI_DATABASE = "MSP"
+# 310 = DET file, 300 = PRM file.  TableID 320 rows are "MSP Archive [nnnn]"
+# stubs with no ProdCtrlNo or file, and are excluded - which is also exactly the
+# row set of Report.MSPIMonthlyReport.
+MSPI_TYPE_BY_TABLEID = {"310": "DET", "300": "PRM"}
+# Every one of the 3,789 rows in Report.MSPIMonthlyReport is "Raw"; the table has
+# never held any other value, and nothing on etl.Tape distinguishes the two.
+MSPI_RAW_OR_TRANSFORM = "Raw"
+
 ADO_BASE = "https://devops.ado.rawlingslou.prod/TFS2012/Rawlings"
 ADO_WEB = ADO_BASE + "/_workitems/edit/"
 
@@ -66,12 +85,19 @@ LATE_FILL = "FFFFC7CE"          # pink "Late - Outreach Date" fill on the Excel 
 
 CACHE = os.path.join(HERE, "cmse_report_cache.json")
 
+REPORT_NAME = "MMSEA_MSPi_CMSE"
+
 OUTPUT_PATHS = [
     r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule"
-    r"\Daily Status Reports\CMSEReport.html",
-    os.path.join(HERE, "CMSEReport.html"),
-    r"C:\Users\tls2\OneDrive - Machinify\Documents\Reports\CMSEReport.html",
+    r"\Daily Status Reports\%s.html" % REPORT_NAME,
+    os.path.join(HERE, "%s.html" % REPORT_NAME),
+    r"C:\Users\tls2\OneDrive - Machinify\Documents\Reports\%s.html" % REPORT_NAME,
 ]
+
+# The two dashboards this one replaces.  Their old file names are still written,
+# as copies of the merged report, so existing links and bookmarks keep working
+# and never go stale.
+LEGACY_NAMES = ["CMSEReport.html", "MSPIReport.html"]
 
 # SourceId -> (tracker row label, file-format spec label)
 SOURCE_TYPE = {
@@ -236,11 +262,16 @@ PCN_ADO_OVERRIDE = {
 # SQL
 # --------------------------------------------------------------------------- #
 
-def sql(query, timeout=900):
-    """Run a query via sqlcmd, return a list of column lists (no header)."""
+def sql(query, timeout=900, server=None, database=None, sep="|"):
+    """Run a query via sqlcmd, return a list of column lists (no header).
+
+    `sep` is the column delimiter; the MSPI queries use a tab because their
+    file-path column can plausibly contain other punctuation.
+    """
     p = subprocess.run(
-        ["sqlcmd", "-S", SERVER, "-d", DATABASE, "-E", "-W", "-w", "65535",
-         "-s", "|", "-h", "-1", "-Q", "SET NOCOUNT ON; " + query],
+        ["sqlcmd", "-S", server or SERVER, "-d", database or DATABASE, "-E",
+         "-W", "-w", "65535", "-s", sep, "-h", "-1",
+         "-Q", "SET NOCOUNT ON; " + query],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=timeout)
     if p.returncode != 0:
@@ -248,10 +279,10 @@ def sql(query, timeout=900):
     out = []
     for line in (p.stdout or "").splitlines():
         line = line.rstrip("\r")
-        if not line or line.startswith("(") or set(line) <= set("-|"):
+        if not line or line.startswith("(") or set(line) <= set("-" + sep):
             continue
         # char columns come back space-padded; NULL prints as the literal "NULL"
-        out.append([("" if c.strip() == "NULL" else c.strip()) for c in line.split("|")])
+        out.append([("" if c.strip() == "NULL" else c.strip()) for c in line.split(sep)])
     return out
 
 
@@ -358,6 +389,119 @@ def fetch_unique_members(source_log_ids):
         for r in rows:
             if r[0].isdigit():
                 out[int(r[0])] = int(r[1])
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# MSPI  (TRGINTP3 / MSP)
+# --------------------------------------------------------------------------- #
+
+# A contract dot-segment: optional routing 'R', a letter, then 3-5 digits
+# (anchored so date/time segments like D260622 / T0858590 don't match).
+MSPI_CONTRACT_SEG_RE = re.compile(r"^R?[A-Z]\d{3,5}$")
+# Drop a single leading routing 'R' only when a real contract (letter+digit)
+# follows it: RH3890 -> H3890, RR6694 -> R6694, but R6694 stays R6694.
+MSPI_LEAD_R_RE = re.compile(r"^R(?=[A-Z]\d)")
+# Data-date token in the leaf name, e.g. D260623 -> 2026-06-23 (Date Extracted).
+MSPI_DATE_TOKEN_RE = re.compile(r"^D(\d{2})(\d{2})(\d{2})$")
+# Aetna MAO_DATA / MAODATA files carry no contract token -> label them 'MAO'.
+MSPI_MAO_DATA_RE = re.compile(r"^MAO[ _]?DATA", re.I)
+
+
+def mspi_leaf(path):
+    return re.split(r"[\\/]", path or "")[-1]
+
+
+def mspi_path_client(path):
+    """Folder after ...\\MSP\\ in the path.
+
+    This is the Monthly tab's grouping key.  It is NOT the MSPi Report tab's
+    Client - that one comes from the history tables and is blank for the 112
+    tapes that loaded no records (see build()).
+    """
+    segs = [s for s in re.split(r"[\\/]", path or "") if s]
+    for i, seg in enumerate(segs[:-1]):
+        if seg.upper() == "MSP" and i + 1 < len(segs):
+            return segs[i + 1]
+    return ""
+
+
+def mspi_contract(path):
+    """Contract token in the leaf file name, leading routing 'R' dropped.
+
+    e.g. H0342 -> H0342, EFTO.RH3890... -> H3890, P.RR6694... -> R6694,
+    H5580_MSPCOBMA... -> H5580.  Aetna MAO_DATA files have no contract token
+    and are labelled 'MAO'.
+    """
+    leaf = mspi_leaf(path)
+    if MSPI_MAO_DATA_RE.match(leaf):
+        return "MAO"
+    for seg in re.split(r"[._ ]", leaf.upper()):
+        if MSPI_CONTRACT_SEG_RE.match(seg):
+            return MSPI_LEAD_R_RE.sub("", seg)
+    return ""
+
+
+def mspi_extracted(path):
+    """Data date parsed from the D-token in the leaf name (Date Extracted)."""
+    for seg in mspi_leaf(path).upper().split("."):
+        m = MSPI_DATE_TOKEN_RE.match(seg)
+        if m:
+            return "20%s-%s-%s" % (m.group(1), m.group(2), m.group(3))
+    return ""
+
+
+def fetch_mspi_tapes():
+    """One row per MSPI file: etl.Tape, TableID 300 (PRM) / 310 (DET)."""
+    rows = sql("""
+        SELECT t.TapeID, t.TableID, ISNULL(CONVERT(varchar(20), t.ProdCtrlNo),''),
+               t.FileName, ISNULL(CONVERT(varchar(20), t.FileSize),''),
+               ISNULL(CONVERT(varchar(10), t.FileCreateDate, 120),''),
+               ISNULL(CONVERT(varchar(19), t.FileLoadDate, 120),'')
+          FROM MSP.etl.Tape t
+         WHERE t.TableID IN (300, 310)
+      ORDER BY t.TapeID DESC
+    """, server=MSPI_SERVER, database=MSPI_DATABASE, sep="\t")
+    out = []
+    for r in rows:
+        if not r[0].isdigit():
+            continue
+        out.append({
+            "tape": int(r[0]), "tableid": r[1], "prod": r[2], "path": r[3],
+            "size": int(r[4]) if r[4].isdigit() else 0,
+            "created": r[5], "loaded": r[6],
+        })
+    return out
+
+
+def fetch_mspi_stats(min_tape):
+    """Per-TapeID record + unique-HICN counts -> {tape: [det,deth,prm,prmh,msp,client]}.
+
+    The TapeID floor matters: an unbounded GROUP BY over history.DET +
+    history.PRM + history.MSP (36M rows) is ~75s, while the same query pruned to
+    recent tapes is well under a second.
+    """
+    rows = sql("""
+        WITH d AS (SELECT TapeID, COUNT_BIG(*) c, COUNT(DISTINCT HICN) h, MAX(Client) client
+                     FROM MSP.history.DET WHERE TapeID >= %(t)d GROUP BY TapeID),
+             p AS (SELECT TapeID, COUNT_BIG(*) c, COUNT(DISTINCT HICN) h, MAX(Client) client
+                     FROM MSP.history.PRM WHERE TapeID >= %(t)d GROUP BY TapeID),
+             m AS (SELECT TapeID, COUNT_BIG(*) c, MAX(Client) client
+                     FROM MSP.history.MSP WHERE TapeID >= %(t)d GROUP BY TapeID)
+        SELECT t.TapeID, ISNULL(d.c,0), ISNULL(d.h,0), ISNULL(p.c,0), ISNULL(p.h,0),
+               ISNULL(m.c,0), ISNULL(COALESCE(d.client, p.client, m.client),'')
+          FROM MSP.etl.Tape t
+          LEFT JOIN d ON d.TapeID = t.TapeID
+          LEFT JOIN p ON p.TapeID = t.TapeID
+          LEFT JOIN m ON m.TapeID = t.TapeID
+         WHERE t.TableID IN (300, 310) AND t.TapeID >= %(t)d
+    """ % {"t": min_tape}, timeout=1800, server=MSPI_SERVER,
+           database=MSPI_DATABASE, sep="\t")
+    out = {}
+    for r in rows:
+        if r[0].isdigit():
+            out[int(r[0])] = [int(r[1]), int(r[2]), int(r[3]), int(r[4]), int(r[5]),
+                              r[6]]
     return out
 
 
@@ -513,13 +657,15 @@ def read_tracker():
 
 def load_cache(full):
     if full or not os.path.exists(CACHE):
-        return {"staging": {}, "um": {}, "pcn": {}, "pcn_checked": {}, "wi": {}}
+        return {"staging": {}, "um": {}, "pcn": {}, "pcn_checked": {}, "wi": {},
+                "mspi": {}}
     try:
         with open(CACHE, "r", encoding="utf-8") as f:
             c = json.load(f)
     except Exception:
-        return {"staging": {}, "um": {}, "pcn": {}, "pcn_checked": {}, "wi": {}}
-    for k in ("staging", "um", "pcn", "pcn_checked", "wi"):
+        return {"staging": {}, "um": {}, "pcn": {}, "pcn_checked": {}, "wi": {},
+                "mspi": {}}
+    for k in ("staging", "um", "pcn", "pcn_checked", "wi", "mspi"):
         c.setdefault(k, {})
     return c
 
@@ -534,6 +680,50 @@ def save_cache(cache):
 # --------------------------------------------------------------------------- #
 # Build
 # --------------------------------------------------------------------------- #
+
+def build_mspi(cache, now, full=False):
+    """The two MSPi tabs' row set: one dict per DET/PRM file."""
+    print("[info] %s / %s" % (MSPI_SERVER, MSPI_DATABASE))
+    tapes = fetch_mspi_tapes()
+    print("[info] %d MSPI files" % len(tapes))
+
+    recent_cut = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    need = [t["tape"] for t in tapes
+            if str(t["tape"]) not in cache["mspi"] or t["loaded"][:10] >= recent_cut]
+    if need:
+        floor = min(need)
+        print("[info] MSPI record counts for %d tapes (TapeID >= %d)..."
+              % (len(need), floor))
+        t0 = time.time()
+        got = fetch_mspi_stats(floor)
+        for tp in need:
+            cache["mspi"][str(tp)] = got.get(tp, [0, 0, 0, 0, 0, ""])
+        print("[info]   %.0fs" % (time.time() - t0))
+
+    rows = []
+    for t in tapes:
+        det, deth, prm, prmh, msp, hclient = cache["mspi"].get(
+            str(t["tape"]), [0, 0, 0, 0, 0, ""])
+        rows.append({
+            "tape": t["tape"],
+            "type": MSPI_TYPE_BY_TABLEID.get(t["tableid"], t["tableid"]),
+            "prod": t["prod"],                      # = the report's VolSerNum
+            # Monthly groups on the path folder (every file has one); the MSPi
+            # Report tab shows `rclient`, the history-table Client, which the
+            # source report leaves blank for tapes that loaded no records.
+            "client": mspi_path_client(t["path"]) or hclient,
+            "rclient": hclient,
+            "contract": mspi_contract(t["path"]),
+            "file": mspi_leaf(t["path"]),
+            "path": t["path"],
+            "extracted": mspi_extracted(t["path"]),
+            "created": t["created"],
+            "loaded": t["loaded"],
+            "size": t["size"],
+            "det": det, "deth": deth, "prm": prm, "prmh": prmh, "msp": msp,
+        })
+    return rows
+
 
 def build(full=False):
     cache = load_cache(full)
@@ -626,6 +816,8 @@ def build(full=False):
         for wi, det in ado_details(stale).items():
             cache["wi"][str(wi)] = det
 
+    mspi = build_mspi(cache, now, full=full)
+
     save_cache(cache)
 
     # -- attach ADO + staging to each load, prefer an MMSEA-tagged ticket
@@ -702,6 +894,9 @@ def build(full=False):
 
     return {
         "generated": now.strftime("%Y-%m-%d %H:%M"),
+        "name": REPORT_NAME,
+        "mspi": mspi,
+        "mspiRawOrTransform": MSPI_RAW_OR_TRANSFORM,
         "years": years,
         "trackerYear": str(TRACKER_YEAR),
         "trackerNote": tracker_note,
@@ -730,7 +925,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>CMSE Dashboard</title>
+<title>MMSEA_MSPi_CMSE</title>
 <style>
   :root {
     --bg:#f4f6f9; --card:#fff; --border:#e3e7ec; --text:#24292f; --muted:#656d76;
@@ -792,6 +987,80 @@ HTML_TEMPLATE = r"""<!doctype html>
   #mmsea td.na { color:#b9bfc7; cursor:help; }
   #mmsea th.na { color:#b9bfc7; cursor:help; }
   #mmsea td.sts { cursor:help; }
+  /* MSPi Report */
+  #msr td.entry { max-width:60ch; overflow:hidden; text-overflow:ellipsis; }
+  #msr td.zero { color:#b6bec8; cursor:help; }
+  #msr td.noclient { color:#b6bec8; font-style:italic; cursor:help; }
+  /* MSPi filter bars (each MSPi tab carries its own - the toolbar selects at
+     the top of the page are MMSEA-scoped) */
+  .subbar { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;
+            background:var(--card); border:1px solid var(--border);
+            border-radius:8px; padding:9px 12px; margin-bottom:12px; }
+  .subbar .field { display:flex; flex-direction:column; gap:3px; }
+  .subbar label { font-size:10.5px; color:var(--muted); text-transform:uppercase;
+                  letter-spacing:.4px; font-weight:700; }
+  .subbar .hint { font-size:12px; color:var(--muted); align-self:center; }
+  .subbar button { background:#fff; color:var(--accent); border:1px solid var(--accent);
+                   border-radius:6px; padding:6px 12px; cursor:pointer; font-size:13px; }
+  .subbar button:hover { background:var(--hover); }
+  .pager { display:flex; align-items:center; gap:12px; margin-top:10px;
+           justify-content:flex-end; font-size:12px; color:var(--muted); }
+  .pager button { background:#fff; color:var(--accent); border:1px solid var(--accent);
+                  border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px; }
+  /* MSPi Monthly matrix */
+  .matrix-wrap { overflow:auto; max-height:72vh; border:1px solid var(--border);
+                 border-radius:8px; background:var(--card); }
+  table.matrix { border-collapse:separate; border-spacing:0; width:auto; }
+  table.matrix th, table.matrix td { border-bottom:1px solid #eef1f5; white-space:nowrap; }
+  table.matrix thead th { position:sticky; top:0; z-index:3;
+    background:linear-gradient(#ffffff,#f2f6fb); color:var(--accent-dark);
+    padding:9px 10px; font-size:11px; text-align:center; font-weight:700;
+    text-transform:uppercase; letter-spacing:.6px;
+    border-bottom:2px solid var(--accent); }
+  table.matrix thead th.rowhdr { z-index:4; text-align:left; }
+  table.matrix th.rowhdr, table.matrix td.rowhdr { padding:6px 14px; font-size:12.5px;
+    position:sticky; overflow:hidden; text-overflow:ellipsis; }
+  table.matrix td.rowhdr { background:#fff; color:var(--text); z-index:2; }
+  table.matrix th.c-client, table.matrix td.c-client { left:0;
+    width:190px; min-width:190px; max-width:190px; border-right:1px solid #eef1f5; }
+  table.matrix th.c-contract, table.matrix td.c-contract { left:190px;
+    width:120px; min-width:120px; max-width:120px;
+    font-variant-numeric:tabular-nums; color:var(--muted);
+    border-right:2px solid var(--border); }
+  table.matrix td.day { text-align:center; padding:5px 6px; min-width:62px; }
+  table.matrix td.day.hit { cursor:pointer; }
+  .mk { display:inline-flex; align-items:center; justify-content:center;
+        min-width:22px; height:22px; border-radius:6px; padding:0 8px;
+        background:#e3f4ea; color:#1c7a44; font-weight:700; font-size:12px;
+        box-shadow:inset 0 0 0 1px rgba(28,122,68,.28);
+        transition:transform .08s ease; font-variant-numeric:tabular-nums; }
+  table.matrix td.day.hit:hover .mk { background:#cdecd8; transform:scale(1.12); }
+  tr.client-row td { background:#f5f9fd; border-bottom:1px solid #dce7f3; }
+  tr.client-row td.rowhdr { cursor:pointer; background:#eef4fb; }
+  tr.client-row:hover td { background:#e6effb; }
+  tr.client-row:hover td.rowhdr { background:#dfeafb; }
+  tr.client-row td.c-client { font-weight:700; color:var(--accent-dark);
+                              box-shadow:inset 3px 0 0 var(--accent); }
+  tr.client-row .mk { background:var(--accent); color:#fff; box-shadow:none; }
+  tr.client-row td.day.hit:hover .mk { background:var(--accent-dark); }
+  .tri { display:inline-block; width:12px; margin-right:5px; color:var(--accent);
+         font-size:10px; }
+  tr.contract-row:hover td { background:#f4f8fd; }
+  tr.contract-row:hover td.rowhdr { background:#eef4fb; }
+  /* NB: c-contract is position:sticky, itself the containing block for this
+     absolute marker - do NOT add position:relative (it cancels the sticky
+     frozen column and throws the alignment out). */
+  tr.contract-row td.c-contract { padding-left:24px; }
+  tr.contract-row td.c-contract::before { content:""; position:absolute; left:13px;
+    top:50%; width:5px; height:5px; margin-top:-3px; border-radius:50%;
+    background:#c2ccd8; }
+  #tooltip { position:fixed; z-index:9999; pointer-events:none; background:#1f2a37;
+    color:#fff; border-radius:6px; padding:8px 10px; font-size:12px; line-height:1.45;
+    box-shadow:0 4px 16px rgba(0,0,0,.3); max-width:460px; }
+  #tooltip .tt-file + .tt-file { margin-top:6px; border-top:1px solid #3a4757;
+                                 padding-top:6px; }
+  #tooltip .tt-name { font-family:Consolas,"Courier New",monospace; word-break:break-all; }
+  #tooltip .tt-label { color:#9fb4cc; }
   /* toolbar tool links */
   .tools { display:flex; gap:14px; align-items:center; margin:0 0 12px;
            font-size:12px; color:var(--muted); }
@@ -852,7 +1121,7 @@ __EXPORT_CSS__
 </head>
 <body>
 <header>
-  <h1>CMSE Dashboard &mdash; MMSEA Response Files</h1>
+  <h1>MMSEA_MSPi_CMSE &mdash; MMSEA Response Files &amp; MSPI File Loading</h1>
   <div class="meta" id="meta"></div>
 </header>
 <main>
@@ -861,6 +1130,8 @@ __EXPORT_CSS__
       <button data-tab="loads" class="active">Loads</button>
       <button data-tab="cal">Calendar</button>
       <button data-tab="mmsea">MMSEA_Report</button>
+      <button data-tab="msmo">MSPi Monthly</button>
+      <button data-tab="msr">MSPi Report</button>
       <button data-tab="ref">File Types &amp; Keys</button>
     </div>
     <select id="year" class="cal-only"></select>
@@ -908,6 +1179,57 @@ __EXPORT_CSS__
     </div>
   </section>
 
+  <section id="view-msmo" hidden>
+    <div class="subbar">
+      <div class="field"><label for="mo-year">Year</label><select id="mo-year"></select></div>
+      <div class="field"><label for="mo-client">Client</label>
+        <select id="mo-client"><option value="">All clients</option></select></div>
+      <div class="field"><label for="mo-contract">Contract</label>
+        <select id="mo-contract"><option value="">All contracts</option></select></div>
+      <button id="mo-expand">Expand all</button>
+      <button id="mo-collapse">Collapse all</button>
+      <span class="hint">Cell = files loaded that month &middot; click a client to
+        expand its contracts &middot; hover a <b>count</b> for date extracted,
+        file name &amp; record count.</span>
+    </div>
+    <div class="matrix-wrap">
+      <table class="matrix" id="matrix"><thead id="matrix-head"></thead>
+        <tbody id="matrix-body"></tbody></table>
+    </div>
+  </section>
+
+  <section id="view-msr" hidden>
+    <div class="subbar">
+      <div class="field"><label for="msr-client">Client</label>
+        <select id="msr-client"><option value="">All clients</option></select></div>
+      <div class="field"><label for="msr-type">File Type</label>
+        <select id="msr-type"><option value="">All types</option>
+          <option value="DET">DET</option><option value="PRM">PRM</option></select></div>
+      <div class="field"><label for="msr-contract">Contract</label>
+        <select id="msr-contract"><option value="">All contracts</option></select></div>
+      <div class="field"><label for="msr-file">File Name</label>
+        <input type="text" id="msr-file" placeholder="contains&hellip;"></div>
+      <div class="field"><label for="msr-from">Created From</label>
+        <input type="date" id="msr-from"></div>
+      <div class="field"><label for="msr-to">Created To</label>
+        <input type="date" id="msr-to"></div>
+      <button id="msr-reset">Reset</button>
+    </div>
+    <div class="wrap"><table id="msr"><thead id="msr-head"></thead>
+      <tbody id="msr-body"></tbody></table></div>
+    <div class="pager">
+      <span id="msr-pageinfo"></span>
+      <button id="msr-prev">&laquo; Prev</button>
+      <button id="msr-next">Next &raquo;</button>
+    </div>
+    <div class="legend">
+      <span>Layout of <b>MSPI Report_20250605.xlsx</b> (an export of
+        <code>MSP.Report.MSPIMonthlyReport</code>), computed live from
+        <code>etl.Tape</code> + <code>history.*</code> so it stays current.</span>
+      <span id="msr-note"></span>
+    </div>
+  </section>
+
   <section id="view-ref" hidden>
     <div class="cards">
       <div class="col">
@@ -932,6 +1254,7 @@ __EXPORT_CSS__
     </div>
   </section>
 </main>
+<div id="tooltip" style="display:none"></div>
 
 <script type="application/json" id="data">__DATA_JSON__</script>
 <script>__EXPORT_JS__</script>
@@ -994,9 +1317,11 @@ __EXPORT_CSS__
   $('source').innerHTML = '<option value="">All source types</option>' +
     D.scope.map(id => `<option value="${id}">${id} &middot; ${esc(SRC[id]||'')}</option>`).join('');
 
-  $('meta').textContent = 'Generated ' + D.generated + ' \u00b7 TRGRepSQL3 / CMSE_New \u00b7 '
-    + 'SourceId ' + D.scope.join(', ') + ' \u00b7 ' + D.loads.length.toLocaleString('en-US')
-    + ' loads from ' + (D.years[0] || '') + ' forward';
+  $('meta').textContent = 'Generated ' + D.generated
+    + ' \u00b7 MMSEA: TRGRepSQL3 / CMSE_New, SourceId ' + D.scope.join(', ') + ', '
+    + D.loads.length.toLocaleString('en-US') + ' loads from ' + (D.years[0] || '')
+    + ' forward \u00b7 MSPi: TRGINTP3 / MSP, '
+    + (D.mspi || []).length.toLocaleString('en-US') + ' files';
   $('cal-note').textContent = D.trackerNote ? ('\u26a0 ' + D.trackerNote) : '';
 
   // ---- helpers ------------------------------------------------------------
@@ -1251,6 +1576,235 @@ __EXPORT_CSS__
       : '';
   }
 
+  // ---- MSPi shared --------------------------------------------------------
+  const MS = D.mspi || [];
+  const MSPAGE = 100;
+  // A file's own record count: DET files load history.DET, PRM files load
+  // history.PRM.  (The MSPi Report tab's "Load count" column is deliberately
+  // DET-only - see renderMsr.)
+  const msRecords = r => (r.type === 'DET' ? r.det : r.prm) || 0;
+
+  const fillOpts = (sel, values, keep) => {
+    const first = sel.options[0] ? sel.options[0].outerHTML : '';
+    sel.innerHTML = first + values.map(v => `<option>${esc(v)}</option>`).join('');
+    if (keep && values.indexOf(keep) !== -1) sel.value = keep;
+  };
+
+  // ---- MSPi Monthly -------------------------------------------------------
+  const MOS = { year:'', client:'', contract:'', expanded:new Set() };
+  const msYears = [...new Set(MS.map(r => r.loaded).filter(Boolean)
+                                .map(s => s.slice(0, 4)))].sort().reverse();
+  $('mo-year').innerHTML = msYears.map(y => `<option>${y}</option>`).join('');
+  MOS.year = msYears[0] || '';
+  if (MOS.year) $('mo-year').value = MOS.year;
+  fillOpts($('mo-client'), [...new Set(MS.map(r => r.client).filter(Boolean))].sort());
+
+  function moContracts() {          // contract list cascades off the client
+    const src = MOS.client ? MS.filter(r => r.client === MOS.client) : MS;
+    fillOpts($('mo-contract'),
+             [...new Set(src.map(r => r.contract).filter(Boolean))].sort(),
+             MOS.contract);
+    if ($('mo-contract').value !== MOS.contract) MOS.contract = $('mo-contract').value;
+  }
+  moContracts();
+
+  // All-time universe of client -> [contracts] so every pair is listed each
+  // year whether or not it loaded (a blank cell = nothing loaded that month).
+  const MO_PAIRS = {};
+  MS.forEach(r => { (MO_PAIRS[r.client] = MO_PAIRS[r.client] || new Set()).add(r.contract); });
+  Object.keys(MO_PAIRS).forEach(k => {
+    MO_PAIRS[k] = [...MO_PAIRS[k]].sort((a, b) => a.localeCompare(b));
+  });
+
+  const tip = $('tooltip');
+  let tipMap = {}, tipId = 0;
+  function showTip(evt, id) {
+    const files = tipMap[id];
+    if (!files) return;
+    tip.innerHTML = files.map(f =>
+      '<div class="tt-file"><div class="tt-name">' + esc(f.type) + ' · ' +
+      esc(f.file) + '</div>' +
+      '<div><span class="tt-label">Date Extracted:</span> ' + (esc(f.extracted) || '—') + '</div>' +
+      '<div><span class="tt-label">Date Loaded:</span> ' + esc((f.loaded || '').slice(0, 10)) + '</div>' +
+      '<div><span class="tt-label">File Count:</span> ' + nf(msRecords(f)) + ' records</div></div>'
+    ).join('');
+    tip.style.display = 'block';
+    moveTip(evt);
+  }
+  function moveTip(evt) {
+    const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    if (x + w > window.innerWidth) x = evt.clientX - w - pad;
+    if (y + h > window.innerHeight) y = evt.clientY - h - pad;
+    tip.style.left = Math.max(4, x) + 'px';
+    tip.style.top = Math.max(4, y) + 'px';
+  }
+  const hideTip = () => { tip.style.display = 'none'; };
+
+  function monthCells(map) {
+    let out = '';
+    for (let mo = 1; mo <= 12; mo++) {
+      const files = map[mo];
+      if (files && files.length) {
+        const id = 'x' + (tipId++);
+        tipMap[id] = files;
+        out += `<td class="day hit" data-tip="${id}"><span class="mk">${nf(files.length)}</span></td>`;
+      } else out += '<td class="day"></td>';
+    }
+    return out;
+  }
+
+  function renderMonthly() {
+    const yr = MOS.year, head = $('matrix-head'), body = $('matrix-body');
+    tipMap = {}; tipId = 0;
+    head.innerHTML = '<tr><th class="rowhdr c-client">Client</th>' +
+      '<th class="rowhdr c-contract">Contract</th>' +
+      MN.map(m => `<th>${m}</th>`).join('') + '</tr>';
+    if (!yr) { body.innerHTML = '<tr><td class="empty" colspan="14">No data.</td></tr>'; return; }
+
+    const byClient = {};
+    for (const r of MS) {
+      if (!r.loaded || r.loaded.slice(0, 4) !== yr) continue;
+      const c = byClient[r.client] || (byClient[r.client] = { contracts:{}, agg:{} });
+      const ct = c.contracts[r.contract] || (c.contracts[r.contract] = {});
+      const mo = Number(r.loaded.slice(5, 7));
+      (ct[mo] = ct[mo] || []).push(r);
+      (c.agg[mo] = c.agg[mo] || []).push(r);
+    }
+
+    let names = Object.keys(MO_PAIRS);
+    if (MOS.client) names = names.filter(n => n === MOS.client);
+    if (MOS.contract) names = names.filter(n => MO_PAIRS[n].indexOf(MOS.contract) !== -1);
+    names.sort((a, b) => a.localeCompare(b));
+    if (!names.length) {
+      body.innerHTML = '<tr><td class="empty" colspan="14">No clients match.</td></tr>';
+      return;
+    }
+
+    const forceOpen = !!MOS.contract;   // a contract filter opens its client
+    const out = [];
+    for (const name of names) {
+      const c = byClient[name] || { contracts:{}, agg:{} };
+      const open = forceOpen || MOS.expanded.has(name);
+      out.push(`<tr class="client-row" data-client="${esc(name)}">` +
+        `<td class="rowhdr c-client"><span class="tri">${open ? '▼' : '▶'}</span>${esc(name)}</td>` +
+        '<td class="rowhdr c-contract"></td>' + monthCells(c.agg) + '</tr>');
+      if (!open) continue;
+      let cts = MO_PAIRS[name].slice();
+      if (MOS.contract) cts = cts.filter(ct => ct === MOS.contract);
+      for (const ct of cts) {
+        out.push('<tr class="contract-row"><td class="rowhdr c-client"></td>' +
+          `<td class="rowhdr c-contract">${esc(ct) || '<span style="color:var(--muted)">(none)</span>'}</td>` +
+          monthCells(c.contracts[ct] || {}) + '</tr>');
+      }
+    }
+    body.innerHTML = out.join('');
+  }
+
+  // ---- MSPi Report --------------------------------------------------------
+  // Column order is the MSPI Report_20250605.xlsx column order.
+  const MRCOLS = [
+    ['rclient', 'Client',             null],
+    ['type',    'FileType',           'mid'],
+    ['file',    'FileName',           'entry'],
+    ['prod',    'VolSerNum',          'num'],
+    ['load',    'Load count',         'num'],
+    ['hicn',    'Unique HICN Count',  'num'],
+    ['rt',      'Raw Or Transform',   'mid'],
+    ['created', 'Create Date',        null],
+  ];
+  const MR = { client:'', type:'', contract:'', file:'', from:'', to:'',
+               sortK:'', sortD:1, page:0 };
+  fillOpts($('msr-client'), [...new Set(MS.map(r => r.rclient).filter(Boolean))].sort());
+  fillOpts($('msr-contract'), [...new Set(MS.map(r => r.contract).filter(Boolean))].sort());
+
+  function msrFiltered() {
+    const q = MR.file.trim().toLowerCase();
+    return MS.filter(r =>
+      (!MR.client || r.rclient === MR.client) &&
+      (!MR.type || r.type === MR.type) &&
+      (!MR.contract || r.contract === MR.contract) &&
+      (!q || r.file.toLowerCase().includes(q)) &&
+      (!MR.from || (r.created && r.created >= MR.from)) &&
+      (!MR.to || (r.created && r.created <= MR.to)));
+  }
+
+  // "Load count" / "Unique HICN Count" are history.DET counts keyed on the
+  // file's own TapeID, so a PRM file is always 0 — that is what the source
+  // report does, and the real history.PRM count is in the cell's tooltip.
+  const mrVal = (r, k) => k === 'load' ? r.det
+                        : k === 'hicn' ? r.deth
+                        : k === 'rt'   ? D.mspiRawOrTransform
+                        : k === 'prod' ? Number(r.prod || 0)
+                        : (r[k] == null ? '' : r[k]);
+
+  function msrSorted() {
+    const rows = msrFiltered();
+    if (!MR.sortK) return rows.sort((a, b) => b.tape - a.tape);   // newest first
+    const k = MR.sortK, d = MR.sortD;
+    return rows.sort((a, b) => {
+      const x = mrVal(a, k), y = mrVal(b, k);
+      if (typeof x === 'number' && typeof y === 'number') return (x - y) * d || (b.tape - a.tape);
+      return String(x).localeCompare(String(y), undefined, {numeric:true}) * d
+             || (b.tape - a.tape);
+    });
+  }
+
+  function renderMsr() {
+    const rows = msrSorted();
+    const pages = Math.max(1, Math.ceil(rows.length / MSPAGE));
+    if (MR.page >= pages) MR.page = pages - 1;
+    if (MR.page < 0) MR.page = 0;
+    const start = MR.page * MSPAGE;
+    const slice = rows.slice(start, start + MSPAGE);
+
+    $('msr-head').innerHTML = '<tr>' + MRCOLS.map(([k, lbl, cls]) =>
+      `<th class="${cls || ''} sortable" data-k="${k}">${esc(lbl)}` +
+      `${MR.sortK === k ? (MR.sortD > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr>';
+
+    if (!slice.length) {
+      $('msr-body').innerHTML =
+        `<tr><td colspan="${MRCOLS.length}" class="empty">No files match.</td></tr>`;
+      $('msr-pageinfo').textContent = '0 files';
+      return;
+    }
+
+    $('msr-body').innerHTML = slice.map(r => {
+      const fileTip = r.path + '\nTapeID ' + r.tape +
+        '\nLoaded ' + (r.loaded || '—') +
+        '\nDate extracted ' + (r.extracted || '—') +
+        '\nFile size ' + nf(r.size) + ' bytes';
+      // the zero a PRM row always shows: say what the file actually holds
+      const zeroTip = 'The source report counts history.DET only, so a PRM file '
+        + 'is always 0.\nThis file holds ' + nf(r.prm) + ' history.PRM records ('
+        + nf(r.prmh) + ' unique HICNs) and ' + nf(r.msp) + ' history.MSP records.';
+      const cell = (v, tipWhenZero) => v
+        ? `<td class="num">${nf(v)}</td>`
+        : `<td class="num zero" title="${esc(tipWhenZero)}">0</td>`;
+      const noRecs = !r.det && !r.prm && !r.msp;
+      const clientCell = r.rclient
+        ? `<td>${esc(r.rclient)}</td>`
+        : `<td class="noclient" title="${esc('This tape loaded no records, so the '
+            + 'source report has no client for it. Path folder: ' + (r.client || '—'))}">`
+          + `${esc(r.client) || '—'}</td>`;
+      return '<tr>' + clientCell +
+        `<td class="mid">${esc(r.type)}</td>` +
+        `<td class="entry" title="${esc(fileTip)}">${esc(r.file)}</td>` +
+        `<td class="num">${esc(r.prod)}</td>` +
+        cell(r.det, r.type === 'PRM' ? zeroTip
+                    : (noRecs ? 'This tape loaded no records.' : zeroTip)) +
+        cell(r.deth, r.type === 'PRM' ? zeroTip
+                     : (noRecs ? 'This tape loaded no records.' : zeroTip)) +
+        `<td class="mid">${esc(D.mspiRawOrTransform)}</td>` +
+        `<td>${esc(r.created)}</td></tr>`;
+    }).join('');
+
+    $('msr-pageinfo').textContent = nf(start + 1) + '–' + nf(start + slice.length)
+      + ' of ' + nf(rows.length) + ' files';
+    $('msr-note').textContent = '⚠ PRM rows show 0 — the source report counts '
+      + 'history.DET only. Hover a 0 for the real PRM/MSP counts.';
+  }
+
   // ---- reference ----------------------------------------------------------
   function renderRef() {
     $('specs').innerHTML = '<thead><tr><th>File Type</th><th class="num">Display Length</th>' +
@@ -1313,29 +1867,52 @@ __EXPORT_CSS__
                ['Unique members', loads.reduce((s, l) => s + (l.um || 0), 0)],
                ['Failed', loads.reduce((s, l) => s + l.bad, 0)],
                ['Clients', new Set(loads.map(l => l.client)).size]];
+    } else if (S.tab === 'msr') {
+      const rows = msrFiltered();
+      cards = [['Files', rows.length],
+               ['Clients', new Set(rows.map(r => r.rclient || r.client)).size],
+               ['DET records', rows.reduce((s, r) => s + r.det, 0)],
+               ['PRM records', rows.reduce((s, r) => s + r.prm, 0)],
+               ['Unique HICNs (DET)', rows.reduce((s, r) => s + r.deth, 0)],
+               ['Latest create', rows.reduce((m, r) => r.created > m ? r.created : m, '') || '—']];
+    } else if (S.tab === 'msmo') {
+      const yr = MOS.year;
+      const rows = MS.filter(r => r.loaded && r.loaded.slice(0, 4) === yr &&
+        (!MOS.client || r.client === MOS.client) &&
+        (!MOS.contract || r.contract === MOS.contract));
+      cards = [['Files ' + yr, rows.length],
+               ['Clients', new Set(rows.map(r => r.client)).size],
+               ['Contracts', new Set(rows.map(r => r.contract).filter(Boolean)).size],
+               ['Records', rows.reduce((s, r) => s + msRecords(r), 0)]];
     } else {
       cards = [['File types', D.specs.length], ['Source types in scope', D.scope.length],
                ['Clients', D.clients.length]];
     }
+    // a card value may be a string (e.g. a date) - only format the numbers
     $('kpis').innerHTML = cards.map(([l, n]) =>
-      `<div class="kpi"><div class="n">${nf(n)}</div><div class="l">${l}</div></div>`).join('');
+      `<div class="kpi"><div class="n">${typeof n === 'string' ? esc(n) : nf(n)}</div>` +
+      `<div class="l">${l}</div></div>`).join('');
   }
 
   // ---- render -------------------------------------------------------------
   function render() {
-    $('view-cal').hidden = S.tab !== 'cal';
-    $('view-loads').hidden = S.tab !== 'loads';
-    $('view-mmsea').hidden = S.tab !== 'mmsea';
-    $('view-ref').hidden = S.tab !== 'ref';
+    ['cal', 'loads', 'mmsea', 'msmo', 'msr', 'ref']
+      .forEach(t => $('view-' + t).hidden = S.tab !== t);
+    // the toolbar selects are MMSEA-scoped; the MSPi tabs carry their own bar
+    const mmseaTab = S.tab === 'cal' || S.tab === 'loads' || S.tab === 'mmsea';
     document.querySelectorAll('.cal-only').forEach(e => e.hidden = S.tab !== 'cal');
     document.querySelectorAll('.loads-only').forEach(e => e.hidden = S.tab !== 'loads');
     $('source').hidden = !(S.tab === 'loads' || S.tab === 'mmsea');
-    $('client').hidden = S.tab === 'ref';
-    $('search').hidden = S.tab === 'ref';
+    $('client').hidden = !mmseaTab;
+    $('search').hidden = !mmseaTab;
+    $('clear').hidden = !mmseaTab;
+    hideTip();
     renderKpis();
     if (S.tab === 'cal') renderCal();
     else if (S.tab === 'loads') renderLoads();
     else if (S.tab === 'mmsea') renderMmsea();
+    else if (S.tab === 'msmo') renderMonthly();
+    else if (S.tab === 'msr') renderMsr();
     else renderRef();
   }
 
@@ -1382,6 +1959,58 @@ __EXPORT_CSS__
     if (S.open.has(sl)) S.open.delete(sl); else S.open.add(sl);
     renderLoads();
   });
+  // ---- MSPi events --------------------------------------------------------
+  $('mo-year').addEventListener('change', e => { MOS.year = e.target.value; render(); });
+  $('mo-client').addEventListener('change', e => {
+    MOS.client = e.target.value; moContracts(); render();
+  });
+  $('mo-contract').addEventListener('change', e => { MOS.contract = e.target.value; render(); });
+  $('mo-expand').addEventListener('click', () => {
+    Object.keys(MO_PAIRS).forEach(n => MOS.expanded.add(n)); renderMonthly();
+  });
+  $('mo-collapse').addEventListener('click', () => { MOS.expanded.clear(); renderMonthly(); });
+  $('matrix-body').addEventListener('click', e => {
+    const row = e.target.closest('tr.client-row'); if (!row) return;
+    const n = row.dataset.client;
+    if (MOS.expanded.has(n)) MOS.expanded.delete(n); else MOS.expanded.add(n);
+    renderMonthly();
+  });
+  $('matrix-body').addEventListener('mouseover', e => {
+    const td = e.target.closest('td.hit');
+    if (td && td.dataset.tip) showTip(e, td.dataset.tip);
+  });
+  $('matrix-body').addEventListener('mousemove', e => {
+    if (tip.style.display === 'block') moveTip(e);
+  });
+  $('matrix-body').addEventListener('mouseout', e => {
+    const to = e.relatedTarget;
+    if (!to || !to.closest || !to.closest('td.hit')) hideTip();
+  });
+
+  [['msr-client', 'client'], ['msr-type', 'type'], ['msr-contract', 'contract'],
+   ['msr-file', 'file'], ['msr-from', 'from'], ['msr-to', 'to']]
+    .forEach(([id, key]) => $(id).addEventListener('input', () => {
+      MR[key] = $(id).value; MR.page = 0; render();
+    }));
+  $('msr-reset').addEventListener('click', () => {
+    ['msr-client', 'msr-type', 'msr-contract', 'msr-file', 'msr-from', 'msr-to']
+      .forEach(id => $(id).value = '');
+    Object.assign(MR, { client:'', type:'', contract:'', file:'', from:'', to:'',
+                        sortK:'', sortD:1, page:0 });
+    render();
+  });
+  $('msr-head').addEventListener('click', e => {
+    const th = e.target.closest('th[data-k]'); if (!th) return;
+    const k = th.dataset.k;
+    if (MR.sortK === k) {
+      if (MR.sortD < 0) { MR.sortK = ''; MR.sortD = 1; }   // third click = TapeID desc
+      else MR.sortD = -1;
+    } else { MR.sortK = k; MR.sortD = 1; }
+    MR.page = 0; renderMsr();
+  });
+  $('msr-prev').addEventListener('click', () => { MR.page--; renderMsr(); });
+  $('msr-next').addEventListener('click', () => { MR.page++; renderMsr(); });
+
   $('expand-all').addEventListener('click', () => {
     const rows = filteredLoads();
     if (rows.every(l => S.open.has(l.sl))) S.open.clear();
@@ -1397,7 +2026,7 @@ __EXPORT_CSS__
       const isT = S.year === D.trackerYear;
       return {
         name: 'CMSE_Calendar_' + S.year,
-        title: 'CMSE Dashboard \u2014 MMSEA Calendar ' + S.year,
+        title: D.name + ' \u2014 MMSEA Calendar ' + S.year,
         subtitle: (S.client || 'All clients') + ' \u00b7 generated ' + D.generated,
         headers: ['Client', 'Client Id', 'File Type', 'Frequency', 'Handling', ...MN],
         rows: rows.map(r => [r.client, r.cid || '', r.ft, r.freq, r.hand,
@@ -1416,7 +2045,7 @@ __EXPORT_CSS__
       const rows = sortLoads(filteredLoads());
       return {
         name: 'CMSE_Loads',
-        title: 'CMSE Dashboard \u2014 SourceLog',
+        title: D.name + ' \u2014 MMSEA SourceLog',
         subtitle: (S.client || 'All clients') + ' \u00b7 ' + rows.length +
                   ' loads \u00b7 generated ' + D.generated,
         headers: ['SourceLogId','SourceId','Source Name','File Type','Client Name',
@@ -1428,11 +2057,55 @@ __EXPORT_CSS__
         rowsPerSlide: 12, fontSz: 700,
       };
     }
+    if (S.tab === 'msr') {
+      const rows = msrSorted();
+      return {
+        name: 'MSPi_Report',
+        title: D.name + ' — MSPi Report',
+        subtitle: (MR.client || 'All clients') + ' · ' + rows.length +
+                  ' files · generated ' + D.generated,
+        headers: MRCOLS.map(c => c[1]),
+        rows: rows.map(r => [r.rclient, r.type, r.file, r.prod, r.det, r.deth,
+                             D.mspiRawOrTransform, r.created]),
+        note: 'TRGINTP3 / MSP · etl.Tape + history.DET · Load count and Unique '
+              + 'HICN Count are history.DET only, so PRM rows are 0',
+        rowsPerSlide: 12, fontSz: 700,
+      };
+    }
+    if (S.tab === 'msmo') {
+      const yr = MOS.year;
+      const byClient = {};
+      for (const r of MS) {
+        if (!r.loaded || r.loaded.slice(0, 4) !== yr) continue;
+        if (MOS.client && r.client !== MOS.client) continue;
+        if (MOS.contract && r.contract !== MOS.contract) continue;
+        const c = byClient[r.client] || (byClient[r.client] = {});
+        const ct = c[r.contract] || (c[r.contract] = {});
+        const mo = Number(r.loaded.slice(5, 7));
+        ct[mo] = (ct[mo] || 0) + 1;
+      }
+      const out = [];
+      Object.keys(byClient).sort().forEach(cl => {
+        Object.keys(byClient[cl]).sort().forEach(ct => {
+          out.push([cl, ct || '(none)',
+            ...MN.map((_, i) => byClient[cl][ct][i + 1] || '')]);
+        });
+      });
+      return {
+        name: 'MSPi_Monthly_' + yr,
+        title: D.name + ' — MSPi Monthly ' + yr,
+        subtitle: (MOS.client || 'All clients') + ' · generated ' + D.generated,
+        headers: ['Client', 'Contract', ...MN],
+        rows: out,
+        note: 'TRGINTP3 / MSP · cell = files loaded that month',
+        rowsPerSlide: 12, fontSz: 800,
+      };
+    }
     if (S.tab === 'mmsea') {
       const rows = mmseaRows();
       return {
         name: 'MMSEA_Report',
-        title: 'CMSE Dashboard — MMSEA Report',
+        title: D.name + ' — MMSEA Report',
         subtitle: (S.client || 'All clients') + ' · ' + rows.length +
                   ' rows · generated ' + D.generated,
         headers: MCOLS.map(c => c[1]),
@@ -1446,7 +2119,7 @@ __EXPORT_CSS__
     }
     return {
       name: 'CMSE_FileTypes',
-      title: 'CMSE Dashboard \u2014 File Types',
+      title: D.name + ' \u2014 File Types',
       subtitle: 'Generated ' + D.generated,
       headers: ['File Type','Display Length','File Length','Header & Trailer',
                 'Entitlement Reason Position','SSN Location'],
@@ -1495,6 +2168,16 @@ def main():
         raise SystemExit("[error] no output written")
     if written != primary:
         print("[warn] primary path %s was not written" % primary)
+
+    # keep the two retired dashboards' file names alive as copies, so nobody is
+    # left staring at a stale CMSEReport.html / MSPIReport.html
+    for path in OUTPUT_PATHS:
+        for name in LEGACY_NAMES:
+            dst = os.path.join(os.path.dirname(path), name)
+            try:
+                shutil.copyfile(written, dst)
+            except (PermissionError, OSError) as e:
+                print("[warn] couldn't refresh %s: %s" % (dst, e))
 
     # publish the protocol registration + ClickOnce launcher next to the report
     for name in SIDECARS:
