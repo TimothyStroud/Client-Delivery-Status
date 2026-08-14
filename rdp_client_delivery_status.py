@@ -817,18 +817,10 @@ MANUAL_OVERRIDES = {
     # 2026-07-29: HealthNetCA (weekly Mon) was FORCED_INACTIVE while its resumed
     # loads were under review, so no cell-by-cell "L"-suppression pins were needed.
     # 2026-08-14: HealthNetCA left FORCED_INACTIVE (3/20-3/27 backfill certified
-    # today) — its Monday cells now resolve normally from cert/load activity.
-    # Its dormant weeks (5/18 → 8/3, no delivery) were reading "Inactive" and
-    # would otherwise regress to a pink "!" missing-delivery alert now that the
-    # client is active, so pin the historical record explicitly. 8/10 forward
-    # resolves live (load ran 8/12, cert lands today).
-    **{("HealthNetCA", d): "Inactive" for d in (
-        date(2026, 5, 18), date(2026, 5, 25),
-        date(2026, 6, 1),  date(2026, 6, 8),  date(2026, 6, 15),
-        date(2026, 6, 22), date(2026, 6, 29),
-        date(2026, 7, 6),  date(2026, 7, 13), date(2026, 7, 20),
-        date(2026, 7, 27), date(2026, 8, 3),
-    )},
+    # today) — its Monday cells now resolve normally from cert/load activity, and
+    # per user the dormant weeks that used to read "Inactive" should show a pink
+    # "!" instead (no pins here). The claims date range for each backfill load is
+    # attached to the label per-cell — see HEALTHNETCA_* below.
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
@@ -1289,12 +1281,38 @@ ADHOC_MONTHLY_SNAP_CLIENTS = {
     "UnitedRx(p)": "United 0130 RX Post Snap",
 }
 
+# --- HealthNetCA claims backfill ---------------------------------------------
+# HealthNetCA (weekly Mon) is working through a backfill: each load covers an
+# older week of claims, so the calendar cell needs the CLAIMS date range next to
+# the name — e.g. `HealthNetCA (3/20-3/27)` on the 8/10 cell for the load that
+# ran 8/13. Per user 2026-08-14: "Backfill loading for HealthNetCA will
+# continue, so please add them to the report when they load and provide the date
+# range of claims … The date range will show up in the HealthNet 0100 Claims
+# Stage job."
+#
+# The range is the pair of dates in the claims filename that the RAMP
+# 'HealthNet 0100 Claims Stage' job (JobId 1811) lists:
+#   HNT_VENDOR_CLAIM_MEDICAL_<plan>_<YYYYMMDD>_<YYYYMMDD>.txt
+# That RAMP job is currently Enabled=0 while the backfill is driven manually, so
+# its ramp.FileLog rows stop at 5/9/26 and can't be used. TRGETL1.HealthNetCA
+# dbo.tblTape carries the same filenames plus when each one actually loaded
+# (FileDate; note FileLoaded is NULL for this client and there is no etl.Tape /
+# ProcessStatus here — it's the legacy tape table), so that's the source.
+# FileTypeID 6 = Claims (7 = Eligibility, 8 = Providers, 13 = Groups) — only the
+# claims files carry a range, and only they should label the cell.
+HEALTHNETCA_CLIENT      = "HealthNetCA"
+HEALTHNETCA_TAPE_SERVER = "TRGETL1"
+HEALTHNETCA_CLAIM_TYPE  = 6
+# Only label loads from the backfill program forward. Before this the client was
+# on its normal weekly cadence (the 5/6 + 5/9 loads), and tagging those cells
+# with a range would rewrite settled history.
+HEALTHNETCA_BACKFILL_FROM = date(2026, 7, 27)
+HEALTHNETCA_CLAIM_RANGE_RE = re.compile(
+    r"HNT_VENDOR_CLAIM.*?_(\d{8})_(\d{8})", re.IGNORECASE)
+
 # Override display name for a client (the label only; client_key stays the same).
 CLIENT_DISPLAY_NAME = {
     "BCBSFLEligibilityLoad": "BCBSFL Elig",
-    # 2026-08-14 per user: the current HealthNetCA delivery is the 3/20–3/27
-    # backfill (certified today) — show the covered window next to the name.
-    "HealthNetCA":           "HealthNetCA (3/20-3/27)",
     "MMOH":                  "MMOH (WC)",
     "MMOHRxMonthly":         "MMOHRx",
     "WellpointRxElig":       "WellpointRx Elig",
@@ -2338,6 +2356,92 @@ def fetch_tape_loads(db, since, server="TRGETL3", name_like=None):
         if dt:
             rows.append({"FileName": parts[0].strip(), "FileLoadDate": dt})
     return rows
+
+
+def fetch_healthnetca_claim_loads(since=None):
+    """HealthNetCA backfill claims loads with the claims date range each covers.
+
+    Reads TRGETL1.HealthNetCA dbo.tblTape (the legacy tape table — no etl.Tape /
+    ProcessStatus on this client) for FileTypeID 6 (Claims). `FileDate` is when
+    the file loaded; `FileLoaded` is always NULL here. The two dates in the
+    filename are the claims window, the same pair the RAMP 'HealthNet 0100
+    Claims Stage' job shows. See the HEALTHNETCA_* notes above.
+
+    Returns list of dicts: {load_date: date, start: date, end: date}, one per
+    distinct (load_date, range) — the per-plan files (XA/XB/XC/…) of one load all
+    carry the same range and collapse to a single entry.
+    """
+    since = since or HEALTHNETCA_BACKFILL_FROM
+    q = (
+        "SET NOCOUNT ON; "
+        "SELECT CONVERT(varchar(10), FileDate, 23), FileName "
+        "FROM [dbo].[tblTape] "
+        f"WHERE FileTypeID = {HEALTHNETCA_CLAIM_TYPE} "
+        f"  AND FileDate >= '{since.isoformat()}' "
+        "ORDER BY FileDate"
+    )
+    r = subprocess.run(
+        ["sqlcmd", "-S", HEALTHNETCA_TAPE_SERVER, "-d", HEALTHNETCA_CLIENT,
+         "-E", "-Q", q, "-W", "-s", "\t", "-h", "-1"],
+        capture_output=True, text=True, check=False,
+    )
+    seen = set()
+    out = []
+    for line in r.stdout.splitlines():
+        if not line or line.startswith("---") or "rows affected" in line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        try:
+            load_date = datetime.strptime(parts[0].strip(), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        m = HEALTHNETCA_CLAIM_RANGE_RE.search(parts[1])
+        if not m:
+            continue
+        try:
+            start = datetime.strptime(m.group(1), "%Y%m%d").date()
+            end   = datetime.strptime(m.group(2), "%Y%m%d").date()
+        except ValueError:
+            continue
+        key = (load_date, start, end)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"load_date": load_date, "start": start, "end": end})
+    return out
+
+
+def healthnetca_range_labels(claim_loads):
+    """{cell_monday: " (M/D-M/D)"} for the HealthNetCA backfill.
+
+    A load is attributed to the Monday of the week it ran in (the 8/13 load of
+    the 3/20-3/27 claims labels the 8/10 cell). A Sunday load rolls to the NEXT
+    Monday, matching closest_weekday() / the Sun→next-Monday rule the markers
+    use, so the label can't land on a different cell than the marker it belongs
+    to. Contiguous ranges loaded in the same week collapse into one span — the
+    files arrive in consecutive weekly chunks (3/20-3/27 then 3/27-4/3), so two
+    chunks in one week read as "(3/20-4/3)" rather than a two-range list.
+    Non-contiguous ranges are listed.
+    """
+    by_week = defaultdict(list)
+    for e in claim_loads or ():
+        ld = e["load_date"]
+        monday = (ld + timedelta(days=1) if ld.weekday() == 6
+                  else ld - timedelta(days=ld.weekday()))
+        by_week[monday].append((e["start"], e["end"]))
+    out = {}
+    for monday, ranges in by_week.items():
+        merged = []
+        for start, end in sorted(set(ranges)):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        out[monday] = " ({})".format(
+            ", ".join(f"{s.month}/{s.day}-{e.month}/{e.day}" for s, e in merged))
+    return out
 
 
 def fetch_optum_raw_instances(since):
@@ -3645,7 +3749,8 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                   ramp_jobs, ramp_queue, esipbmrx_tape=None, multi_week_loads=None,
                   aetna_nmsp_loads=None, optumpbmrx_tape=None, evernorth_claims_pending=False,
                   optum_raw_instances=None, cvspbm_adhoc=None, jhhc_passfile_loads=None,
-                  cvspbm_weekly=None, stage_file_loads=None):
+                  cvspbm_weekly=None, stage_file_loads=None,
+                  healthnetca_ranges=None):
     """Return ((sections, weeks)) layout.
 
     sections: dict {kind: dict {date: [(label, marker, alert)] }}
@@ -3704,6 +3809,9 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     # snap-within-7-days rule as CVSPBMRx; cert still wins upstream. Per user
     # 2026-07-21. Dormant until these clients leave FORCED_INACTIVE.
     stage_file_loads = stage_file_loads or {}
+    # {cell_monday: " (M/D-M/D)"} for the HealthNetCA claims backfill — see
+    # healthnetca_range_labels() and the HEALTHNETCA_* config block.
+    healthnetca_ranges = healthnetca_ranges or {}
     stage_delivered = {}
     for sf_client, rows in stage_file_loads.items():
         keys = [k for k in _keys_for_client(sf_client) if k]
@@ -4426,6 +4534,11 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             n = count_multi_week_loads(client, wk_start, wk_end, multi_week_loads)
             if n > 1:
                 extra = f" ({n} weeks)"
+        # HealthNetCA backfill: label the cell with the claims date range that
+        # loaded that week, e.g. `HealthNetCA (3/20-3/27)` on 8/10. Keyed by the
+        # cell's own Monday so it only tags the week the load actually ran in.
+        if client == HEALTHNETCA_CLIENT and healthnetca_ranges:
+            extra = healthnetca_ranges.get(day, extra)
         label = f"{label_prefix}{display_name(client, monthly=(kind=='monthly'), extra_suffix=extra)}"
         if client in BOLD_LABEL:
             highlight = "bold"
@@ -6040,6 +6153,21 @@ def main():
     print("[info]   stage-file loads: "
           + ", ".join(f"{c}={len(r)}" for c, r in stage_file_loads.items()))
 
+    print("[info] Fetching HealthNetCA backfill claims ranges (TRGETL1 tblTape)…")
+    try:
+        healthnetca_claim_loads = fetch_healthnetca_claim_loads()
+    except Exception as e:
+        print(f"[warn]   HealthNetCA claims fetch failed: {e}")
+        healthnetca_claim_loads = []
+    healthnetca_ranges = healthnetca_range_labels(healthnetca_claim_loads)
+    if healthnetca_ranges:
+        print("[info]   HealthNetCA backfill: "
+              + ", ".join(f"{d.month}/{d.day} cell{lbl}"
+                          for d, lbl in sorted(healthnetca_ranges.items())))
+    else:
+        print("[info]   HealthNetCA backfill: no claims loads since "
+              f"{HEALTHNETCA_BACKFILL_FROM:%Y-%m-%d}")
+
     print("[info] Fetching JHHC Passfile loads (TRGETL4 TableID=5000)…")
     # Widest window: the report renders every month of the year in one run, and
     # the JHHCPassfile ✓ for a past month (e.g. June) is anchored to that
@@ -6101,7 +6229,8 @@ def main():
                                         cvspbm_adhoc=cvspbm_adhoc,
                                         jhhc_passfile_loads=jhhc_passfile_loads,
                                         cvspbm_weekly=cvspbm_weekly,
-                                        stage_file_loads=stage_file_loads)
+                                        stage_file_loads=stage_file_loads,
+                                        healthnetca_ranges=healthnetca_ranges)
 
         tab_name = f"{_cal_mod.month_name[m]} {year}"
         ws_m = wb.create_sheet(tab_name)
