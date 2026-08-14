@@ -818,6 +818,17 @@ MANUAL_OVERRIDES = {
     # loads were under review, so no cell-by-cell "L"-suppression pins were needed.
     # 2026-08-14: HealthNetCA left FORCED_INACTIVE (3/20-3/27 backfill certified
     # today) — its Monday cells now resolve normally from cert/load activity.
+    # Its dormant weeks (5/18 → 8/3, no delivery) were reading "Inactive" and
+    # would otherwise regress to a pink "!" missing-delivery alert now that the
+    # client is active, so pin the historical record explicitly. 8/10 forward
+    # resolves live (load ran 8/12, cert lands today).
+    **{("HealthNetCA", d): "Inactive" for d in (
+        date(2026, 5, 18), date(2026, 5, 25),
+        date(2026, 6, 1),  date(2026, 6, 8),  date(2026, 6, 15),
+        date(2026, 6, 22), date(2026, 6, 29),
+        date(2026, 7, 6),  date(2026, 7, 13), date(2026, 7, 20),
+        date(2026, 7, 27), date(2026, 8, 3),
+    )},
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
