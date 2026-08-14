@@ -897,6 +897,7 @@ def build(full=False):
         "name": REPORT_NAME,
         "mspi": mspi,
         "mspiRawOrTransform": MSPI_RAW_OR_TRANSFORM,
+        "windowStart": WINDOW_START,
         "years": years,
         "trackerYear": str(TRACKER_YEAR),
         "trackerNote": tracker_note,
@@ -1007,6 +1008,33 @@ HTML_TEMPLATE = r"""<!doctype html>
            justify-content:flex-end; font-size:12px; color:var(--muted); }
   .pager button { background:#fff; color:var(--accent); border:1px solid var(--accent);
                   border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px; }
+  /* Monthly Summary - a KPI row of stat tiles, not a chart.  All tiles wear the
+     same ink: they are four different measures, not four series, so colouring
+     them apart would be decorative. */
+  .sum-card { background:var(--card); border:1px solid var(--border);
+              border-radius:10px; padding:20px 24px 22px; max-width:940px; }
+  .sum-h { font-size:23px; font-weight:600; color:var(--accent-dark); margin:0; }
+  .sum-sub { font-size:12.5px; color:var(--muted); margin:3px 0 0; }
+  .sum-group { margin-top:20px; }
+  .sum-group > h3 { margin:0 0 9px; font-size:11px; font-weight:700;
+                    color:var(--muted); text-transform:uppercase;
+                    letter-spacing:.6px; display:flex; align-items:baseline; gap:8px; }
+  .sum-group > h3 span.tot { font-size:12px; color:var(--accent);
+                             text-transform:none; letter-spacing:0; font-weight:600; }
+  .tiles { display:flex; flex-wrap:wrap; gap:12px; }
+  .tile { border:1px solid var(--border); border-radius:9px; padding:12px 16px 13px;
+          min-width:168px; background:var(--band); }
+  /* proportional figures: tabular-nums makes a standalone display number look
+     loose (every digit as wide as a 0) - keep tabular for table columns only */
+  .tile .v { font-size:31px; font-weight:600; line-height:1.06;
+             color:var(--accent-dark); font-variant-numeric:proportional-nums; }
+  .tile .l { font-size:12.5px; color:var(--text); margin-top:5px; }
+  .tile .d { font-size:11.5px; color:var(--muted); margin-top:4px; }
+  .sum-prose { margin-top:22px; padding-top:16px; border-top:1px solid var(--border); }
+  .sum-prose h4 { margin:0 0 8px; font-size:13.5px; font-weight:600; }
+  .sum-prose ul { margin:0; padding-left:20px; line-height:1.85; font-size:13.5px; }
+  .sum-prose .none { color:var(--muted); font-style:italic; }
+  .sum-copy { margin-top:12px; }
   /* MSPi Monthly matrix */
   .matrix-wrap { overflow:auto; max-height:72vh; border:1px solid var(--border);
                  border-radius:8px; background:var(--card); }
@@ -1132,6 +1160,7 @@ __EXPORT_CSS__
       <button data-tab="mmsea">MMSEA_Report</button>
       <button data-tab="msmo">MSPi Monthly</button>
       <button data-tab="msr">MSPi Report</button>
+      <button data-tab="sum">Monthly Summary</button>
       <button data-tab="ref">File Types &amp; Keys</button>
     </div>
     <select id="year" class="cal-only"></select>
@@ -1228,6 +1257,17 @@ __EXPORT_CSS__
         <code>etl.Tape</code> + <code>history.*</code> so it stays current.</span>
       <span id="msr-note"></span>
     </div>
+  </section>
+
+  <section id="view-sum" hidden>
+    <div class="subbar">
+      <div class="field"><label for="sum-month">Month</label>
+        <select id="sum-month"></select></div>
+      <button id="sum-prev-m">&laquo; Previous</button>
+      <button id="sum-next-m">Next &raquo;</button>
+      <span class="hint">Files received and loaded in the selected month.</span>
+    </div>
+    <div class="sum-card" id="sum-card"></div>
   </section>
 
   <section id="view-ref" hidden>
@@ -1805,6 +1845,148 @@ __EXPORT_CSS__
       + 'history.DET only. Hover a 0 for the real PRM/MSP counts.';
   }
 
+  // ---- Monthly Summary ----------------------------------------------------
+  // A handful of headline numbers -> a KPI row of stat tiles, not a chart.
+  const MONTH_FULL = ['January','February','March','April','May','June','July',
+                      'August','September','October','November','December'];
+  const monthLabel = ym => MONTH_FULL[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(0, 4);
+
+  // MMSEA file types, in the order the summary lists them.  D.srcType maps a
+  // SourceId to [tracker label, spec label]; the tracker label is what l.ft holds.
+  const SUM_FT = [['MSP', 'MSP'], ['NMSP', 'Non-MSP'], ['HEW', 'HEW']];
+
+  const sumMonths = [...new Set(
+    D.loads.map(l => (l.start || '').slice(0, 7))
+      .concat(MS.map(r => (r.loaded || '').slice(0, 7)))
+  )].filter(Boolean).sort().reverse();
+
+  $('sum-month').innerHTML = sumMonths
+    .map(m => `<option value="${m}">${esc(monthLabel(m))}</option>`).join('');
+  const SUM = { month: sumMonths[0] || '' };
+  if (SUM.month) $('sum-month').value = SUM.month;
+
+  function sumFor(ym) {
+    const loads = D.loads.filter(l => (l.start || '').slice(0, 7) === ym);
+    const files = MS.filter(r => (r.loaded || '').slice(0, 7) === ym);
+    const ft = {};
+    SUM_FT.forEach(([k]) => {
+      const rows = loads.filter(l => l.ft === k);
+      ft[k] = { n: rows.length, clients: new Set(rows.map(l => l.client)).size };
+    });
+    return {
+      ft,
+      mmsea: SUM_FT.reduce((s, [k]) => s + ft[k].n, 0),
+      // One "set" = the DET + PRM pair of a single delivery.  Pair on
+      // VolSerNum + file name, NOT client + file name: 42 older tapes sit at
+      // ...\MSP\DET\ and ...\MSP\PRM\ with no client folder, so their two halves
+      // carry different clients and would each count as a set of their own.
+      // prod|file agrees with max(DET, PRM) in all 113 months; client|file was
+      // wrong in 15 of them.
+      sets: new Set(files.map(r => r.prod + '|' + r.file)).size,
+      det: files.filter(r => r.type === 'DET').length,
+      prm: files.filter(r => r.type === 'PRM').length,
+      mspiClients: new Set(files.map(r => r.client)).size,
+    };
+  }
+
+  // "+3 vs April" / "no change vs April" - deliberately in muted ink with no
+  // red/green: more files loaded is neither good nor bad, so a direction colour
+  // would assert a judgement the data doesn't support.
+  function deltaLine(cur, ym, pick) {
+    const i = sumMonths.indexOf(ym);
+    const prev = i >= 0 && i + 1 < sumMonths.length ? sumMonths[i + 1] : null;
+    if (!prev) return '';
+    const was = pick(sumFor(prev));
+    const d = cur - was;
+    const arrow = d > 0 ? '▲ +' : d < 0 ? '▼ −' : '';
+    return (d === 0 ? 'no change' : arrow + nf(Math.abs(d)))
+           + ' vs ' + MONTH_FULL[Number(prev.slice(5, 7)) - 1];
+  }
+
+  // MSPI reaches back to 2017 but the MMSEA half of this dashboard only loads
+  // from WINDOW_START, so for earlier months the MMSEA counts would all be a
+  // misleading zero - say "not covered" instead of reporting nothing happened.
+  const MMSEA_FROM = (D.windowStart || '').slice(0, 7);
+  const mmseaCovered = ym => !MMSEA_FROM || ym >= MMSEA_FROM;
+  const partialMonth = ym => ym === D.generated.slice(0, 7);
+
+  function sumText(ym, s) {
+    const lines = [];
+    if (mmseaCovered(ym)) {
+      SUM_FT.forEach(([k, lbl]) => {
+        lines.push(nf(s.ft[k].n) + ' ' + lbl + ' file' + (s.ft[k].n === 1 ? '' : 's')
+                   + ' ' + (s.ft[k].n === 1 ? 'was' : 'were') + ' received and loaded');
+      });
+    } else {
+      lines.push('MMSEA response files are not covered before '
+                 + monthLabel(MMSEA_FROM + '-01'));
+    }
+    lines.push(nf(s.sets) + ' set' + (s.sets === 1 ? '' : 's') + ' of MSPI files '
+               + (s.sets === 1 ? 'was' : 'were') + ' received and loaded');
+    return { head: 'Summary for the month of ' + monthLabel(ym) + ':', lines };
+  }
+
+  function renderSum() {
+    const ym = SUM.month;
+    if (!ym) { $('sum-card').innerHTML = '<div class="empty">No data.</div>'; return; }
+    const s = sumFor(ym);
+    const t = sumText(ym, s);
+
+    const tile = (v, label, sub, delta) =>
+      `<div class="tile"><div class="v">${nf(v)}</div><div class="l">${esc(label)}</div>` +
+      `<div class="d">${esc(sub)}${delta ? ' &middot; ' + esc(delta) : ''}</div></div>`;
+
+    const partial = partialMonth(ym);
+    $('sum-card').innerHTML =
+      `<h2 class="sum-h">${esc(monthLabel(ym))}` +
+        (partial ? ' <span class="sum-sub" style="font-size:12.5px">(month to date)</span>' : '') +
+      '</h2>' +
+      '<p class="sum-sub">Files received and loaded &middot; MMSEA response files '
+        + 'from cmse_new, MSPI files from MSP'
+        + (partial ? ' &middot; the month is still in progress, so the comparison '
+                     + 'with last month is against a full month' : '') + '</p>' +
+
+      '<div class="sum-group"><h3>MMSEA response files' +
+        (mmseaCovered(ym) ? `<span class="tot">${nf(s.mmsea)} total</span>` : '') +
+        '</h3>' +
+      (mmseaCovered(ym)
+        ? '<div class="tiles">' + SUM_FT.map(([k, lbl]) => tile(s.ft[k].n, lbl + ' files',
+            s.ft[k].clients + (s.ft[k].clients === 1 ? ' client' : ' clients'),
+            deltaLine(s.ft[k].n, ym, x => x.ft[k].n))).join('') + '</div>'
+        : '<p class="sum-sub">Not covered &mdash; this dashboard loads MMSEA '
+          + 'response files from ' + esc(monthLabel(MMSEA_FROM + '-01'))
+          + ' forward. The MSPI side goes back further.</p>') +
+      '</div>' +
+
+      '<div class="sum-group"><h3>MSPI' +
+        `<span class="tot">${nf(s.det + s.prm)} files</span></h3><div class="tiles">` +
+      tile(s.sets, 'MSPI file sets',
+           nf(s.det) + ' DET + ' + nf(s.prm) + ' PRM · '
+             + s.mspiClients + (s.mspiClients === 1 ? ' client' : ' clients'),
+           deltaLine(s.sets, ym, x => x.sets)) +
+      '</div></div>' +
+
+      '<div class="sum-prose"><h4>' + esc(t.head) + '</h4><ul>' +
+      t.lines.map(l => `<li${/^0 /.test(l) ? ' class="none"' : ''}>${esc(l)}</li>`).join('') +
+      '</ul><div class="sum-copy"><button class="link" id="sum-copy-btn">' +
+      'Copy this summary</button></div></div>';
+
+    $('sum-copy-btn').addEventListener('click', () => {
+      const txt = t.head + '\n\n' + t.lines.join('\n');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt);
+      } else {                                 // file:// pages often lack the async API
+        const ta = document.createElement('textarea');
+        ta.value = txt; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(ta);
+      }
+      const b = $('sum-copy-btn');
+      b.textContent = 'Copied ✓';
+      setTimeout(() => { b.textContent = 'Copy this summary'; }, 1200);
+    });
+  }
+
   // ---- reference ----------------------------------------------------------
   function renderRef() {
     $('specs').innerHTML = '<thead><tr><th>File Type</th><th class="num">Display Length</th>' +
@@ -1896,7 +2078,7 @@ __EXPORT_CSS__
 
   // ---- render -------------------------------------------------------------
   function render() {
-    ['cal', 'loads', 'mmsea', 'msmo', 'msr', 'ref']
+    ['cal', 'loads', 'mmsea', 'msmo', 'msr', 'sum', 'ref']
       .forEach(t => $('view-' + t).hidden = S.tab !== t);
     // the toolbar selects are MMSEA-scoped; the MSPi tabs carry their own bar
     const mmseaTab = S.tab === 'cal' || S.tab === 'loads' || S.tab === 'mmsea';
@@ -1907,12 +2089,16 @@ __EXPORT_CSS__
     $('search').hidden = !mmseaTab;
     $('clear').hidden = !mmseaTab;
     hideTip();
-    renderKpis();
+    // the Monthly Summary tab is itself a KPI row - a second one above it would
+    // just be two competing stat strips
+    $('kpis').hidden = S.tab === 'sum';
+    if (S.tab !== 'sum') renderKpis();
     if (S.tab === 'cal') renderCal();
     else if (S.tab === 'loads') renderLoads();
     else if (S.tab === 'mmsea') renderMmsea();
     else if (S.tab === 'msmo') renderMonthly();
     else if (S.tab === 'msr') renderMsr();
+    else if (S.tab === 'sum') renderSum();
     else renderRef();
   }
 
@@ -1959,6 +2145,19 @@ __EXPORT_CSS__
     if (S.open.has(sl)) S.open.delete(sl); else S.open.add(sl);
     renderLoads();
   });
+  // ---- Monthly Summary events ---------------------------------------------
+  $('sum-month').addEventListener('change', e => { SUM.month = e.target.value; renderSum(); });
+  const stepMonth = d => {                 // sumMonths is newest-first
+    const i = sumMonths.indexOf(SUM.month);
+    const j = i + d;
+    if (j < 0 || j >= sumMonths.length) return;
+    SUM.month = sumMonths[j];
+    $('sum-month').value = SUM.month;
+    renderSum();
+  };
+  $('sum-prev-m').addEventListener('click', () => stepMonth(1));
+  $('sum-next-m').addEventListener('click', () => stepMonth(-1));
+
   // ---- MSPi events --------------------------------------------------------
   $('mo-year').addEventListener('change', e => { MOS.year = e.target.value; render(); });
   $('mo-client').addEventListener('change', e => {
@@ -2055,6 +2254,27 @@ __EXPORT_CSS__
           l.entry, l.start, l.done, l.rec, l.ok, l.bad, l.pcn, l.wi||'']),
         note: 'cmse_new..SourceLog, SourceId ' + D.scope.join(', '),
         rowsPerSlide: 12, fontSz: 700,
+      };
+    }
+    if (S.tab === 'sum') {
+      const s = sumFor(SUM.month);
+      const t = sumText(SUM.month, s);
+      return {
+        name: 'Monthly_Summary_' + SUM.month,
+        title: D.name + ' — Monthly Summary',
+        subtitle: t.head.replace(/:$/, '') + ' · generated ' + D.generated,
+        headers: ['Measure', 'Files', 'Detail'],
+        rows: [
+          ...(mmseaCovered(SUM.month)
+              ? SUM_FT.map(([k, lbl]) => [lbl + ' files', s.ft[k].n,
+                                          s.ft[k].clients + ' clients'])
+              : [['MMSEA response files', '', 'not covered before '
+                  + monthLabel(MMSEA_FROM + '-01')]]),
+          ['MSPI file sets', s.sets, s.det + ' DET + ' + s.prm + ' PRM, '
+                                     + s.mspiClients + ' clients'],
+        ],
+        note: t.lines.join(' · '),
+        rowsPerSlide: 8, fontSz: 1200,
       };
     }
     if (S.tab === 'msr') {
