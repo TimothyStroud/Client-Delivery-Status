@@ -55,6 +55,19 @@ import re
 def highlight_test(filename):
     return re.sub(r'(?i)(test)', r'<span style="background-color: yellow;">\1</span>', filename)
 
+# MSP / NMSP (Non-MSP) / HEW files are the ones Data Ops cares about most, so
+# flag them in green. 'msp' also covers NMSP / Non_MSP / MSPCOBMA / GHPMSP, and
+# a plain substring test is used on purpose: the token turns up mid-word
+# (e.g. 'GHPMSP', 'C9967MSP') where a word-boundary regex would miss it.
+MSP_FAMILY_RE = re.compile(r'(?i)(msp|hew)')
+
+def is_msp_family(filename):
+    return bool(MSP_FAMILY_RE.search(filename or ''))
+
+def highlight_msp_family(html):
+    return ('<span style="background-color:#c6efce;color:#0b5c2e;font-weight:bold;">'
+            f'{html}</span>')
+
 # When RAMP doesn't report a ClientName, infer it from the file's location/job.
 # Folder slugs (lowercase) -> display names matching the real ClientName values
 # so inferred files merge into the same client group.
@@ -133,11 +146,15 @@ def derive_client(item):
 
 by_client = {}
 any_inferred = False
+any_msp = False
 for f in new_files:
     client, inferred = derive_client(f)
     f['_inferred_client'] = inferred
+    f['_msp_family'] = is_msp_family(f.get('File'))
     any_inferred = any_inferred or inferred
+    any_msp = any_msp or f['_msp_family']
     by_client.setdefault(client, []).append(f)
+msp_count = sum(1 for f in new_files if f['_msp_family'])
 
 rows = []
 for client, files in sorted(by_client.items()):
@@ -150,6 +167,8 @@ for client, files in sorted(by_client.items()):
         except Exception:
             dt = ts
         fname = highlight_test(fi['File'])
+        if fi.get('_msp_family'):
+            fname = highlight_msp_family(fname)
         if fi.get('_inferred_client'):
             fname += ' <span style="color:#c47f00;" title="client inferred from path/job/source">&dagger;</span>'
         job = fl.get('JobName') or 'N/A'
@@ -162,10 +181,11 @@ for client, files in sorted(by_client.items()):
 
 body = f"""
 <html><body style="font-family:Calibri,Arial,sans-serif;font-size:14px;">
-<p>RAMP detected <strong>{len(new_files)}</strong> new unconfigured file(s) as of {datetime.now().strftime("%m/%d/%Y %I:%M %p")}.</p>
+<p>RAMP detected <strong>{len(new_files)}</strong> new unconfigured file(s) as of {datetime.now().strftime("%m/%d/%Y %I:%M %p")}.{f' <strong>{msp_count}</strong> appear to be MSP / NMSP / HEW files.' if any_msp else ''}</p>
 <table cellpadding="4" cellspacing="0" style="border-collapse:collapse;">
 {''.join(rows)}
 </table>
+{'<p style="font-size:0.9em;"><span style="background-color:#c6efce;color:#0b5c2e;font-weight:bold;">Green</span> = appears to be an MSP / NMSP / HEW file.</p>' if any_msp else ''}
 {'<p style="color:#c47f00;font-size:0.9em;">&dagger; Client name not reported by RAMP &mdash; inferred from the file&rsquo;s path / job / source.</p>' if any_inferred else ''}
 <br><p style="color:#555;">Log in to RAMP to configure: <a href="http://ramp/Ramp/UnconfiguredFiles">View Unconfigured Files</a></p>
 </body></html>
