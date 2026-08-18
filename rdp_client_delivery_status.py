@@ -21,6 +21,7 @@ Client name suffix conventions (matching the All Clients tab key):
   - M -  Monthly client prefix (placed dynamically on day ticket fired / snap completed)
 """
 import calendar
+import glob as globmod
 import json
 import os
 import re
@@ -580,6 +581,18 @@ LOAD_NAME_REQUIRED = {
     # only; NCStateAetna also keeps its own weekly delivery snap.
     "AetnaRCE":          ("310 etl load",),
     "NCStateAetna":      ("310 etl load", "ncstateaetna 0110 snap"),
+    # NCState (MONTHLY, per user 2026-08-18: "NCState did not Load, the Stage job
+    # was kicked off, but no files were found"). Same bug class as BCBSSC:
+    # build_snap_index indexes 'NC State 0100 Stage' with kind="load", so the
+    # Resolved 3-second Stage card (QueueId 1425026, 8/17 12:46) satisfied
+    # load_this_month and determine_monthly step 4b painted "L" on the expected
+    # (8/14) cell while nothing had loaded. Restricting to the real load job means
+    # the cell reads "No Data" until 'NC State 0110 Load' actually runs — and
+    # flips to "L" on its own the moment it does. NCState's ✓ is unaffected: it
+    # comes from the RAMP snap-endpoint (kind="snap"), which _load_name_allowed
+    # bypasses for SNAP_ONLY_CLIENTS. The full 'nc state' prefix also keeps the
+    # NCStateRx sibling jobs out (see CLIENT_PRIMARY_KEY_OVERRIDE).
+    "NCState":           ("nc state 0110 load",),
 }
 
 # Soft, self-clearing cell labels — {(client, day): label}. Unlike
@@ -596,6 +609,56 @@ SOFT_OVERRIDES = {
     ("AetnaRCE",     date(2026, 8, 13)): "Delayed",
     ("NCStateAetna", date(2026, 8, 13)): "Delayed",
 }
+
+# FILE-GATED overrides — {(client, day): (marker, directory, filename_glob)}.
+# The marker is pinned on the cell for as long as the gate file is ABSENT from
+# `directory`; the moment a file matching `filename_glob` appears there the entry
+# stops applying and the cell resolves normally. Self-clearing, so unlike a
+# MANUAL_OVERRIDES pin it never needs to be deleted by hand.
+#
+# Use this whenever the user says "keep showing X until <file> loads" — the
+# client's landing folders already record load progress (e.g. the AetnaHRP claims
+# pipeline moves each extract from Claim\ToLoad → Claim\Load → Claim\Loaded, or
+# → Claim\BadFile on a reject), so "did it load?" is a directory test.
+#
+# 2026-08-18 per user: "AetnaHRP for 8/17 is also a Load Failure and should
+# remain as such until the \\ETL2\Clients\AetnaHRP\Data\Claim\
+# VENDOR.CB-CLAIMS-EXTRACT.260816 file loads." The 8/17 'Aetna 0110 HRP Load'
+# (QueueId 1425253) FAILED 18:34→22:36, the 0100 Stage retry failed 22:39 and the
+# 'Aetna HRP Delivery Ticket' job failed 8/18 07:51 — but the 8/17 Monday cell was
+# reading "✓" because its Sat/Sun lookback found the 8/16 05:18 'Aetna 0120 HRP
+# Snap' (which belongs to the PREVIOUS file, the .260815 extract now sitting in
+# Claim\Loaded). Gate on the .260816 extract reaching Claim\Loaded.
+FILE_GATED_OVERRIDES = {
+    ("AetnaHRP", date(2026, 8, 17)): (
+        "Load Failure",
+        r"\\ETL2\Clients\AetnaHRP\Data\Claim\Loaded",
+        "VENDOR.CB-CLAIMS-EXTRACT.260816*",
+    ),
+}
+
+# Cache so one report run does a single directory probe per (dir, pattern) —
+# these are UNC paths and every month tab calls place() for the same cell.
+_FILE_GATE_CACHE = {}
+
+
+def file_gate_satisfied(directory, pattern):
+    """True once a file matching `pattern` exists in `directory`.
+
+    An unreachable/missing directory counts as NOT satisfied, so a network
+    hiccup leaves the pinned marker in place rather than silently clearing it
+    (the safe direction — the cell keeps reporting the known-bad state).
+    """
+    key = (directory, pattern)
+    if key not in _FILE_GATE_CACHE:
+        try:
+            hit = bool(globmod.glob(os.path.join(directory, pattern)))
+        except OSError:
+            hit = False
+        if not hit and not os.path.isdir(directory):
+            print(f"[warn] file gate: directory unreachable — {directory}")
+        _FILE_GATE_CACHE[key] = hit
+    return _FILE_GATE_CACHE[key]
 
 # Manual cell overrides — (client, scheduled_date) → marker. Marker can be:
 #   - a date object (rendered as MM/DD/YY)
@@ -1047,10 +1110,25 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     # late on 7/6, now shown as a "BCBSFL Elig (June)" row in ADDITIONAL_ENTRIES).
     # 2026-07-15: HumanaRx (monthly, snap/load-as-delivery) was auto-rendering ✓,
     # but per user it is still in Staging and has NOT loaded. 2026-07-17: per user
-    # HumanaRx Stage is in RAMP, not loading — change to "No Data". Remove/replace
-    # once it actually loads and snaps.
+    # HumanaRx Stage is in RAMP, not loading — change to "No Data".
+    # 2026-08-18: kept only to stop July auto-resolving to a false ✓ off the
+    # lingering Ready 'HumanaRx 0100 Stage' card. The row itself no longer renders
+    # — HumanaRx is in MONTHLY_ONLY_WHEN_ACTIVE, so a "No Data" month is dropped
+    # from the calendar entirely instead of showing a placeholder.
     "HumanaRx": (date(2026, 7, 15), "No Data"),
 }
+
+# Monthly clients that appear ONLY when something actually happened — no
+# placeholder row on a fixed expected day. A month whose marker resolves to
+# "No Data" / blank / "Inactive" is dropped from the calendar; "L", "✓", a cert
+# date and "Load Failure" all still render, on whatever day the activity landed.
+#
+# 2026-08-18 per user: "Change HumanaRx only show up when Loading starts, and not
+# as a set date on the calendar." HumanaRx has no MONTHLY_EXPECTED_DAY_RANGE entry,
+# so determine_monthly was falling back to the generic 15th (rendered 8/17) and
+# parking a pink "No Data" there every month. Same spirit as the OptumPBMRx
+# per-RAW rows and ADHOC_MONTHLY_SNAP_CLIENTS: only-when-present.
+MONTHLY_ONLY_WHEN_ACTIVE = {"HumanaRx"}
 
 # Per-(client, year, month) marker override for monthly clients. Unlike
 # MONTHLY_PLACEMENT_OVERRIDES (one entry per client), this keys on the specific
@@ -1135,6 +1213,13 @@ ADDITIONAL_ENTRIES = [
     # FORCED_INACTIVE, so the regular Monday cells continue to read "Inactive"
     # and no HealthNetCA activity surfaces anywhere. Re-add a labeled row here if
     # the re-load is picked back up.
+    # 2026-08-18 per user: "HealthNetCA for 8/10 is only for (3/20-3/27), the
+    # 3/27-4/3 load failed." The 3/27-4/3 window is excluded from the 8/10 cell
+    # label via HEALTHNETCA_FAILED_RANGES; record the failure on its own row, on
+    # the day the files were picked up (8/14). Remove once that week reloads
+    # successfully (and drop it from HEALTHNETCA_FAILED_RANGES so the label
+    # picks it up again).
+    ("weekly", date(2026, 8, 14), "HealthNetCA (3/27-4/3)", "Load Failure", True, None),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
@@ -1226,11 +1311,20 @@ MONTHLY_CERT_ONLY_CLIENTS = {
 # Monthly clients that should show an empty Date cell (rather than "No Data")
 # until the cert lands. Per-user: "M - BCBSKSMedAdv had data, so have it blank
 # each month until the ticket, Snap, Certification process finish on/near 15th".
-MONTHLY_BLANK_UNTIL_CERT = {"BCBSKSMedAdv"}
+#
+# ElixirRx added 2026-08-18 per user: "Change ElixirRx to not say No Data." It is
+# already in MONTHLY_CERT_ONLY_CLIENTS, so this returns "" on its expected day
+# (the Tuesday of the 10th-15th week) instead of the pink "No Data" it was showing
+# from August forward. May/June/July still read "L" via their
+# MONTHLY_MONTH_MARKER_OVERRIDES entries (step 1a runs before this branch), and a
+# real DHT cert always wins (step 1).
+MONTHLY_BLANK_UNTIL_CERT = {"BCBSKSMedAdv", "ElixirRx"}
 
 # Monthly clients whose "No Data" should always be shaded regardless of the
-# 7-day grace window (e.g. ElixirRx hasn't received data in a long time).
-FORCE_SHADE_NO_DATA = {"ElixirRx", "MedicalMutualMHS"}
+# 7-day grace window. ElixirRx removed 2026-08-18 — it no longer renders "No
+# Data" at all (see MONTHLY_BLANK_UNTIL_CERT), so the force-shade would only
+# have pink-shaded a blank cell into a stray "!".
+FORCE_SHADE_NO_DATA = {"MedicalMutualMHS"}
 
 # Clients that should be rendered with bold label (no fill).
 BOLD_LABEL = {"Aetna NMSP - MMSEA", "AetnaMMSEA"}
@@ -1309,6 +1403,20 @@ HEALTHNETCA_CLAIM_TYPE  = 6
 HEALTHNETCA_BACKFILL_FROM = date(2026, 7, 27)
 HEALTHNETCA_CLAIM_RANGE_RE = re.compile(
     r"HNT_VENDOR_CLAIM.*?_(\d{8})_(\d{8})", re.IGNORECASE)
+# Claims windows that reached tblTape but whose LOAD failed / was backed out.
+# Excluded from the cell label so the week reads only what actually delivered.
+# tblTape gets a row when the file is picked up, not when it successfully loads
+# (there is no ProcessStatus on this legacy table), so a failed load is
+# indistinguishable from a good one here and has to be listed by hand.
+#
+# 2026-08-18 per user: "HealthNetCA for 8/10 is only for (3/20-3/27), the
+# 3/27-4/3 load failed." Both weeks landed in the 8/10 week (3/20-3/27 on 8/13,
+# 3/27-4/3 on 8/14) and healthnetca_range_labels merged the contiguous pair into
+# a single "(3/20-4/3)" span. The failed week is surfaced on its own labeled
+# "HealthNetCA (3/27-4/3)" → "Load Failure" row in ADDITIONAL_ENTRIES.
+HEALTHNETCA_FAILED_RANGES = {
+    (date(2026, 3, 27), date(2026, 4, 3)),
+}
 
 # Override display name for a client (the label only; client_key stays the same).
 CLIENT_DISPLAY_NAME = {
@@ -1395,7 +1503,30 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     "Kaiser_AmbN":            (21, 21),
     "Kaiser_AmbNW":           (21, 21),
     "Kaiser_AmbS":            (21, 21),
-    # HumanaRx: no fixed expected day — placed on snap date or today when loading.
+    # HumanaRx: no fixed expected day — see MONTHLY_ONLY_WHEN_ACTIVE (the row is
+    # dropped entirely until a load starts).
+}
+
+# Per-(client, year, month) PLACEMENT-DAY override for monthly clients — moves the
+# row to a different calendar day for one month without touching the marker logic.
+# Overrides both the placeholder and expected_date in determine_monthly, so a
+# cert-only client's "L" / "No Data" / cert date all render on the given day.
+# Use this (not MONTHLY_PLACEMENT_OVERRIDES) when the DELIVERY DATE slipped but the
+# marker should keep resolving from live data.
+#
+# 2026-08-18 per user: "The Kaiser Amb files will be delivered on 8/20. Please move
+# them from 8/13." All seven Kaiser_Amb feeds anchor to the closest Thursday to the
+# 15th (8/13 for August); this shifts August one week out to Thu 8/20. The markers
+# stay live — the 8/18 00:46 Stage → 0110 Load runs keep them at "L" (Kaiser_Amb*
+# are MONTHLY_CERT_ONLY + SNAP_KIND_ONLY) until each feed's DHT cert lands.
+MONTHLY_PLACEMENT_DAY_OVERRIDES = {
+    ("Kaiser_AmbCO", 2026, 8): date(2026, 8, 20),
+    ("Kaiser_AmbGA", 2026, 8): date(2026, 8, 20),
+    ("Kaiser_AmbHI", 2026, 8): date(2026, 8, 20),
+    ("Kaiser_AmbM",  2026, 8): date(2026, 8, 20),
+    ("Kaiser_AmbN",  2026, 8): date(2026, 8, 20),
+    ("Kaiser_AmbNW", 2026, 8): date(2026, 8, 20),
+    ("Kaiser_AmbS",  2026, 8): date(2026, 8, 20),
 }
 
 # Spread monthly clients across the Mon-Fri week of their anchor day.
@@ -2404,6 +2535,9 @@ def fetch_healthnetca_claim_loads(since=None):
             start = datetime.strptime(m.group(1), "%Y%m%d").date()
             end   = datetime.strptime(m.group(2), "%Y%m%d").date()
         except ValueError:
+            continue
+        # A claims window whose load failed / was backed out must not label a cell.
+        if (start, end) in HEALTHNETCA_FAILED_RANGES:
             continue
         key = (load_date, start, end)
         if key in seen:
@@ -3768,7 +3902,36 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
     # the weekly cycle — suppress the regular L (see resolve_marker) and surface
     # the backfill on its own "CVSPBMRx (Ad Hoc)" row instead. Per user 2026-07-06.
     cvspbm_adhoc = cvspbm_adhoc or []
-    cvspbm_adhoc_loading = any(not a.get("loaded") for a in cvspbm_adhoc)
+    # 2026-08-18 per user: "CVSPBMRx is still loading the Ad Hoc file, not the 8/17
+    # file." The tape-only test above wasn't enough: the Ad Hoc's tape row (TapeID
+    # 346, the 147 GB RAW_MEMBR_ELIG_20260709) already reads ProcessStatus 50 while
+    # its 'CVS PBM RX 0110 Load' card (JobId 1942, QueueId 1413143) is STILL
+    # Ready — started 7/30 11:19 and never finished. So no Ad Hoc was "in flight"
+    # by the tape test, the L wasn't suppressed, and is_loading_today stamped it on
+    # the 8/17 Monday cell as if this week's file were loading.
+    #
+    # An in-flight load card that STARTED BEFORE the current week can't be this
+    # week's delivery — it's a carry-over/backfill still working an older file. Its
+    # "L" belongs on the Ad Hoc row, not the weekly cell. Self-clearing: the moment
+    # that card finishes (or a load starts this week) the weekly "L" resumes.
+    cur_week_monday = today - timedelta(days=today.weekday())
+    _cvs_load_job_ids = {
+        j.get("JobId") for j in find_matching_jobs("CVSPBMRx", ramp_jobs)
+        if j.get("Enabled") == 1
+        and "load" in (j.get("JobName") or "").lower()
+        and "stage" not in (j.get("JobName") or "").lower()
+    }
+    cvspbm_carryover_load = None
+    for q in ramp_queue:
+        if (q.get("JobId") in _cvs_load_job_ids
+                and q.get("Status") in ("Ready", "Running")):
+            sd = parse_dt(q.get("StartDate"))
+            if sd and sd.date() < cur_week_monday:
+                if cvspbm_carryover_load is None or sd > cvspbm_carryover_load:
+                    cvspbm_carryover_load = sd
+    cvspbm_tape_adhoc_loading = any(not a.get("loaded") for a in cvspbm_adhoc)
+    cvspbm_adhoc_loading = (cvspbm_tape_adhoc_loading
+                            or cvspbm_carryover_load is not None)
 
     # CVSPBMRx weekly ✓ is attributed by the file's DATA date (from the FileName /
     # '0100 Stage' job), NOT by when the load/snap finished — so a late load lands
@@ -4183,6 +4346,12 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             else:
                 placeholder = next_monday_if_weekend(placeholder)
             placeholder = _apply_weekday_spread(placeholder, client)
+        # Per-month placement-day override (MONTHLY_PLACEMENT_DAY_OVERRIDES): the
+        # delivery date slipped for this one month, but every marker still resolves
+        # from live data. Applied to placeholder AND expected_date below.
+        day_ov = MONTHLY_PLACEMENT_DAY_OVERRIDES.get((client, year, month))
+        if day_ov is not None:
+            placeholder = day_ov
         # 0) Forced-inactive clients always show "Inactive" on expected day
         if client in FORCED_INACTIVE:
             return placeholder, "Inactive"
@@ -4231,6 +4400,8 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             if expected_date.month != month:
                 expected_date = date(year, month, calendar.monthrange(year, month)[1])
             expected_date = _apply_weekday_spread(expected_date, client)
+        if day_ov is not None:
+            expected_date = day_ov
 
         # 1) Certified in THIS month → place on that month's actual cert date.
         # Per-month lookup (NOT the global latest_cert) so a PAST month surfaces
@@ -4422,6 +4593,14 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             mov = MANUAL_OVERRIDES.get((client, day))
             if mov is not None:
                 marker_override = mov
+                from_manual = True
+        # File-gated override: pin the marker only while the named file has not
+        # landed in the client's "Loaded" folder yet. Self-clearing — no manual
+        # cleanup once the load completes. MANUAL_OVERRIDES still outranks it.
+        if marker_override is None:
+            fgo = FILE_GATED_OVERRIDES.get((client, day))
+            if fgo is not None and not file_gate_satisfied(fgo[1], fgo[2]):
+                marker_override = fgo[0]
                 from_manual = True
         if marker_override is not None:
             marker = marker_override
@@ -4649,9 +4828,17 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             or (c in MONTHLY_PLACEMENT_OVERRIDES
                 and MONTHLY_PLACEMENT_OVERRIDES[c][0].year == year
                 and MONTHLY_PLACEMENT_OVERRIDES[c][0].month == month)
+            # A per-month placement-day override is an explicit instruction about
+            # WHICH DAY this month's row sits on — don't let the sticky cache drag
+            # it back to the auto-computed day.
+            or (c, year, month) in MONTHLY_PLACEMENT_DAY_OVERRIDES
         )
         d, marker = apply_sticky_monthly(c, d, marker, year, month, today, told_otherwise)
         if d.month != month:
+            continue
+        # Only-when-active clients (HumanaRx): no placeholder row on a fixed
+        # expected day — drop the month entirely unless something happened.
+        if c in MONTHLY_ONLY_WHEN_ACTIVE and marker in ("", "No Data", "Inactive"):
             continue
         place(monthly, "monthly", c, d, marker_override=marker)
 
@@ -4933,6 +5120,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # load job finishes and snaps (mk flips to ✓).
         ah_highlight = "yellow" if mk == "L" else None
         weekly[cell].append(("CVSPBMRx (Ad Hoc)", mk, False, ah_highlight))
+    # Carry-over in-flight load with no un-loaded tape row to hang the row off
+    # (the Ad Hoc file's tape row already reads ProcessStatus 50 but its RAMP load
+    # card is still Ready/Running — see cvspbm_carryover_load above). The regular
+    # Monday "L" is suppressed for it, so surface it here instead of losing the
+    # in-flight signal entirely. Clears itself when the card finishes.
+    if (cvspbm_carryover_load is not None and not cvspbm_tape_adhoc_loading
+            and today in all_days and (today, "L") not in _cvspbm_ah_seen):
+        _cvspbm_ah_seen.add((today, "L"))
+        weekly[today].append(("CVSPBMRx (Ad Hoc)", "L", False, "yellow"))
 
     # One-off (per user 2026-06-11): Kaiser_AmbM runs a SECOND June cycle — it
     # certified 6/11, and a new monthly load lands ~6/18. determine_monthly only
