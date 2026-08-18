@@ -1865,7 +1865,12 @@ __EXPORT_CSS__
   const SUM = { month: sumMonths[0] || '' };
   if (SUM.month) $('sum-month').value = SUM.month;
 
+  const sumCache = {};
   function sumFor(ym) {
+    if (sumCache[ym]) return sumCache[ym];
+    return sumCache[ym] = sumForCalc(ym);
+  }
+  function sumForCalc(ym) {
     const loads = D.loads.filter(l => (l.start || '').slice(0, 7) === ym);
     const files = MS.filter(r => (r.loaded || '').slice(0, 7) === ym);
     const ft = {};
@@ -1889,18 +1894,36 @@ __EXPORT_CSS__
     };
   }
 
-  // "+3 vs April" / "no change vs April" - deliberately in muted ink with no
-  // red/green: more files loaded is neither good nor bad, so a direction colour
-  // would assert a judgement the data doesn't support.
-  function deltaLine(cur, ym, pick) {
-    const i = sumMonths.indexOf(ym);
-    const prev = i >= 0 && i + 1 < sumMonths.length ? sumMonths[i + 1] : null;
-    if (!prev) return '';
-    const was = pick(sumFor(prev));
-    const d = cur - was;
-    const arrow = d > 0 ? '▲ +' : d < 0 ? '▼ −' : '';
+  // "+3 vs 12-mo avg 8.5" - deliberately in muted ink with no red/green: more
+  // files loaded is neither good nor bad, so a direction colour would assert a
+  // judgement the data doesn't support.  The baseline is the MEAN of the 12
+  // calendar months before this one, not just the previous month, so one quiet
+  // or heavy month doesn't read as a trend.  A month with no files counts as a
+  // real zero, but only inside the window the data covers - earlier than that
+  // a zero is absence of data, not absence of files, so it's left out and the
+  // label says how many months the average actually spans.
+  const AVG_N = 12;
+  const minMonth = sumMonths.length ? sumMonths[sumMonths.length - 1] : '';
+  function baseMonths(ym, from) {
+    const out = [];
+    let y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+    for (let i = 0; i < AVG_N; i++) {
+      if (--m === 0) { m = 12; y--; }
+      const p = y + '-' + String(m).padStart(2, '0');
+      if (p >= (from || minMonth)) out.push(p);
+    }
+    return out;
+  }
+  const r1 = n => Math.round(n * 10) / 10;
+
+  function deltaLine(cur, ym, pick, from) {
+    const ms = baseMonths(ym, from);
+    if (!ms.length) return '';
+    const was = ms.reduce((s, m) => s + pick(sumFor(m)), 0) / ms.length;
+    const d = r1(cur - was);
+    const arrow = d > 0 ? '▲ +' : '▼ −';
     return (d === 0 ? 'no change' : arrow + nf(Math.abs(d)))
-           + ' vs ' + MONTH_FULL[Number(prev.slice(5, 7)) - 1];
+           + ' vs ' + ms.length + '-mo avg ' + nf(r1(was));
   }
 
   // MSPI reaches back to 2017 but the MMSEA half of this dashboard only loads
@@ -1943,8 +1966,9 @@ __EXPORT_CSS__
       '</h2>' +
       '<p class="sum-sub">Files received and loaded &middot; MMSEA response files '
         + 'from cmse_new, MSPI files from MSP'
+        + ' &middot; each tile compares with the average of the 12 months before it'
         + (partial ? ' &middot; the month is still in progress, so the comparison '
-                     + 'with last month is against a full month' : '') + '</p>' +
+                     + 'is against an average of full months' : '') + '</p>' +
 
       '<div class="sum-group"><h3>MMSEA response files' +
         (mmseaCovered(ym) ? `<span class="tot">${nf(s.mmsea)} total</span>` : '') +
@@ -1952,7 +1976,7 @@ __EXPORT_CSS__
       (mmseaCovered(ym)
         ? '<div class="tiles">' + SUM_FT.map(([k, lbl]) => tile(s.ft[k].n, lbl + ' files',
             s.ft[k].clients + (s.ft[k].clients === 1 ? ' client' : ' clients'),
-            deltaLine(s.ft[k].n, ym, x => x.ft[k].n))).join('') + '</div>'
+            deltaLine(s.ft[k].n, ym, x => x.ft[k].n, MMSEA_FROM))).join('') + '</div>'
         : '<p class="sum-sub">Not covered &mdash; this dashboard loads MMSEA '
           + 'response files from ' + esc(monthLabel(MMSEA_FROM + '-01'))
           + ' forward. The MSPI side goes back further.</p>') +
