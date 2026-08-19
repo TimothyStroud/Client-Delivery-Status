@@ -550,6 +550,13 @@ LOAD_NAME_REQUIRED = {
     # already excluded a Ready/Running stage, but the snap-index activity path
     # had no stage guard, so the narrower keyword is the fix.
     "CenteneFidelisRx":  ("masterload", "claims load"),
+    # CenteneFidelis (Medical) 2026-08-19 per user: "CenteneFidelis Medical is
+    # not Loading, it is currently Staging." Same fix as the Rx sibling — the
+    # completed 'Centene Fidelis Medical 0110 Eligibility Load' sat in the snap
+    # index as a "load" kind entry, so the cert-client "activity this week -> L"
+    # path painted an L while only 'Medical 0120 Claims Stage' was Ready.
+    # Delivery = '0130 Claims Load' (or a MasterLoad variant).
+    "CenteneFidelis":    ("masterload", "claims load"),
     # AetnaQNXT / AetnaQNXTRx: narrowed to the Masterload Load step 2026-06-08
     # so 'Masterload 0100 Stage' no longer trips L via the activity path.
     "AetnaQNXTRx":       ("masterload 0110 load",),
@@ -615,6 +622,10 @@ LOAD_NAME_REQUIRED = {
 SOFT_OVERRIDES = {
     ("AetnaRCE",     date(2026, 8, 13)): "Delayed",
     ("NCStateAetna", date(2026, 8, 13)): "Delayed",
+    # 2026-08-19 per user: CenteneFidelis Medical's Wednesday cell is not
+    # loading yet — 'Centene Fidelis Medical 0120 Claims Stage' is still Ready.
+    # Self-clears the moment the Claims Load lands / the week certifies.
+    ("CenteneFidelis", date(2026, 8, 19)): "Staging",
 }
 
 # FILE-GATED overrides — {(client, day): (marker, directory, filename_glob)}.
@@ -1222,13 +1233,12 @@ ADDITIONAL_ENTRIES = [
     # FORCED_INACTIVE, so the regular Monday cells continue to read "Inactive"
     # and no HealthNetCA activity surfaces anywhere. Re-add a labeled row here if
     # the re-load is picked back up.
-    # 2026-08-18 per user: "HealthNetCA for 8/10 is only for (3/20-3/27), the
-    # 3/27-4/3 load failed." The 3/27-4/3 window is excluded from the 8/10 cell
-    # label via HEALTHNETCA_FAILED_RANGES; record the failure on its own row, on
-    # the day the files were picked up (8/14). Remove once that week reloads
-    # successfully (and drop it from HEALTHNETCA_FAILED_RANGES so the label
-    # picks it up again).
-    ("weekly", date(2026, 8, 14), "HealthNetCA (3/27-4/3)", "Load Failure", True, None),
+    # 2026-08-18: a `HealthNetCA (3/27-4/3)` -> "Load Failure" row sat on 8/14.
+    # REMOVED 2026-08-19 per user: that week reloaded and CERTIFIED (DHT
+    # HealthNetCA CertTimestamp 2026-08-19 14:57), and belongs on the 8/17 cell.
+    # No labeled row is needed — the regular weekly Monday row picks the cert up
+    # automatically (8/19 falls in the Mon-Fri week of 8/17) and
+    # HEALTHNETCA_RANGE_LABEL_OVERRIDES tags that cell "(3/27-4/3)".
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
@@ -1423,8 +1433,25 @@ HEALTHNETCA_CLAIM_RANGE_RE = re.compile(
 # 3/27-4/3 on 8/14) and healthnetca_range_labels merged the contiguous pair into
 # a single "(3/20-4/3)" span. The failed week is surfaced on its own labeled
 # "HealthNetCA (3/27-4/3)" → "Load Failure" row in ADDITIONAL_ENTRIES.
+#
+# 2026-08-19: that 3/27-4/3 week reloaded and certified, but it is still kept
+# here so it doesn't merge back into the 8/10 label — per user it belongs on the
+# 8/17 cell, which HEALTHNETCA_RANGE_LABEL_OVERRIDES supplies. (The set is
+# really "ranges excluded from their own load-week label".)
 HEALTHNETCA_FAILED_RANGES = {
     (date(2026, 3, 27), date(2026, 4, 3)),
+}
+
+# {cell_monday: " (M/D-M/D)"} — force the backfill range shown on a given weekly
+# cell, overriding what healthnetca_range_labels() derives from tblTape load
+# dates. Needed when a week's claims files were picked up in one calendar week
+# but the delivery is recorded on a later cell.
+#
+# 2026-08-19 per user: "remove the Load Failure for HealthNetCA (3/27-4/3) and
+# mark it as certified and place on 8/17 cell." The files loaded 8/14 (the 8/10
+# week) but the successful reload certified 8/19, so the 8/17 cell carries it.
+HEALTHNETCA_RANGE_LABEL_OVERRIDES = {
+    date(2026, 8, 17): " (3/27-4/3)",
 }
 
 # Override display name for a client (the label only; client_key stays the same).
@@ -2584,6 +2611,7 @@ def healthnetca_range_labels(claim_loads):
                 merged.append((start, end))
         out[monday] = " ({})".format(
             ", ".join(f"{s.month}/{s.day}-{e.month}/{e.day}" for s, e in merged))
+    out.update(HEALTHNETCA_RANGE_LABEL_OVERRIDES)
     return out
 
 
