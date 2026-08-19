@@ -841,6 +841,8 @@ MANUAL_OVERRIDES = {
     ("AetnaHRP",      date(2026, 7, 7)): "✓",
     ("AetnaHRP",      date(2026, 7, 8)): date(2026, 7, 8),
     ("AetnaHRP",      date(2026, 7, 9)): "✓",
+    # 2026-08-19 per user: mark AetnaHRP's 8/17 cell with a checkmark.
+    ("AetnaHRP",      date(2026, 8, 17)): "✓",
     # 2026-07-29: TuftsMedPref (weekly Mon) → Inactive 7/6/26 forward per user
     # (deliveries stopped). Handled by FORCED_INACTIVE_FROM now; the old 7/13
     # cert / 7/6 "No Data" pins were removed so resolve_marker returns "Inactive".
