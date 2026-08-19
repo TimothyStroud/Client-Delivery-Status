@@ -440,6 +440,13 @@ FORCED_INACTIVE_FROM = {
     # Oscar (weekly Wed) → Inactive 7/22/26 forward per user 2026-07-29. Earlier
     # cells keep their history (incl. the 7/1/7/8/7/15 → 7/15 cert overrides).
     "Oscar":           date(2026, 7, 22),
+    # TuftsRx → Inactive 8/17/26 forward per user 2026-08-19: deliveries stop for
+    # an implementation of HarvardPilgrim data. TuftsRx has BOTH a weekly Monday
+    # row and a MONTHLY row, so the cutoff is honored in resolve_marker (weekly
+    # cells 8/17 onward) and in determine_monthly (Sept 2026 forward; the August
+    # monthly cell anchors to the 10th, before the cutoff, so it keeps its real
+    # cert/L state). Everything through Mon 8/10 keeps its history.
+    "TuftsRx":         date(2026, 8, 17),
 }
 
 # Clients whose load is running but snap step is disabled in RAMP — show
@@ -4354,6 +4361,15 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             placeholder = day_ov
         # 0) Forced-inactive clients always show "Inactive" on expected day
         if client in FORCED_INACTIVE:
+            return placeholder, "Inactive"
+        # 0-) Date-gated inactivation (FORCED_INACTIVE_FROM): once the monthly
+        # placement day is on/after the client's cutoff, the monthly row reads
+        # "Inactive"; earlier months keep their real cert history. Per user
+        # 2026-08-19 (TuftsRx → Inactive 8/17/26 forward for the HarvardPilgrim
+        # implementation), so Aug 2026 (anchored to the 10th) still renders live
+        # state and Sept 2026 forward goes Inactive.
+        fi_from_m = FORCED_INACTIVE_FROM.get(client)
+        if fi_from_m and placeholder >= fi_from_m:
             return placeholder, "Inactive"
         # 0a) Explicit one-off placement override (per-client day + marker).
         # Highest precedence so EDW feeds can stay on 5/20 even though they
