@@ -31,6 +31,17 @@ TO_ADDR   = 'DataOperations@machinify.com; RDPOperations@Machinify.com'
 
 SLA_DAYS = 3
 LOAD_JOB_NAME = 'Emblem Facets 0110 Load'
+LOAD_JOB_ID = 2052          # ramp.Queue JobId for LOAD_JOB_NAME
+
+# The load re-runs when an attempt Fails/Resolves, so a single monthly cycle can
+# hold several runs a day or two apart. The SLA clock must anchor on the FIRST
+# attempt of the cycle, not the latest -- otherwise every rework slides the
+# deadline forward (a repeatedly-failing load would never breach) and the
+# anchor-MATCH_BUFFER cutoff hides RESP files already uploaded by earlier
+# attempts. Runs within this many days of each other are ONE cycle; real cycles
+# are ~a month apart so two can't merge. (Same idea as OPTUM_CYCLE_WINDOW_DAYS
+# in loadsla_check.py.)
+CYCLE_WINDOW_DAYS = 4
 
 # Only run during the monthly window (per user 2026-06-26): the 15th-20th of the
 # month, inclusive. The Scheduled Task still fires daily 9am/2pm, but the script
@@ -51,23 +62,67 @@ EXPECTED = [
 MATCH_BUFFER = timedelta(hours=6)
 
 
-def get_load_start():
-    """Return datetime of the most recent 'Emblem Facets 0110 Load' start."""
+def load_run_starts_sql():
+    """All 'Emblem Facets 0110 Load' start datetimes from ramp.Queue, newest first.
+
+    SQL rather than the REST queue: /api/Ramp/Queue/List only holds a short
+    rolling window (it had dropped the 8/17 attempt of the August 2026 cycle by
+    the 19th), and clustering needs every attempt in the cycle.
+    """
+    q = (f"SELECT StartDate FROM ramp.Queue WHERE JobId={LOAD_JOB_ID} "
+         f"AND StartDate IS NOT NULL ORDER BY StartDate DESC")
+    out = subprocess.run(
+        ['sqlcmd', '-S', 'TRGUTIL10', '-d', 'RAMP', '-E', '-W', '-h', '-1',
+         '-s', '\t', '-Q', q],
+        capture_output=True, text=True)
+    starts = []
+    for line in out.stdout.splitlines():
+        s = line.strip()
+        if not s or s == 'NULL' or s.startswith('(') or s.startswith('Msg '):
+            continue
+        try:
+            starts.append(datetime.fromisoformat(s.replace(' ', 'T')))
+        except ValueError:
+            continue
+    starts.sort(reverse=True)
+    return starts
+
+
+def load_run_starts_rest():
+    """Fallback: load start datetimes from the RAMP REST queue, newest first."""
     out = subprocess.run(
         ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Queue/List'],
         capture_output=True, text=True)
     data = json.loads(out.stdout)
     d = data['Data']
     items = d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else d
-    best = None
+    starts = []
     for i in items:
         xml = i.get('JobXml', '') or ''
         m = re.search(r'jobname="([^"]+)"', xml)
         if m and m.group(1) == LOAD_JOB_NAME and i.get('StartDate'):
-            sd = datetime.fromisoformat(i['StartDate'])
-            if best is None or sd > best:
-                best = sd
-    return best
+            starts.append(datetime.fromisoformat(i['StartDate']))
+    starts.sort(reverse=True)
+    return starts
+
+
+def get_load_start():
+    """Return the SLA anchor: the FIRST load attempt of the current cycle.
+
+    Walks the run starts newest->oldest and keeps absorbing runs while each is
+    within CYCLE_WINDOW_DAYS of the one after it; the earliest start in that
+    cluster is the cycle's real beginning. See CYCLE_WINDOW_DAYS.
+    """
+    starts = load_run_starts_sql() or load_run_starts_rest()
+    if not starts:
+        return None
+    anchor = starts[0]
+    for sd in starts[1:]:
+        if anchor - sd <= timedelta(days=CYCLE_WINDOW_DAYS):
+            anchor = sd
+        else:
+            break
+    return anchor
 
 
 def find_cycle_files(anchor):

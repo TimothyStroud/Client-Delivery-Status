@@ -4,7 +4,7 @@
     "last_period": "2026-08"
   },
   "wellmark": {
-    "last_qid": 1424652,
+    "last_qid": 1425698,
     "last_period": "2026-W34"
   },
   "optum_pbm": {
@@ -13,7 +13,7 @@
     "last_cycle": "08072026"
   },
   "caresource": {
-    "last_qid": 1420416,
-    "last_period": "2026-W33"
+    "last_qid": 1425052,
+    "last_period": "2026-W34"
   }
 }
