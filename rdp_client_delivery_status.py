@@ -436,7 +436,10 @@ FORCED_INACTIVE = {"MedicalMutualMHS"}
 # history). Takes precedence over the cert lookup in resolve_marker.
 FORCED_INACTIVE_FROM = {
     "TuftsMedPref":    date(2026, 7, 6),
-    "Tufts_Audit_CIT": date(2026, 7, 6),
+    # Tufts_Audit_CIT REMOVED 2026-08-20 per user: it is loading again, catching
+    # up the weeks of 7/6 through 8/17 (all seven Mondays pinned "L" in
+    # MANUAL_OVERRIDES; they will all certify on the same date). The 7/6 cutoff
+    # would have overridden those cells with "Inactive".
     # Oscar (weekly Wed) → Inactive 7/22/26 forward per user 2026-07-29. Earlier
     # cells keep their history (incl. the 7/1/7/8/7/15 → 7/15 cert overrides).
     "Oscar":           date(2026, 7, 22),
@@ -836,6 +839,28 @@ MANUAL_OVERRIDES = {
     # file isn't in tape yet (auto cvspbm_delivered can't fire), so this manual ✓
     # both shows the checkmark and locks the cell against regression.
     ("CVSPBMRx",      date(2026, 7, 27)): "✓",
+    # 2026-08-20 per user: Tufts_Audit_CIT (weekly Mon) "is currently loading for
+    # the weeks of 7/6 through 8/17 … mark all Monday's as Loading and they will
+    # also get the same certification date." Removed from FORCED_INACTIVE_FROM
+    # (was Inactive 7/6 forward) and every Monday in that catch-up range pinned
+    # to "L". When the catch-up certifies, replace all seven values with that one
+    # cert date.
+    ("Tufts_Audit_CIT", date(2026, 7, 6)):  "L",
+    ("Tufts_Audit_CIT", date(2026, 7, 13)): "L",
+    ("Tufts_Audit_CIT", date(2026, 7, 20)): "L",
+    ("Tufts_Audit_CIT", date(2026, 7, 27)): "L",
+    ("Tufts_Audit_CIT", date(2026, 8, 3)):  "L",
+    ("Tufts_Audit_CIT", date(2026, 8, 10)): "L",
+    ("Tufts_Audit_CIT", date(2026, 8, 17)): "L",
+    # 2026-08-20 per user: "The 8/17 for CVSPBMRx should be '!' and the Ad Hoc
+    # for CVSPBMRx should be 'Load Failure'." The carry-over Ad Hoc card
+    # (QueueId 1413143, 'CVS PBM RX 0110 Load', started 7/30 11:19) finally
+    # FAILED 8/18 19:37. That ended the in-flight carry-over, so (a) the Ad Hoc
+    # row disappeared and (b) has_recent_failure repainted the weekly 8/17 cell
+    # "Load Failure" — but the failure is the backfill's, not the weekly cycle's.
+    # Flag 8/17 as a plain miss ("!"), and carry the failure on its own Ad Hoc
+    # row (see ADDITIONAL_ENTRIES, 8/18). Replace with ✓/cert once 8/17 lands.
+    ("CVSPBMRx",      date(2026, 8, 17)): "!",
     # 2026-07-09: Oscar (weekly Wed) — was Inactive 7/1 & 7/8. 2026-07-15: per
     # user a backfill certified today (7/15) covering BOTH the 7/1 and 7/8
     # deliveries. 2026-07-17: per user the 7/15 cell certified 7/15 (show the
@@ -1239,6 +1264,10 @@ ADDITIONAL_ENTRIES = [
     # No labeled row is needed — the regular weekly Monday row picks the cert up
     # automatically (8/19 falls in the Mon-Fri week of 8/17) and
     # HEALTHNETCA_RANGE_LABEL_OVERRIDES tags that cell "(3/27-4/3)".
+    # 2026-08-20: the "CVSPBMRx (Ad Hoc)" → "Load Failure" row (8/18, when
+    # QueueId 1413143 died after running 7/30→8/18) is NOT pinned here — the
+    # auto Ad Hoc row emits it on the failure date now (see cvspbm_adhoc_failed),
+    # which self-clears when the backfill is re-run.
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
@@ -3966,6 +3995,37 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             if sd and sd.date() < cur_week_monday:
                 if cvspbm_carryover_load is None or sd > cvspbm_carryover_load:
                     cvspbm_carryover_load = sd
+    # 2026-08-20: the Ad Hoc row must be able to say "Load Failure", not just
+    # "L". QueueId 1413143 ran 7/30 → 8/18 and FAILED; its tape row went back to
+    # un-loaded, so the un-loaded branch below would have kept painting a stale
+    # "L" on today forever. When the newest CVS load card is a recent Failed one
+    # and nothing is Ready/Running, carry the failure (on its failure date)
+    # instead. Self-clearing: a re-run puts a card back in Ready/Running and the
+    # row reverts to "L" on today. Per user: "the Ad Hoc for CVSPBMRx should be
+    # 'Load Failure'."
+    # NB: the Enabled==1 filter above is deliberately dropped here — RAMP's CVS
+    # PBM RX jobs were switched off (Enabled=0) after this failure, and a
+    # disabled job's failed card still happened.
+    _cvs_any_load_job_ids = {
+        j.get("JobId") for j in find_matching_jobs("CVSPBMRx", ramp_jobs)
+        if "load" in (j.get("JobName") or "").lower()
+        and "stage" not in (j.get("JobName") or "").lower()
+    }
+    cvspbm_adhoc_failed = None
+    _cvs_load_running = False
+    for q in ramp_queue:
+        if q.get("JobId") not in _cvs_any_load_job_ids:
+            continue
+        st = q.get("Status")
+        if st in ("Ready", "Running"):
+            _cvs_load_running = True
+        elif st == "Failed":
+            ed = parse_dt(q.get("EndDate")) or parse_dt(q.get("StartDate"))
+            if ed and (today - ed.date()).days <= 14:
+                if cvspbm_adhoc_failed is None or ed.date() > cvspbm_adhoc_failed:
+                    cvspbm_adhoc_failed = ed.date()
+    if _cvs_load_running:
+        cvspbm_adhoc_failed = None
     cvspbm_tape_adhoc_loading = any(not a.get("loaded") for a in cvspbm_adhoc)
     cvspbm_adhoc_loading = (cvspbm_tape_adhoc_loading
                             or cvspbm_carryover_load is not None)
@@ -4668,6 +4728,16 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             if soft is not None:
                 marker = soft
                 from_manual = True
+        # A manual override of "!" means "flag this cell as a miss": render an
+        # EMPTY pink-shaded cell (the renderers write the "!" glyph into any
+        # alerted empty cell). Needed when the auto marker would show a real
+        # signal that belongs to a different row — e.g. CVSPBMRx 8/17/26, whose
+        # "Load Failure" is the Ad Hoc backfill's, not the weekly cycle's. A
+        # plain "" override can't do this: it deliberately suppresses the shade.
+        force_alert = False
+        if marker == "!":
+            marker = ""
+            force_alert = True
         alert  = alert_state(client, day, marker)
         # An explicit manual blank ("") means the team has intentionally emptied
         # this cell — never pink-shade it (otherwise a live has_recent_failure on
@@ -4682,6 +4752,8 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # user 2026-07-31 (AetnaRCE / NCStateAetna resuming load covers 7/29-7/31).
         if from_manual and marker in ("", "L"):
             alert = False
+        if force_alert:
+            alert = True
         marker, alert = apply_sticky_cert(client, day, marker, alert, from_manual)
         wk_start = day - timedelta(days=day.weekday())
         wk_end   = wk_start + timedelta(days=4)
@@ -5152,6 +5224,9 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 elif cell.weekday() == 6:
                     cell += timedelta(days=1)
             mk = "✓"
+        elif cvspbm_adhoc_failed is not None:
+            cell = cvspbm_adhoc_failed
+            mk = "Load Failure"
         else:
             cell = today
             mk = "L"
@@ -5165,7 +5240,8 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # backfill stands out while it loads; the highlight clears once the
         # load job finishes and snaps (mk flips to ✓).
         ah_highlight = "yellow" if mk == "L" else None
-        weekly[cell].append(("CVSPBMRx (Ad Hoc)", mk, False, ah_highlight))
+        weekly[cell].append(("CVSPBMRx (Ad Hoc)", mk,
+                             mk == "Load Failure", ah_highlight))
     # Carry-over in-flight load with no un-loaded tape row to hang the row off
     # (the Ad Hoc file's tape row already reads ProcessStatus 50 but its RAMP load
     # card is still Ready/Running — see cvspbm_carryover_load above). The regular
