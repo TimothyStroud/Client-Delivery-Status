@@ -3987,12 +3987,32 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         and "load" in (j.get("JobName") or "").lower()
         and "stage" not in (j.get("JobName") or "").lower()
     }
+    # 2026-08-21 per user: "the CVSPBMRx load/Snap is the AdHoc file." The re-run
+    # of the failed backfill STARTED TODAY, so the "started before this week" test
+    # no longer catches it and the L would land back on the weekly cell. The
+    # data-driven giveaway: no weekly RAW_MEMBR_ELIG file has arrived for the
+    # current cycle (newest weekly data date still maps to an earlier Monday
+    # cell), so in-flight CVS work cannot be this week's delivery — it's the Ad Hoc.
+    # The SNAP is included as well (the user's words: "the load/Snap is the AdHoc
+    # file"), so the Ad Hoc row keeps the in-flight "L" through the snap step
+    # instead of dropping off the moment the load card turns Successful.
+    # Self-clearing: the moment a weekly file lands, the weekly "L" resumes.
+    _cvs_snap_job_ids = {
+        j.get("JobId") for j in find_matching_jobs("CVSPBMRx", ramp_jobs)
+        if j.get("Enabled") == 1
+        and "snap" in (j.get("JobName") or "").lower()
+        and "load" not in (j.get("JobName") or "").lower()
+    }
+    _cvs_newest_weekly_cell = max(
+        (f["cell_monday"] for f in (cvspbm_weekly or [])), default=None)
+    _cvs_no_weekly_this_cycle = (_cvs_newest_weekly_cell is None
+                                 or _cvs_newest_weekly_cell < cur_week_monday)
     cvspbm_carryover_load = None
     for q in ramp_queue:
-        if (q.get("JobId") in _cvs_load_job_ids
-                and q.get("Status") in ("Ready", "Running")):
+        if (q.get("JobId") in (_cvs_load_job_ids | _cvs_snap_job_ids)
+                and q.get("Status") in ("Ready", "Running", "Processing")):
             sd = parse_dt(q.get("StartDate"))
-            if sd and sd.date() < cur_week_monday:
+            if sd and (sd.date() < cur_week_monday or _cvs_no_weekly_this_cycle):
                 if cvspbm_carryover_load is None or sd > cvspbm_carryover_load:
                     cvspbm_carryover_load = sd
     # 2026-08-20: the Ad Hoc row must be able to say "Load Failure", not just
@@ -4017,14 +4037,16 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         if q.get("JobId") not in _cvs_any_load_job_ids:
             continue
         st = q.get("Status")
-        if st in ("Ready", "Running"):
+        if st in ("Ready", "Running", "Processing"):
             _cvs_load_running = True
         elif st == "Failed":
             ed = parse_dt(q.get("EndDate")) or parse_dt(q.get("StartDate"))
             if ed and (today - ed.date()).days <= 14:
                 if cvspbm_adhoc_failed is None or ed.date() > cvspbm_adhoc_failed:
                     cvspbm_adhoc_failed = ed.date()
-    if _cvs_load_running:
+    # an in-flight load OR snap (cvspbm_carryover_load) means the cycle is moving
+    # again — don't resurrect the old failure on the Ad Hoc row
+    if _cvs_load_running or cvspbm_carryover_load is not None:
         cvspbm_adhoc_failed = None
     cvspbm_tape_adhoc_loading = any(not a.get("loaded") for a in cvspbm_adhoc)
     cvspbm_adhoc_loading = (cvspbm_tape_adhoc_loading

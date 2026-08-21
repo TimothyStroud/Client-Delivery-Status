@@ -243,3 +243,5 @@ Response files found: 2/5
 Now:                 2026-08-20 14:00:03.138897  (PAST deadline)
 Overdue alert send result: Sent.
 Overdue alert recorded.
+Outside monthly check window (15th-20th); today is the 21. Skipping.
+Outside monthly check window (15th-20th); today is the 21. Skipping.
