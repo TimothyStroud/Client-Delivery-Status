@@ -610,6 +610,16 @@ LOAD_NAME_REQUIRED = {
     # bypasses for SNAP_ONLY_CLIENTS. The full 'nc state' prefix also keeps the
     # NCStateRx sibling jobs out (see CLIENT_PRIMARY_KEY_OVERRIDE).
     "NCState":           ("nc state 0110 load",),
+    # WebTPA (weekly Fri) 2026-08-24 per user: "WebTPA is not loading for 8/28
+    # delivery. The 8/21/26 is Staging, but waiting for missing files from the
+    # client." Same bug class as CenteneFidelis / NCState: build_snap_index
+    # indexes 'WebTPA 0100 Stage' with kind="load", so the Resolved stage card
+    # (QueueId 1428143, 8/24 09:32 — with 1429761 still Ready) satisfied
+    # snap_in_week and the cert-client "activity this week -> L" path painted an
+    # "L" on the 8/28 cell while nothing had loaded. Delivery = 'WebTPA 0110
+    # Load'; the cell flips back to "L" on its own when that job runs. Also
+    # excludes the 'WebTPA MFT Logfile' cards.
+    "WebTPA":            ("webtpa 0110 load",),
 }
 
 # Soft, self-clearing cell labels — {(client, day): label}. Unlike
@@ -629,6 +639,12 @@ SOFT_OVERRIDES = {
     # loading yet — 'Centene Fidelis Medical 0120 Claims Stage' is still Ready.
     # Self-clears the moment the Claims Load lands / the week certifies.
     ("CenteneFidelis", date(2026, 8, 19)): "Staging",
+    # 2026-08-24 per user: WebTPA's 8/21 Friday cell is still staging — the
+    # client has not sent all of its files yet, so 'WebTPA 0100 Stage' keeps
+    # re-running (1429761 Ready) and 'WebTPA 0110 Load' has not started since
+    # 8/14. The cell was rendering an empty pink "!"; label it instead. Clears
+    # itself when the load lands or the week certifies.
+    ("WebTPA", date(2026, 8, 21)): "Staging",
 }
 
 # FILE-GATED overrides — {(client, day): (marker, directory, filename_glob)}.
