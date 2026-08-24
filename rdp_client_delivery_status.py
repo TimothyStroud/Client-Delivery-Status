@@ -620,6 +620,11 @@ LOAD_NAME_REQUIRED = {
     # Load'; the cell flips back to "L" on its own when that job runs. Also
     # excludes the 'WebTPA MFT Logfile' cards.
     "WebTPA":            ("webtpa 0110 load",),
+    # Cambia (weekly Mon) 2026-08-24 per user: "Cambia is not Loading, just
+    # Staging." Same bug class — 'Cambia 0120 PassFile Load' (Successful 8/23)
+    # and 'cambia LogFile' land in snap_idx as kind="load" and painted an "L"
+    # while only 'Cambia 0100 Claims Stage' was Ready. Delivery = the Claims Load.
+    "Cambia":            ("claims load",),
 }
 
 # Soft, self-clearing cell labels — {(client, day): label}. Unlike
@@ -638,7 +643,18 @@ SOFT_OVERRIDES = {
     # 2026-08-19 per user: CenteneFidelis Medical's Wednesday cell is not
     # loading yet — 'Centene Fidelis Medical 0120 Claims Stage' is still Ready.
     # Self-clears the moment the Claims Load lands / the week certifies.
-    ("CenteneFidelis", date(2026, 8, 19)): "Staging",
+    # 2026-08-24 per user: Cambia (weekly Mon) is staging, not loading —
+    # 'Cambia 0100 Claims Stage' Ready since 8/22, no Claims Load yet.
+    ("Cambia", date(2026, 8, 24)): "Staging",
+    # 2026-08-24 per user: "CenteneFidelis for 8/26/26 is loading Elig and will
+    # move to Claims next." LOAD_NAME_REQUIRED restricts CenteneFidelis to the
+    # Claims Load, so the running Eligibility Load can't paint L on its own.
+    ("CenteneFidelis", date(2026, 8, 26)): "L",
+    # 2026-08-24 per user: EDW_WGS (monthly, expected the 20th) is in a load
+    # failure — 'Wellpoint 0100 EDW Pull EDW_WGS' Failed 8/21 20:48 -> 8/23 08:56.
+    # has_recent_failure only matches LOAD-named jobs, and the EDW feeds use the
+    # verb "Pull", so the failure never surfaced on its own.
+    ("EDW_WGS", date(2026, 8, 20)): "Load Failure",
     # 2026-08-24 per user: WebTPA's 8/21 Friday cell is still staging — the
     # client has not sent all of its files yet, so 'WebTPA 0100 Stage' keeps
     # re-running (1429761 Ready) and 'WebTPA 0110 Load' has not started since
@@ -876,7 +892,15 @@ MANUAL_OVERRIDES = {
     # "Load Failure" — but the failure is the backfill's, not the weekly cycle's.
     # Flag 8/17 as a plain miss ("!"), and carry the failure on its own Ad Hoc
     # row (see ADDITIONAL_ENTRIES, 8/18). Replace with ✓/cert once 8/17 lands.
-    ("CVSPBMRx",      date(2026, 8, 17)): "!",
+    # 2026-08-24 per user: "CVSPBMRx for 8/17 has loaded and Snapped 8/23" —
+    # 'CVS PBM RX 0110 Load' 8/21 16:01 -> 8/23 21:44 Successful, then
+    # '0120 Start Snap' 8/23 21:44 -> 22:13 Successful. Was pinned "!" while the
+    # Ad Hoc backfill failure was outstanding; flip to a delivered checkmark.
+    ("CVSPBMRx",      date(2026, 8, 17)): "✓",
+    # 2026-08-24 per user: "CenteneFidelis for 8/19/26 change to Missing in
+    # Pink" — the 8/19 Wednesday delivery never arrived (was labelled "Staging"
+    # on 8/19). "Missing" is a pink problem-state marker (see alert_state).
+    ("CenteneFidelis", date(2026, 8, 19)): "Missing",
     # 2026-07-09: Oscar (weekly Wed) — was Inactive 7/1 & 7/8. 2026-07-15: per
     # user a backfill certified today (7/15) covering BOTH the 7/1 and 7/8
     # deliveries. 2026-07-17: per user the 7/15 cell certified 7/15 (show the
@@ -4207,7 +4231,10 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # in pink." The Kaiser-feed branch below previously short-circuited
         # before this check, hiding the Load Failure shade for Kaiser feeds.
         # "Snap" added for snap-disabled clients (e.g. Kaiser_AmbM).
-        if marker in ("Load Failure", "Inactive", "Failed", "Deployment", "Snap"):
+        # "Missing" = the scheduled delivery never arrived (added 2026-08-24 for
+        # CenteneFidelis 8/19) — a problem state, always pink.
+        if marker in ("Load Failure", "Inactive", "Failed", "Deployment", "Snap",
+                      "Missing"):
             return True
         # "Empty" = a delivered-but-empty file (happens occasionally). Per user
         # 2026-07-08 it is NOT a problem state -> show the label, never pink.
