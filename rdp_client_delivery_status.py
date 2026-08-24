@@ -929,6 +929,23 @@ MANUAL_OVERRIDES = {
     # per user the dormant weeks that used to read "Inactive" should show a pink
     # "!" instead (no pins here). The claims date range for each backfill load is
     # attached to the label per-cell — see HEALTHNETCA_* below.
+    #
+    # 2026-08-24 per user: "HealthNetCA for 4/3-4/10 certified on 8/20/26,
+    # 4/10-4/24 certified on 8/24/26." Four backfill weeks certified inside two
+    # calendar weeks, so the automatic one-cert-per-week attribution can't place
+    # them (cert_in_week keys off stat_week_monday(StatTimestamp), and every one of
+    # these certs has a StatTimestamp in the 8/17 week — 8/19, 8/20, 8/20 23:24,
+    # 8/21 — so CERT_WEEK_IDX[healthnetca][8/17] collapses to the LATEST cert,
+    # 8/24, and the 8/24 cell gets nothing). Pin each cell to the cert that
+    # belongs to it, by TapeID:
+    #   3/27-4/3  TapeID 16097-16103 → cert 8/19 → 8/17 cell (label already pinned)
+    #   4/3-4/10  TapeID 16104-16111 → cert 8/20 → its own labeled ADDITIONAL_ENTRIES
+    #                                               row on 8/20 (only one Monday
+    #                                               cell exists in that week)
+    #   4/10-4/17 TapeID 16113-16119 ┐
+    #   4/17-4/24 TapeID 16120-16127 ┘ both → cert 8/24 → 8/24 cell as "(4/10-4/24)"
+    ("HealthNetCA",   date(2026, 8, 17)): date(2026, 8, 19),
+    ("HealthNetCA",   date(2026, 8, 24)): date(2026, 8, 24),
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
@@ -1191,6 +1208,15 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     ("ElixirRx", 2026, 5): "L",
     ("ElixirRx", 2026, 6): "L",
     ("ElixirRx", 2026, 7): "L",
+    # 2026-08-24 per user: "ElixirRx should have the '!'". May/June/July all
+    # certified together on 7/16 (DHT ElixirRx CertTimestamp 2026-07-16 18:08 —
+    # July's cell shows that date via step 1) but AUGUST never delivered, and
+    # MONTHLY_BLANK_UNTIL_CERT was leaving the August cell silently blank instead
+    # of flagging the miss. "!" renders an EMPTY pink-shaded cell (converted in
+    # place()), so the month reads as missed rather than not-yet-due. A real
+    # August DHT cert auto-wins (step 1 runs before this override), so this
+    # self-clears the moment August certifies.
+    ("ElixirRx", 2026, 8): "!",
     # 2026-07-17: Kaiser_WARx (monthly cert-only) — per user, show "L" (loading,
     # awaiting cert) on its expected day, NOT the auto "No Data". A DHT cert this
     # month auto-wins (checked before this override). The Friday pink escalation
@@ -1268,6 +1294,14 @@ ADDITIONAL_ENTRIES = [
     # QueueId 1413143 died after running 7/30→8/18) is NOT pinned here — the
     # auto Ad Hoc row emits it on the failure date now (see cvspbm_adhoc_failed),
     # which self-clears when the backfill is re-run.
+    # 2026-08-24 per user: "HealthNetCA for 4/3-4/10 certified on 8/20/26."
+    # THREE backfill weeks certified inside the 8/17 week (3/27-4/3 on 8/19,
+    # 4/3-4/10 on 8/20, 4/10-4/24 on 8/24) and there is only one Monday cell per
+    # week, so this middle one gets its own labeled row on its cert day (Thu 8/20).
+    # The 8/17 Monday cell stays (3/27-4/3)/8/19 and the 8/24 Monday cell carries
+    # (4/10-4/24)/8/24 — both pinned in MANUAL_OVERRIDES.
+    ("weekly", date(2026, 8, 20), "HealthNetCA (4/3-4/10)",
+     date(2026, 8, 20), False, None),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
@@ -1479,8 +1513,15 @@ HEALTHNETCA_FAILED_RANGES = {
 # 2026-08-19 per user: "remove the Load Failure for HealthNetCA (3/27-4/3) and
 # mark it as certified and place on 8/17 cell." The files loaded 8/14 (the 8/10
 # week) but the successful reload certified 8/19, so the 8/17 cell carries it.
+#
+# 2026-08-24 per user: "4/10-4/24 certified on 8/24/26." Those two chunks
+# (4/10-4/17 loaded 8/20, 4/17-4/24 loaded 8/21) both landed in the 8/17 week but
+# certified together on Mon 8/24, so the 8/24 cell carries the merged span. The
+# 8/17 pin keeps that cell on the 3/27-4/3 week it certified for (8/19), and the
+# 4/3-4/10 week (cert 8/20) rides its own ADDITIONAL_ENTRIES row.
 HEALTHNETCA_RANGE_LABEL_OVERRIDES = {
     date(2026, 8, 17): " (3/27-4/3)",
+    date(2026, 8, 24): " (4/10-4/24)",
 }
 
 # Override display name for a client (the label only; client_key stays the same).
