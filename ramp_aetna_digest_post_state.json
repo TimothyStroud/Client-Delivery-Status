@@ -1,1 +1,1 @@
-{"last_emit": "2026-08-24T14:07:09.856416", "last_msg": "AETNA RCE - STATUS UPDATE\n\nAetna RCE Daily Process - Idle\n\nETL NCStateAetna MasterLoad - Idle\n\nAetnaRCE File(s) Staged:\n- F246516462  |  10.77 GB  |  created 08/22/2026 11:16 PM"}
+{"last_emit": "2026-08-25T10:07:47.636292", "last_msg": "AETNA RCE - STATUS UPDATE\n\nAetna RCE Daily Process Executing Step 5/7 - Run Minimum Trust\n:arrows_counterclockwise: ETA ~2:52 PM\n\nETL NCStateAetna MasterLoad - Idle\n\nAetnaRCE File(s) Staged:\n- F246644149  |  18.76 GB  |  created 08/24/2026 11:55 PM"}
