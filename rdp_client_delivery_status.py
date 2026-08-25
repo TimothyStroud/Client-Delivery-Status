@@ -655,12 +655,9 @@ SOFT_OVERRIDES = {
     # has_recent_failure only matches LOAD-named jobs, and the EDW feeds use the
     # verb "Pull", so the failure never surfaced on its own.
     ("EDW_WGS", date(2026, 8, 20)): "Load Failure",
-    # 2026-08-24 per user: WebTPA's 8/21 Friday cell is still staging — the
-    # client has not sent all of its files yet, so 'WebTPA 0100 Stage' keeps
-    # re-running (1429761 Ready) and 'WebTPA 0110 Load' has not started since
-    # 8/14. The cell was rendering an empty pink "!"; label it instead. Clears
-    # itself when the load lands or the week certifies.
-    ("WebTPA", date(2026, 8, 21)): "Staging",
+    # (2026-08-24 WebTPA 8/21 "Staging" removed 2026-08-25: the missing client
+    # files arrived, 'WebTPA 0110 Load' ran 8/25 11:02 -> 11:29 and DHT certified
+    # 8/25 11:57 — the 8/21 cell now carries that cert date via MANUAL_OVERRIDES.)
 }
 
 # FILE-GATED overrides — {(client, day): (marker, directory, filename_glob)}.
@@ -877,13 +874,20 @@ MANUAL_OVERRIDES = {
     # (was Inactive 7/6 forward) and every Monday in that catch-up range pinned
     # to "L". When the catch-up certifies, replace all seven values with that one
     # cert date.
-    ("Tufts_Audit_CIT", date(2026, 7, 6)):  "L",
-    ("Tufts_Audit_CIT", date(2026, 7, 13)): "L",
-    ("Tufts_Audit_CIT", date(2026, 7, 20)): "L",
-    ("Tufts_Audit_CIT", date(2026, 7, 27)): "L",
-    ("Tufts_Audit_CIT", date(2026, 8, 3)):  "L",
-    ("Tufts_Audit_CIT", date(2026, 8, 10)): "L",
-    ("Tufts_Audit_CIT", date(2026, 8, 17)): "L",
+    # 2026-08-25 per user: "Tufts_Audit_CIT for 7/6 to 8/17 should have 8/20 cert
+    # date" — the catch-up certified, so all seven Mondays now carry 08/20/26.
+    # (DHT logged CertTimestamp 8/21 11:39 with StatTimestamp 8/20 15:54; the
+    # user's date is the delivery/cert date for the whole catch-up range. The
+    # auto path can only ever place ONE cell per cert week, hence the pins.)
+    # This week's Mon 8/24 cell is NOT pinned — it picks up its own 8/24 cert
+    # (CertTimestamp 8/24 15:18, StatTimestamp 8/24) automatically.
+    ("Tufts_Audit_CIT", date(2026, 7, 6)):  date(2026, 8, 20),
+    ("Tufts_Audit_CIT", date(2026, 7, 13)): date(2026, 8, 20),
+    ("Tufts_Audit_CIT", date(2026, 7, 20)): date(2026, 8, 20),
+    ("Tufts_Audit_CIT", date(2026, 7, 27)): date(2026, 8, 20),
+    ("Tufts_Audit_CIT", date(2026, 8, 3)):  date(2026, 8, 20),
+    ("Tufts_Audit_CIT", date(2026, 8, 10)): date(2026, 8, 20),
+    ("Tufts_Audit_CIT", date(2026, 8, 17)): date(2026, 8, 20),
     # 2026-08-20 per user: "The 8/17 for CVSPBMRx should be '!' and the Ad Hoc
     # for CVSPBMRx should be 'Load Failure'." The carry-over Ad Hoc card
     # (QueueId 1413143, 'CVS PBM RX 0110 Load', started 7/30 11:19) finally
@@ -938,6 +942,14 @@ MANUAL_OVERRIDES = {
     # cell (the single cert would otherwise land on only one week).
     ("WebTPA",        date(2026, 7, 10)): date(2026, 7, 17),
     ("WebTPA",        date(2026, 7, 17)): date(2026, 7, 17),
+    # 2026-08-25 per user: "WEBTPA for 8/21 should be 8/25, not the 8/28 cell."
+    # The client's missing files finally arrived, 'WebTPA 0110 Load' ran 8/25
+    # 11:02 -> 11:29 Successful and DHT certified 8/25 11:57 — but that cert's
+    # StatTimestamp is 8/25, so stat_week_monday puts it in the 8/24 week and
+    # cert_in_week would stamp it on THIS week's Friday (8/28) cell. It belongs
+    # to the late 8/21 delivery. Pin it here, and see CELL_ACTIVITY_AFTER for the
+    # 8/28 cell (which must ignore the 8/25 cert/load and wait for its own).
+    ("WebTPA",        date(2026, 8, 21)): date(2026, 8, 25),
     # 2026-07-22: Kaiser_NW (Kaiser Pareo NW, weekly Thu) was rendering
     # "Load Failure" on its 7/23 cell — but per user it is CLEAR. The failure
     # is a spurious trailing card in RAMP: 'Kaiser Pareo NW 0110 Load' (JobId
@@ -1008,6 +1020,28 @@ MANUAL_OVERRIDES = {
 CERT_CELL_REMAP = {
     ("AetnaRCE",     date(2026, 8, 3)): date(2026, 7, 31),
     ("NCStateAetna", date(2026, 8, 3)): date(2026, 7, 31),
+}
+
+# --- Per-cell "ignore earlier activity" gate --------------------------------
+# {(client, cell_day): cutoff_date} — for THIS cell only, any cert / load / snap
+# activity dated on or before `cutoff_date` belongs to an EARLIER delivery, so it
+# is ignored and the cell stays blank until something happens AFTER the cutoff.
+#
+# Why this and not a blank MANUAL_OVERRIDES pin: it is self-clearing. A pin of ""
+# would also hide the cell's own future cert / "L" / "Load Failure" until someone
+# deletes it by hand; the cutoff only masks the known-stale activity.
+#
+# Use it whenever a LATE delivery's load+cert land inside the NEXT delivery's
+# week — the late cert gets pinned onto its own (earlier) cell via
+# MANUAL_OVERRIDES, and the next cell needs to not double-report the same run.
+#
+# 2026-08-25 per user: "WEBTPA for 8/21 should be 8/25, not the 8/28 cell."
+# WebTPA (weekly Fri) delivered 8/21 four days late — 'WebTPA 0110 Load' 8/25
+# 11:02 -> 11:29 Successful, DHT cert 8/25 11:57 (StatTimestamp 8/25, i.e. the
+# 8/24 week). Without the cutoff the 8/28 cell shows 08/25/26 from cert_in_week,
+# or an "L" from the weekly cert-client "activity this week" fallback.
+CELL_ACTIVITY_AFTER = {
+    ("WebTPA", date(2026, 8, 28)): date(2026, 8, 25),
 }
 
 # --- Monthly cert-to-month reattribution ------------------------------------
@@ -1108,6 +1142,22 @@ def apply_sticky_cert(client, day, marker, alert, from_manual):
     upgrade shows), and only bumps the stored value UP in rank (never down).
     """
     key = f"{client}|{day.isoformat()}"
+    # CELL_ACTIVITY_AFTER cells: a marker remembered from activity on/before the
+    # cutoff belongs to an EARLIER delivery, so it must not be restored here —
+    # otherwise the cache silently undoes the gate on every later run (this is
+    # exactly what happened to WebTPA's 8/28 cell, cached from the run that saw
+    # the 8/25 cert before the gate existed). A genuine post-cutoff marker is
+    # re-stored immediately below via the live_rank path.
+    cutoff = CELL_ACTIVITY_AFTER.get((client, day))
+    if cutoff is not None:
+        stored = STICKY_CERTS.get(key)
+        if stored:
+            try:
+                stale = date.fromisoformat(stored) <= cutoff
+            except ValueError:
+                stale = True          # a "✓" earned by the pre-cutoff activity
+            if stale:
+                STICKY_CERTS.pop(key, None)
     live_rank = _marker_rank(marker)
     if live_rank > 0:
         if live_rank >= _stored_rank(STICKY_CERTS.get(key)):
@@ -4350,14 +4400,24 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 and STAGE_FILE_CELL_CLIENTS[client].get("checkmark_over_cert")
                 and day in stage_delivered.get(client, {})):
             return "✓"
+        # CELL_ACTIVITY_AFTER: this cell ignores cert/load/snap activity dated
+        # on or before the cutoff (it belongs to an earlier, late delivery).
+        act_after = CELL_ACTIVITY_AFTER.get((client, day))
+
+        def _after_cutoff(ts):
+            """True when `ts` (datetime or None) counts for this cell."""
+            if ts is None:
+                return False
+            return act_after is None or ts.date() > act_after
+
         # cert on the exact day
         ts = cert_on_day(client, day, cert_idx)
-        if ts:
+        if _after_cutoff(ts):
             return ts.date()
         # cert anywhere in the 7-day cycle starting at this scheduled day
         if allow_week_window:
             ts = cert_in_week(client, day, cert_idx)
-            if ts:
+            if _after_cutoff(ts):
                 return ts.date()
         # Forced-inactive clients never show a live "L" / "✓" / "Load Failure"
         # from resumed loading — only a genuine cert date (returned above) or
@@ -4390,9 +4450,9 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             # that crossed midnight or ran as a next-day catch-up
             # (e.g. AetnaHRP load for 5/13 finishing 5/14 → ✓ on 5/13).
             win_forward = 1 if day < today else 0
-            if allow_checkmark and snap_on_day(
+            if allow_checkmark and _after_cutoff(snap_on_day(
                     client, day, snap_idx,
-                    window_days=win_back, forward_days=win_forward):
+                    window_days=win_back, forward_days=win_forward)):
                 return "✓"
             # Past-day "L" for SNAP_KIND_ONLY daily clients (e.g. AetnaHRP):
             # if the load ran on `day` but no snap completion yet AND a job
@@ -4479,7 +4539,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             if day in stage_delivered.get(client, {}):
                 return "✓"
         elif allow_checkmark:
-            if snap_in_week(client, day, snap_idx):
+            if _after_cutoff(snap_in_week(client, day, snap_idx)):
                 return "✓"
         elif in_current_week and client not in LOADING_L_ONLY_CLIENTS:
             # Weekly cert client (not snap-only) — if load/snap activity has
@@ -4492,7 +4552,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             # the cell clears the moment the load finishes and stays blank
             # through the Wednesday PM snap until the cert lands. Per user
             # 2026-08-05.
-            if snap_in_week(client, day, snap_idx):
+            if _after_cutoff(snap_in_week(client, day, snap_idx)):
                 return "L"
         # Forced-inactive weekly clients with no prior cert in this cycle
         # fall back to "Inactive" rather than leaving the cell blank.
