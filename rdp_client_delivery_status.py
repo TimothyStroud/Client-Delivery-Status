@@ -1268,6 +1268,16 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     # — HumanaRx is in MONTHLY_ONLY_WHEN_ACTIVE, so a "No Data" month is dropped
     # from the calendar entirely instead of showing a placeholder.
     "HumanaRx": (date(2026, 7, 15), "No Data"),
+    # 2026-08-26 per user: "Remove NCState from 8/14 and add to 8/26/26 as
+    # 'Discontinued'." The August delivery never arrived (only the empty
+    # 'NC State 0100 Stage' card ran on 8/17 — see LOAD_NAME_REQUIRED["NCState"]),
+    # so the auto path parked a pink "No Data" on the expected 8/14 cell. This
+    # override moves the single August row off 8/14 onto 8/26 and labels it
+    # "Discontinued" (pink, like "Inactive" — the client has stopped delivering).
+    # Scoped to August 2026 only (step 0a checks ov_day's year/month), so
+    # May/June/July keep their real ✓ history; Sept 2026 forward is dropped
+    # entirely via MONTHLY_RETIRED_FROM["NCState"].
+    "NCState":    (date(2026, 8, 26), "Discontinued"),
 }
 
 # Monthly clients that appear ONLY when something actually happened — no
@@ -1280,7 +1290,19 @@ MONTHLY_PLACEMENT_OVERRIDES = {
 # so determine_monthly was falling back to the generic 15th (rendered 8/17) and
 # parking a pink "No Data" there every month. Same spirit as the OptumPBMRx
 # per-RAW rows and ADHOC_MONTHLY_SNAP_CLIENTS: only-when-present.
-MONTHLY_ONLY_WHEN_ACTIVE = {"HumanaRx"}
+#
+# 2026-08-26 per user: "Add 'Molina' to the dashboard once the certification
+# processes. This is a new implementation that appears to be Weekly, but add to
+# the Monthly section for the Implementation delivery on ADO 975084."
+# Molina (ADO 975084 'Snap and Mine - Molina/ConnectiCare - PCN 1071309 to
+# 1088600', go-live 08/28/26, loaded on ETL4 outside RAMP) has NO 0100/0110 RAMP
+# jobs yet — only 'Molina MFT Logfile', which build_snap_index skips — so the DHT
+# cert is the ONLY signal. As of this change all 34 Molina PCNs in
+# DHTStats.DHT.TableList are 'Ready for Stats' (no StatTimestamp, no
+# CertTimestamp). Only-when-active means the row simply appears, on its own cert
+# date, the moment the certification processes; nothing shows before then (no
+# pink "No Data" placeholder for a client that has no delivery history).
+MONTHLY_ONLY_WHEN_ACTIVE = {"HumanaRx", "Molina"}
 
 # Per-(client, year, month) marker override for monthly clients. Unlike
 # MONTHLY_PLACEMENT_OVERRIDES (one entry per client), this keys on the specific
@@ -1470,6 +1492,10 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     "EmblemFacets",
     "Kaiser_WARx",
     "MedicalMutualMHS", "MedicalMutualOH",
+    # Molina — new implementation (ADO 975084). Cert-only per user 2026-08-26
+    # ("add Molina once the certification processes"): the DHT cert is the
+    # delivery signal, so a Snap-and-Mine completion alone must not surface a ✓.
+    "Molina",
     "NCStateRx",
     "PremeraMedAdvVIS",
     "SamaritanHealth",
@@ -1521,7 +1547,9 @@ MONTHLY_CLIENTS = {
     "Kaiser_GE",
     "Kaiser_WA", "Kaiser_WARx",
     "MedicalMutualMHS", "MedicalMutualOH", "MedImpactPBMRx",
-    "MMOH", "MMOHRxMonthly", "NCState", "NCStateRx",
+    "MMOH", "MMOHRxMonthly",
+    "Molina",                           # new implementation (see below)
+    "NCState", "NCStateRx",
     "WellpointRxElig",                  # monthly load->snap (L on load, ✓ on snap)
     "ESIPBMRx",                         # monthly snap-only (RAMP snap-driven)
     "OptumPBMRx",                       # monthly, tape-driven
@@ -1535,6 +1563,10 @@ MONTHLY_CLIENTS = {
 # 'Wellpoint 0100 EDW Pull …' jobs and ASE is no longer delivered.
 MONTHLY_RETIRED_FROM = {
     "EDW_ASE": (2026, 7),
+    # NCState discontinued per user 2026-08-26 — its final row is the 8/26/26
+    # "Discontinued" cell (MONTHLY_PLACEMENT_OVERRIDES); drop the client from
+    # September 2026 forward. May–Aug 2026 tabs keep their history.
+    "NCState": (2026, 9),
 }
 
 # Ad-hoc MONTHLY snap-driven clients (per user 2026-06-25): appear ONCE per
@@ -1687,6 +1719,10 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     "EDW_Empire":             (20, 20),
     "EDW_WGS":                (20, 20),
     "BCBSFLEligibilityLoad":  (25, 25),
+    # Molina — go-live 08/28/26 per ADO 975084. Anchors the Implementation
+    # delivery on the 28th; the DHT cert date always wins placement, and
+    # MONTHLY_ONLY_WHEN_ACTIVE suppresses the row until something lands.
+    "Molina":                 (28, 28),
     "AetnaRx_LegacyDMG":      (16, 16),
     # BCBSSCRx delays one week — per user, this month's load belongs next week.
     "BCBSSCRx":               (18, 19),
@@ -4283,8 +4319,10 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # "Snap" added for snap-disabled clients (e.g. Kaiser_AmbM).
         # "Missing" = the scheduled delivery never arrived (added 2026-08-24 for
         # CenteneFidelis 8/19) — a problem state, always pink.
+        # "Discontinued" = the client has permanently stopped delivering (added
+        # 2026-08-26 for NCState's final 8/26 cell) — shaded like "Inactive".
         if marker in ("Load Failure", "Inactive", "Failed", "Deployment", "Snap",
-                      "Missing"):
+                      "Missing", "Discontinued"):
             return True
         # "Empty" = a delivered-but-empty file (happens occasionally). Per user
         # 2026-07-08 it is NOT a problem state -> show the label, never pink.
