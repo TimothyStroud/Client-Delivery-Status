@@ -1438,6 +1438,14 @@ ADDITIONAL_ENTRIES = [
     # the only Molina cell on the August tab.
     ("monthly", date(2026, 8, 27), "Molina (Implementation)",
      date(2026, 8, 27), False, None),
+    # 2026-08-27 per user: add 'ModaRx (Implementation)' to today's Monthly
+    # section; the standing 'ModaRx' monthly row starts on the 5th from
+    # September forward (MONTHLY_STARTS_FROM). RAMP feed 905 is built out
+    # ('ModaRx 0100 Stage' / '0110 Load' / '0120 Snap' — the Snap job is still
+    # Enabled=0) but nothing has certified yet, so the row is pinned by hand
+    # with the "Implementation" marker (never pink).
+    ("monthly", date(2026, 8, 27), "ModaRx (Implementation)",
+     "Implementation", False, None),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
@@ -1516,6 +1524,13 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     "EmblemFacets",
     "Kaiser_WARx",
     "MedicalMutualMHS", "MedicalMutualOH",
+    # ModaRx — new implementation, per user 2026-08-27: track the monthly
+    # claims load/snap/certification only. RAMP feed 905 runs ONE load job
+    # ('ModaRx 0110 Load') for both the weekly Elig/Other-Insurance files and
+    # the monthly claims file (the staged files under 'ModaRx 0100 Stage' are
+    # what distinguish them), so a load completion alone must not surface a ✓ —
+    # stay "L" until the DHT certification lands.
+    "ModaRx",
     # Molina — new implementation (ADO 975084). Cert-only per user 2026-08-26
     # ("add Molina once the certification processes"): the DHT cert is the
     # delivery signal, so a Snap-and-Mine completion alone must not surface a ✓.
@@ -1572,6 +1587,7 @@ MONTHLY_CLIENTS = {
     "Kaiser_WA", "Kaiser_WARx",
     "MedicalMutualMHS", "MedicalMutualOH", "MedImpactPBMRx",
     "MMOH", "MMOHRxMonthly",
+    "ModaRx",                           # new implementation — see MONTHLY_STARTS_FROM
     "Molina",                           # new implementation (see below)
     "NCState", "NCStateRx",
     "WellpointRxElig",                  # monthly load->snap (L on load, ✓ on snap)
@@ -1591,6 +1607,15 @@ MONTHLY_RETIRED_FROM = {
     # "Discontinued" cell (MONTHLY_PLACEMENT_OVERRIDES); drop the client from
     # September 2026 forward. May–Aug 2026 tabs keep their history.
     "NCState": (2026, 9),
+}
+
+# Inverse of MONTHLY_RETIRED_FROM: new monthly clients that only start appearing
+# from the given (year, month) forward — earlier month tabs stay clean.
+# ModaRx added 2026-08-27 per user: "Add 'ModaRx' to the monthly section on the
+# 5th starting in September forward." (Today's Implementation row is a one-off
+# ADDITIONAL_ENTRIES entry on the August tab.)
+MONTHLY_STARTS_FROM = {
+    "ModaRx": (2026, 9),
 }
 
 # Ad-hoc MONTHLY snap-driven clients (per user 2026-06-25): appear ONCE per
@@ -1695,6 +1720,10 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     "MedicalMutualMHS":       (1, 1),
     "NCStateRx":              (1, 1),
     "MedicalMutualOH":        (3, 8),
+    # ModaRx: monthly CLAIMS delivery only, anchored to the 5th per user
+    # 2026-08-27. No MONTHLY_PLACEMENT_WEEKDAY entry so it stays on the 5th
+    # itself rather than spreading across that work-week.
+    "ModaRx":                 (5, 5),
     "MedImpactPBMRx":         (5, 10),
     "AetnaQNXTRx":            (5, 10),
     "BCBSVT":                 (5, 10),
@@ -5162,6 +5191,10 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # Clients retired mid-year drop off starting their retirement month.
         retired = MONTHLY_RETIRED_FROM.get(c)
         if retired and (year, month) >= retired:
+            continue
+        # New clients don't appear before their start month (ModaRx: Sept 2026).
+        starts = MONTHLY_STARTS_FROM.get(c)
+        if starts and (year, month) < starts:
             continue
         d, marker = determine_monthly(c)
         # Lock-in (per user 2026-07-28): remember a certified/snapped monthly cell
