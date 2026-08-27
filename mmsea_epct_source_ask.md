@@ -108,12 +108,37 @@ Worth confirming both with Adam West rather than assuming.
 
 ## The ask — for whoever owns DB permissions
 
+> **RAISED 2026-08-27 — Freshservice ticket 52726**
+> <https://machinify.freshservice.com/support/tickets/52726>
+> Read access for `tls2` to the `MMSEA` database on TRGRepSQL3.
+
 Read access for `tls2` to the **`MMSEA` database on TRGRepSQL3**. It exists and is
 visible, but the account cannot log into it. No proc in any readable database references
-`ImportStaging`, so that database is the most likely home of these three metrics.
+`ImportStaging`, and it is not on SqlUtilAudit either (see above), so that database is the
+most likely home of these three metrics.
 
-If access is granted, the fix is small: swap `read_mmsea_snapshot()` in
-`cmse_report.py` for a `sql()` call and the tab goes to 100% coverage and live values.
+### When access lands — what to do
+
+1. Confirm the metrics are actually there:
+   ```sql
+   SELECT name FROM MMSEA.sys.tables ORDER BY name;
+   SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME
+   FROM MMSEA.INFORMATION_SCHEMA.COLUMNS
+   WHERE COLUMN_NAME LIKE '%Invest%' OR COLUMN_NAME LIKE '%Entitle%'
+      OR COLUMN_NAME LIKE '%Pct%'    OR COLUMN_NAME LIKE '%SourceLog%';
+   ```
+   The join key to look for is a `SourceLogId` (as `MIR.dbo.MIRFile.CMSESourceLogId` does).
+2. **Validate before switching.** Any candidate query must reproduce the 2025-08-04 export
+   on all **112** currently-covered loads, not just a sample — `read_mmsea_snapshot()`
+   already gives an exact-match baseline to diff against. Watch for the drift trap: the
+   live value will legitimately differ from a *stale* export, so validate against the
+   export whose date matches, and expect MC % to move most (448 of 782 loads changed in
+   two months).
+3. Then swap `read_mmsea_snapshot()` in `cmse_report.py` for a `sql()` call. The tab goes
+   to 100% coverage with live values; drop the `td.snap` provenance tooltip and the "as of"
+   legend line, and keep `UNSOURCED_COLUMNS` empty rather than deleting the proof comment.
+4. Keep `mmsea_snapshots/` and the ingest either way — it is the only history for loads
+   older than whatever the live source retains, and the fallback if access is revoked.
 
 ---
 
