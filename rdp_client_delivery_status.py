@@ -1278,6 +1278,19 @@ MONTHLY_PLACEMENT_OVERRIDES = {
     # May/June/July keep their real ✓ history; Sept 2026 forward is dropped
     # entirely via MONTHLY_RETIRED_FROM["NCState"].
     "NCState":    (date(2026, 8, 26), "Discontinued"),
+    # 2026-08-27 per user: "The Molina certification is not ready to run yet, so
+    # add 'Molina (Implementation)' to the 8/27/26 Monthly section with 8/27/26
+    # as the cert date." That pinned Implementation row lives in
+    # ADDITIONAL_ENTRIES (it needs the "(Implementation)" label, which the
+    # standing row can't carry without renaming Molina everywhere). This entry
+    # exists only to SUPPRESS the standing August row so August can't show two
+    # Molina cells: Molina is in MONTHLY_ONLY_WHEN_ACTIVE, so a "No Data" month
+    # is dropped from the calendar entirely (same trick as HumanaRx above).
+    # Scoped to Aug 2026 only (step 0a checks ov_day's year/month), so if the
+    # cert processes in September the standing row surfaces there normally.
+    # Remove this (and the ADDITIONAL_ENTRIES row) when the user confirms Molina
+    # is in full production and the weekly cadence gets wired.
+    "Molina":     (date(2026, 8, 27), "No Data"),
 }
 
 # Monthly clients that appear ONLY when something actually happened — no
@@ -1414,6 +1427,17 @@ ADDITIONAL_ENTRIES = [
     # (4/10-4/24)/8/24 — both pinned in MANUAL_OVERRIDES.
     ("weekly", date(2026, 8, 20), "HealthNetCA (4/3-4/10)",
      date(2026, 8, 20), False, None),
+    # 2026-08-27 per user: "The Molina certification is not ready to run yet, so
+    # go ahead and add 'Molina (Implementation)' to the 8/27/26 Monthly section
+    # with 8/27/26 as the cert date. I'll provide an update once this client is
+    # in full production." Molina (ADO 975084, go-live 08/28/26) has no RAMP
+    # pipeline and its 34 PCNs in DHT are still 'Ready for Stats', so there is no
+    # live signal to resolve from — the row is pinned by hand. A date marker
+    # renders as the cert date (MM/DD/YY, no pink). The standing monthly row is
+    # suppressed for August via MONTHLY_PLACEMENT_OVERRIDES["Molina"] so this is
+    # the only Molina cell on the August tab.
+    ("monthly", date(2026, 8, 27), "Molina (Implementation)",
+     date(2026, 8, 27), False, None),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
