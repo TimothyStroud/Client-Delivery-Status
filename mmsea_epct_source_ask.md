@@ -40,6 +40,58 @@ Two loads that kill any record-level predicate on their own: **HNE MSP 32225** a
 
 ---
 
+## Servers already checked — don't re-hunt these
+
+### SqlUtilAudit (= TRGUSER5A), checked 2026-08-27 — **does not have it**
+
+Readable databases: `ACT`, `cmse_new`, `MIR`, `Scratch`, `SmartII`, `master`, `msdb`,
+`tempdb`. Everything else on the instance returns `HAS_DBACCESS = 0` (including
+`MemberResponse`, `PersonMatch`, `EnterpriseMasterData`).
+
+- **`cmse_new` here is the same database as on TRGRepSQL3** — identical table list, row
+  counts identical bar one row of replication lag on `ImportStaging`. Nothing extra.
+- **No MMSEA objects anywhere.** No table/view/proc named `%MMSEA%` or `%Entitlement%`, and
+  no module text referencing `MMSEA`, `EntitlementAgeCount`, `U M Count` or `# of Invs`.
+- **The `MMSEA` database is not on this instance** — it is still only on TRGRepSQL3, still
+  not accessible to `tls2`.
+- **`MIR` is the closest system but cannot produce the numbers.** See below.
+
+### MIR database (on SqlUtilAudit) — genuinely related, still not the source
+
+`MIR` is the MMSEA response-file processing system: `MIRFile` (148 rows), `MIRRecord`
+(68.6M), `MIREligibilityInfo` (1.0M), `PersonInvestigation` (299,652).
+
+**Useful discovery: `MIR.dbo.MIRFile.CMSESourceLogId` joins straight to
+`cmse_new..SourceLog.SourceLogId`.** But:
+
+- It is **Aetna-only** — `FeedClientCode` is just `2-AHP` (TRADITIONAL, 127 files) and
+  `2-AEHMO` (HMO, 21 files). The report covers 21 clients.
+- Only **46** of its files overlap the 2025-08-04 export, all "Aetna Traditional AIS NonMSP".
+- **`# of Invs` equals none of MIR's counts** — 0 of 46 against `RecordsReadAndRecorded`,
+  `NetNewPersons`, `TotalProcessedPersons`, `TotalDistributablePersons`,
+  `TotalDistributableLetters`.
+- A ratio search allowing a *different* formula per load still matched only **6 of 46**
+  (E %) and **5 of 46** (MC %). A real formula would match 46 of 46.
+- Counting investigations through the record chain
+  (`MIRFile → MIRRecord → PersonInvestigation`) gives ~65,000 per file where the report
+  says ~1,600 — off by 40x (it counts every investigation those persons ever had).
+- `MIRRecord.EntitlementFlag` (values A / G / B / blank) and
+  `MedAEffectiveDate` / `MedBEffectiveDate` are the best semantic fits, but the rates are
+  wrong: for CMSESourceLogId 34592 (report says E % 98.66, MC % 91.44) the flag is
+  populated on 99.98% of records, Med A or B on 99.93%, and `(A+B)/total` = 91.28% — close
+  to MC % but not equal, and it does not hold across loads.
+
+### What this did settle — the column meanings
+
+- **MC = Medicare Coverage.** The `MC_` column family in `SmartII.dbo.tblCOB2` and
+  `Scratch..InvestigationRecap` makes it unambiguous: `MC_2728OnFile`,
+  `MC_CoordinationPeriodApplies`, `MC_DiagnosisCode`, `MC_DialysisFirstDate`,
+  `MC_ApprovedFacility`, `MC_DisabilityDate`.
+- **E = Entitlement** (not "Eligibility"), matching `MIRRecord.EntitlementFlag` and
+  cmse_new's `Entitlement{Age,Disability,Esrd}Count`.
+
+Worth confirming both with Adam West rather than assuming.
+
 ## The ask — for Adam West
 
 1. **What produces `E %`, `MC %` and `# of Invs` on the MMSEA_Report?** Specifically:
