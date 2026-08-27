@@ -42,3 +42,8 @@ trr_query.txt
 
 # Claude auto-memory store (managed by the harness, not source)
 memory/
+
+# Adam West's emailed MMSEA_Report exports — client data, ingested from Outlook
+# by cmse_report.py (the only source for E % / MC % / # of Invs). Local input,
+# not source, and not something to push to a remote.
+mmsea_snapshots/

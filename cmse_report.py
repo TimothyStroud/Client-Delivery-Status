@@ -17,6 +17,10 @@ Formerly two separate dashboards (CMSEReport.html + MSPIReport.html), merged
                  record counts).
   3. MMSEA_Report - the layout of MMSEA_Report_20250605.xlsx: one row per
                  SourceLog x StagingStatus, in the spreadsheet's column order.
+                 E % / MC % / # of Invs are *copied* from the newest
+                 MMSEA_Report export (mmsea_snapshots/) because they are MSP
+                 investigation metrics that keep changing after the load - see
+                 UNSOURCED_COLUMNS for the proof they cannot be computed here.
   4. MSPi Monthly - the MSPI dashboard's client/contract x Jan..Dec matrix of
                  files loaded, ported unchanged.
   5. MSPi Report - the layout of "MSPI Report_20250605.xlsx", which is an export
@@ -30,6 +34,9 @@ Formerly two separate dashboards (CMSEReport.html + MSPIReport.html), merged
 Data:
   TRGRepSQL3 / cmse_new    Source, SourceLog, ImportStaging, Client, ClientCodeLookup
   TRGINTP3 / MSP           etl.Tape + history.DET / history.PRM / history.MSP
+  mmsea_snapshots/         Adam West's emailed MMSEA_Report_<YYYYMMDD>.xlsx, the
+                           only source of E % / MC % / # of Invs (auto-ingested
+                           from Documents / the Outlook attachment cache)
   ADO / TFS                MMSEA work items, matched to a load by its PCN
                            (SourceLog.ProductionControlId) appearing in the
                            work-item description.
@@ -240,9 +247,152 @@ RT_BY_FEED = {
 # Columns of the MMSEA_Report spreadsheet that nothing in cmse_new reproduces.
 # Verified 2026-08-14 against MMSEA_Report_20250605.xlsx: two loads with
 # near-identical ImportStaging profiles (HNE MSP 32225 and GEHA MSP 31824) carry
-# 0%/0% and 100%/100%, so no record-level predicate can produce them - they come
-# from outside this database.  Rendered blank rather than guessed.
+# 0%/0% and 100%/100%, so no record-level predicate can produce them.
+#
+# Re-proved 2026-08-27, this time decisively.  Comparing the 2025-06-05 and
+# 2025-08-04 exports over the 782 loads present in both *with byte-identical
+# count columns* (Import Count / Success / Failed / Age / Dis / ESRD / U M Count):
+#     E %        changed on 138 loads
+#     MC %       changed on 448 loads
+#     # of Invs  changed on 212 loads
+# A function of those counts cannot move while every input is frozen, so these
+# three are downstream MSP *investigation* metrics that keep accruing after the
+# load finishes.  They are not computable here at any effort - do not re-run the
+# arithmetic hunt (an exhaustive 2.1M-ratio search over 1,445 derived values
+# found only coincidences; a null test on invented targets scored higher).
+#
+# They are therefore *copied* from the newest MMSEA_Report export instead - see
+# read_mmsea_snapshot().  A load with no snapshot value still renders an em-dash.
 UNSOURCED_COLUMNS = ["E %", "MC %", "# of Invs"]
+
+# Adam West's emailed MMSEA_Report_<YYYYMMDD>.xlsx exports, which are the only
+# available source for E % / MC % / # of Invs.  Copies are kept in
+# mmsea_snapshots/ because the Outlook attachment cache they arrive in is
+# volatile (hashed folders, purged without warning); new ones found in the
+# search paths are ingested into that folder automatically.
+SNAPSHOT_DIR = os.path.join(HERE, "mmsea_snapshots")
+SNAPSHOT_SEARCH = [
+    os.path.expanduser(r"~\Documents"),
+    os.path.expanduser(r"~\AppData\Local\Microsoft\Olk\Attachments"),
+    os.path.expanduser(r"~\Downloads"),
+]
+SNAPSHOT_RE = re.compile(r"^MMSEA_Report_(\d{8})\.xlsx$", re.I)
+# Header row of the export (0-based); rows 0/1 are the title and "Last Update".
+SNAPSHOT_HEADER_ROW = 2
+
+
+def _snapshot_num(x):
+    """'87.09' / '6,551' / None -> float / int / None."""
+    if x is None:
+        return None
+    s = str(x).replace(",", "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def ingest_snapshots():
+    """Copy any MMSEA_Report_*.xlsx found in the search paths into SNAPSHOT_DIR.
+
+    Keeps the largest copy of a given date - Outlook can leave a truncated
+    partial download alongside the complete one.
+    """
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+    found = {}
+    for root in SNAPSHOT_SEARCH:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirs, files in os.walk(root):
+            for fn in files:
+                m = SNAPSHOT_RE.match(fn)
+                if not m:
+                    continue
+                p = os.path.join(dirpath, fn)
+                try:
+                    size = os.path.getsize(p)
+                except OSError:
+                    continue
+                cur = found.get(m.group(1))
+                if cur is None or size > cur[1]:
+                    found[m.group(1)] = (p, size)
+    for date, (src, size) in sorted(found.items()):
+        dst = os.path.join(SNAPSHOT_DIR, "MMSEA_Report_%s.xlsx" % date)
+        if os.path.exists(dst) and os.path.getsize(dst) >= size:
+            continue
+        try:
+            shutil.copy2(src, dst)
+            print("[snapshot] ingested %s" % os.path.basename(dst))
+        except OSError as exc:
+            print("[warn] could not ingest %s: %s" % (src, exc))
+
+
+def read_mmsea_snapshot():
+    """Newest MMSEA_Report export -> ({sourcelogid: {...}}, 'YYYY-MM-DD', note).
+
+    Returns an empty dict (and a note explaining why) rather than raising, so a
+    missing or unreadable export degrades to the old all-em-dash rendering
+    instead of killing the 5am run.
+    """
+    try:
+        ingest_snapshots()
+    except OSError as exc:                       # pragma: no cover - defensive
+        print("[warn] snapshot ingest failed: %s" % exc)
+
+    if not os.path.isdir(SNAPSHOT_DIR):
+        return {}, "", "no mmsea_snapshots folder"
+    dated = sorted(
+        (m.group(1), os.path.join(SNAPSHOT_DIR, fn))
+        for fn in os.listdir(SNAPSHOT_DIR)
+        for m in [SNAPSHOT_RE.match(fn)] if m
+    )
+    if not dated:
+        return {}, "", "no MMSEA_Report_*.xlsx in mmsea_snapshots"
+    date, path = dated[-1]
+    iso = "%s-%s-%s" % (date[:4], date[4:6], date[6:])
+
+    try:
+        import openpyxl
+    except ImportError:
+        return {}, iso, "openpyxl not installed - E %/MC %/# of Invs skipped"
+
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        ws = wb[wb.sheetnames[0]]
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+    except Exception as exc:                     # openpyxl raises many types
+        return {}, iso, "could not read %s: %s" % (os.path.basename(path), exc)
+
+    if len(rows) <= SNAPSHOT_HEADER_ROW:
+        return {}, iso, "%s has no data rows" % os.path.basename(path)
+    hdr = [str(h).strip() if h is not None else "" for h in rows[SNAPSHOT_HEADER_ROW]]
+    need = ["SourceLogID", "E %", "MC %", "# of Invs"]
+    missing = [c for c in need if c not in hdr]
+    if missing:
+        return {}, iso, "%s is missing column(s) %s" % (
+            os.path.basename(path), ", ".join(missing))
+    idx = {c: hdr.index(c) for c in need}
+
+    out = {}
+    for r in rows[SNAPSHOT_HEADER_ROW + 1:]:
+        if not r or r[0] is None:
+            continue
+        sl = r[idx["SourceLogID"]]
+        if sl is None:
+            continue
+        key = str(sl).replace(",", "").strip()
+        if not key or key in out:                # one row per load; staging rows
+            continue                             # repeat these three values
+        invs = _snapshot_num(r[idx["# of Invs"]])
+        out[key] = {
+            "epct": _snapshot_num(r[idx["E %"]]),
+            "mcpct": _snapshot_num(r[idx["MC %"]]),
+            "invs": None if invs is None else int(invs),   # a count, not a rate
+        }
+    return out, iso, ""
 
 # Loads whose ticket the PCN search can't find (the PCN isn't written in any
 # work item description).  Keyed on the ProductionControlId; a key that is the
@@ -820,6 +970,13 @@ def build(full=False):
 
     save_cache(cache)
 
+    # -- E % / MC % / # of Invs from the newest MMSEA_Report export
+    snap, snap_date, snap_note = read_mmsea_snapshot()
+    if snap_note:
+        print("[warn] snapshot: %s" % snap_note)
+    elif snap:
+        print("[snapshot] %s: %d loads carry E %%/MC %%/# of Invs" % (snap_date, len(snap)))
+
     # -- attach ADO + staging to each load, prefer an MMSEA-tagged ticket
     for l in loads:
         hits = [l["wiover"]] if l.get("wiover") else cache["pcn"].get(l.get("pcnk") or "", [])
@@ -843,6 +1000,13 @@ def build(full=False):
         l["file"] = l["entry"].rsplit("\\", 1)[-1]
         l["um"] = cache["um"].get(str(l["sl"]), 0)
         l["rt"] = RT_BY_FEED.get((l["cid"], l["src"]), "")
+        # E % / MC % / # of Invs are copied from the newest MMSEA_Report export -
+        # nothing in cmse_new can produce them (see UNSOURCED_COLUMNS).  Loads
+        # newer than the export simply have no value.
+        snap_row = snap.get(str(l["sl"]))
+        l["epct"] = snap_row["epct"] if snap_row else None
+        l["mcpct"] = snap_row["mcpct"] if snap_row else None
+        l["invs"] = snap_row["invs"] if snap_row else None
 
     tracker, tracker_note = read_tracker()
     if tracker_note:
@@ -911,6 +1075,8 @@ def build(full=False):
         "st": st_rows,
         "stDef": dict(STAGING_STATUS),
         "unsourced": UNSOURCED_COLUMNS,
+        "snap": {"date": snap_date, "n": len(snap), "note": snap_note,
+                 "hit": sum(1 for l in loads if l.get("epct") is not None)},
         "tools": [list(t) for t in TOOLS],
         "regFile": REG_FILE,
         "regDir": os.path.dirname(OUTPUT_PATHS[0]),
@@ -987,6 +1153,12 @@ HTML_TEMPLATE = r"""<!doctype html>
   #mmsea td.entry { max-width:46ch; overflow:hidden; text-overflow:ellipsis; }
   #mmsea td.na { color:#b9bfc7; cursor:help; }
   #mmsea th.na { color:#b9bfc7; cursor:help; }
+  /* Copied from the MMSEA_Report export rather than computed from cmse_new.  A
+     dotted underline marks "hover me for provenance" here exactly as it does on
+     the Loads tab's MIRProcessed client names - no colour, because a snapshot
+     value is neither good nor bad. */
+  #mmsea td.snap { cursor:help; text-decoration:underline dotted #c9cfd6;
+                   text-underline-offset:2px; }
   #mmsea td.sts { cursor:help; }
   /* MSPi Report */
   #msr td.entry { max-width:60ch; overflow:hidden; text-overflow:ellipsis; }
@@ -1203,7 +1375,8 @@ __EXPORT_CSS__
     <div class="wrap"><table id="mmsea"><thead id="mmsea-head"></thead><tbody id="mmsea-body"></tbody></table></div>
     <div class="legend">
       <span>Layout of <b>MMSEA_Report_20250605.xlsx</b> &mdash; one row per load
-        per StagingStatus.</span>
+        per StagingStatus. Dotted-underlined values are copied from the export,
+        not computed.</span>
       <span id="mmsea-note"></span>
     </div>
   </section>
@@ -1541,8 +1714,27 @@ __EXPORT_CSS__
     ['file',    'File Name',            'entry'],
   ];
   const MNA = new Set(D.unsourced || []);
-  const NA_TIP = 'Not available from cmse_new — this column comes from '
-               + 'outside the CMSE database and is left blank.';
+  const SNAP = D.snap || {date:'', n:0, hit:0, note:''};
+  // These three are MSP investigation metrics that keep accruing after the load
+  // finishes, so they are copied from Adam West's MMSEA_Report export rather
+  // than computed.  Proof they are not computable: across the 782 loads in both
+  // the 2025-06-05 and 2025-08-04 exports with identical count columns, MC %
+  // moved on 448 of them.
+  const NA_TIP = SNAP.date
+    ? 'From the MMSEA_Report export of ' + SNAP.date + '. Tracks MSP '
+      + 'investigation activity and keeps changing after the load — not derived '
+      + 'from cmse_new. Loads newer than the export have no value.'
+    : 'Not available from cmse_new — this column comes from outside the CMSE '
+      + 'database and is left blank.';
+  const NOVAL_TIP = SNAP.date
+    ? 'No value: this load is newer than the MMSEA_Report export of '
+      + SNAP.date + ' (or is absent from it).'
+    : NA_TIP;
+  // 2dp like the spreadsheet; 0 is a real value here, not a missing one.
+  const pf = v => (v == null ? null : v.toFixed(2));
+  const snapCell = (v, fmt) => v == null
+    ? `<td class="num na" title="${esc(NOVAL_TIP)}">—</td>`
+    : `<td class="num snap" title="${esc(NA_TIP)}">${fmt(v)}</td>`;
 
   function mmseaRows() {
     const out = [];
@@ -1555,6 +1747,7 @@ __EXPORT_CSS__
       const base = { client:l.client, ftname:SRC[l.src] || '', rt:l.rt || '',
                      idate:(l.start || '').slice(0, 10), rec:l.rec, ok:l.ok, bad:l.bad,
                      age:l.age, dis:l.dis, esrd:l.esrd, um:l.um, sl:l.sl,
+                     epct:l.epct, mcpct:l.mcpct, invs:l.invs,
                      file:l.file, entry:l.entry, src:l.src, ft:l.ft };
       const stats = Object.keys(agg).sort((a, b) => Number(a) - Number(b));
       if (!stats.length) out.push(Object.assign({ st:'', stn:null }, base));
@@ -1595,8 +1788,8 @@ __EXPORT_CSS__
         `<td>${esc(r.ftname)}</td>` +
         `<td class="mid">${esc(r.rt)}</td>` +
         `<td>${esc(r.idate)}</td>` +
-        `<td class="num na" title="${esc(NA_TIP)}">—</td>` +
-        `<td class="num na" title="${esc(NA_TIP)}">—</td>` +
+        snapCell(r.epct, pf) +
+        snapCell(r.mcpct, pf) +
         `<td class="num">${nf(r.rec)}</td>` +
         `<td class="num">${nf(r.ok)}</td>` +
         `<td class="num${r.bad ? ' bad' : ''}">${nf(r.bad)}</td>` +
@@ -1604,16 +1797,25 @@ __EXPORT_CSS__
         `<td class="num">${nf(r.dis)}</td>` +
         `<td class="num">${nf(r.esrd)}</td>` +
         `<td class="num">${nf(r.um)}</td>` +
-        `<td class="num na" title="${esc(NA_TIP)}">—</td>` +
+        snapCell(r.invs, nf) +
         `<td class="mid sts" title="${esc(stTip)}">${esc(r.st) || '—'}</td>` +
         `<td class="num">${r.stn == null ? '—' : nf(r.stn)}</td>` +
         `<td class="num">${r.sl}</td>` +
         `<td class="entry" title="${esc(r.entry)}">${esc(r.file)}</td></tr>`;
     }).join('');
 
-    $('mmsea-note').textContent = MNA.size
-      ? '⚠ ' + [...MNA].join(', ') + ' are not held in cmse_new and stay blank.'
-      : '';
+    // Row count, not load count: one load contributes one row per StagingStatus.
+    const nLoads = new Set(rows.map(r => r.sl)).size;
+    const nFilled = new Set(rows.filter(r => r.epct != null).map(r => r.sl)).size;
+    $('mmsea-note').innerHTML = SNAP.note
+      ? '⚠ ' + esc([...MNA].join(', ')) + ' unavailable: ' + esc(SNAP.note)
+      : (SNAP.date
+        ? '<b>' + esc([...MNA].join(', ')) + '</b> are copied from the '
+          + 'MMSEA_Report export of <b>' + esc(SNAP.date) + '</b> — they track MSP '
+          + 'investigation activity and keep changing after the load, so nothing in '
+          + 'cmse_new can produce them. <b>' + nFilled + ' of ' + nLoads + '</b> loads '
+          + 'shown are covered; newer loads show an em-dash until the next export.'
+        : '⚠ ' + esc([...MNA].join(', ')) + ' are not held in cmse_new and stay blank.');
   }
 
   // ---- MSPi shared --------------------------------------------------------
@@ -2353,11 +2555,14 @@ __EXPORT_CSS__
         subtitle: (S.client || 'All clients') + ' · ' + rows.length +
                   ' rows · generated ' + D.generated,
         headers: MCOLS.map(c => c[1]),
-        rows: rows.map(r => [r.client, r.ftname, r.rt, r.idate, '', '',
-          r.rec, r.ok, r.bad, r.age, r.dis, r.esrd, r.um, '',
+        rows: rows.map(r => [r.client, r.ftname, r.rt, r.idate,
+          pf(r.epct) ?? '', pf(r.mcpct) ?? '',
+          r.rec, r.ok, r.bad, r.age, r.dis, r.esrd, r.um,
+          r.invs == null ? '' : r.invs,
           r.st, r.stn == null ? '' : r.stn, r.sl, r.file]),
         note: 'cmse_new..SourceLog + ImportStaging · '
-              + (D.unsourced || []).join(', ') + ' are not held in cmse_new',
+              + (D.unsourced || []).join(', ') + ' copied from the MMSEA_Report '
+              + 'export of ' + (SNAP.date || 'n/a') + ', blank where not covered',
         rowsPerSlide: 12, fontSz: 600,
       };
     }
