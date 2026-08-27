@@ -1436,16 +1436,18 @@ ADDITIONAL_ENTRIES = [
     # renders as the cert date (MM/DD/YY, no pink). The standing monthly row is
     # suppressed for August via MONTHLY_PLACEMENT_OVERRIDES["Molina"] so this is
     # the only Molina cell on the August tab.
+    # Both Implementation rows highlighted yellow per user 2026-08-27.
     ("monthly", date(2026, 8, 27), "Molina (Implementation)",
-     date(2026, 8, 27), False, None),
+     date(2026, 8, 27), False, "yellow"),
     # 2026-08-27 per user: add 'ModaRx (Implementation)' to today's Monthly
     # section; the standing 'ModaRx' monthly row starts on the 5th from
     # September forward (MONTHLY_STARTS_FROM). RAMP feed 905 is built out
     # ('ModaRx 0100 Stage' / '0110 Load' / '0120 Snap' — the Snap job is still
-    # Enabled=0) but nothing has certified yet, so the row is pinned by hand
-    # with the "Implementation" marker (never pink).
+    # Enabled=0) but nothing has certified yet, so the row is pinned by hand.
+    # Per user 2026-08-27 the Date shows 8/27/26 (same treatment as Molina)
+    # rather than the "Implementation" marker.
     ("monthly", date(2026, 8, 27), "ModaRx (Implementation)",
-     "Implementation", False, None),
+     date(2026, 8, 27), False, "yellow"),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
