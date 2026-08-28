@@ -48,6 +48,7 @@ the 5am weekday refresh is cheap.  `--full` rebuilds from scratch.
 Manual run:  python C:\Users\tls2\.claude\projects\H--\cmse_report.py
 """
 
+import glob
 import json
 import os
 import re
@@ -119,6 +120,27 @@ SOURCE_TYPE = {
     19: ("NMSP", "Aetna NMSP"),
     20: ("MSP",  "Aetna MSP"),
 }
+
+# ---- Emblem platform indicator (2026-08-28) --------------------------------
+#
+# Emblem is a multi-platform client: the CMS submitter/receiver ID carried inside
+# each response file is what identifies which Facets platform it came from.  Per
+# Tammy Beach / Linda Hutton's "MMSEA Emblem question" thread (Apr 2022), the ID
+# -> platform mapping is fixed, and the ID lives in a different spot per type:
+#
+#   MSP / Non-MSP  header record   H0000056205MSPR20260306  -> H + 10-digit ID
+#   HEW (X12 271)  ISA segment     ISA*00*...*ZZ*000055353  -> first numeric ZZ
+#
+# so the platform is read straight off the file that SourceLog.EntryName points
+# at (the _padded / _unwrapped working copies keep both markers intact).
+EMBLEM_CLIENT = "Emblem"
+EMBLEM_ROOT = r"\\trgdatacap2\MMSEA\Emblem"
+EMBLEM_PLATFORMS = [
+    ("52338", "HIP",  "HIP_Facets"),
+    ("55353", "GHI",  "GHI_Facets"),
+    ("56205", "CCI",  "CCI_Facets"),
+]
+EMBLEM_PLATFORM_BY_ID = {i: (short, full) for i, short, full in EMBLEM_PLATFORMS}
 
 # File Type / Display Length table from the right of the Excel calendar (S1:X8)
 FILE_SPECS = [
@@ -491,6 +513,39 @@ def fetch_loads():
     return loads
 
 
+def emblem_platform(entry):
+    """(id, short, full) for an Emblem file, or None if it can't be determined.
+
+    Reads only the first record.  EntryName points at the working copy: the
+    _padded MSP file still carries the H header, but the _unwrapped HEW file is
+    the flattened output and has lost the ISA segment - so the original
+    delivered file (same name without the suffix) is tried as well.
+    """
+    cands = [entry]
+    # the suffix normally sits before the extension, but a few EntryNames carry
+    # no extension at all (e.g. "...T21220089_unwrapped"), in which case the
+    # delivered file is the stripped name plus whatever extension it has
+    base = re.sub(r"_(padded|unwrapped)(\.[^.]*)?$", r"\2", entry, flags=re.I)
+    if base != entry:
+        cands.append(base)
+        if not os.path.exists(base):
+            cands.extend(sorted(glob.glob(glob.escape(base) + ".*")))
+    for path in cands:
+        try:
+            with open(path, "rb") as f:
+                head = f.read(400).decode("latin-1")
+        except OSError:
+            continue
+        if head.startswith("ISA"):
+            m = re.search(r"\*ZZ\*0*(\d{4,6})", head)      # sender is *ZZ*COB
+        else:
+            m = re.match(r"H0*(\d{4,6})", head)
+        if m and m.group(1) in EMBLEM_PLATFORM_BY_ID:
+            short, full = EMBLEM_PLATFORM_BY_ID[m.group(1)]
+            return m.group(1), short, full
+    return None
+
+
 def fetch_staging(source_log_ids):
     """ImportStaging rollup for the given SourceLogIds -> {sl: [[dn, status, n], ...]}."""
     out = defaultdict(list)
@@ -808,14 +863,14 @@ def read_tracker():
 def load_cache(full):
     if full or not os.path.exists(CACHE):
         return {"staging": {}, "um": {}, "pcn": {}, "pcn_checked": {}, "wi": {},
-                "mspi": {}}
+                "mspi": {}, "emblem": {}}
     try:
         with open(CACHE, "r", encoding="utf-8") as f:
             c = json.load(f)
     except Exception:
         return {"staging": {}, "um": {}, "pcn": {}, "pcn_checked": {}, "wi": {},
-                "mspi": {}}
-    for k in ("staging", "um", "pcn", "pcn_checked", "wi", "mspi"):
+                "mspi": {}, "emblem": {}}
+    for k in ("staging", "um", "pcn", "pcn_checked", "wi", "mspi", "emblem"):
         c.setdefault(k, {})
     return c
 
@@ -884,6 +939,21 @@ def build(full=False):
     clients = fetch_clients()
     loads = fetch_loads()
     print("[info] %d loads, %d clients" % (len(loads), len(clients)))
+
+    # -- Emblem platform: read the submitter/receiver ID out of each Emblem file
+    #    once and cache it by EntryName (the files never change after delivery).
+    emb = [l for l in loads if l["client"] == EMBLEM_CLIENT]
+    miss = [l for l in emb if l["entry"] not in cache["emblem"]]
+    if miss:
+        print("[info] Emblem platform scan for %d file(s)..." % len(miss))
+        for l in miss:
+            cache["emblem"][l["entry"]] = emblem_platform(l["entry"])
+    for l in emb:
+        got = cache["emblem"].get(l["entry"])
+        if got:
+            l["platid"], l["plat"], l["platf"] = got
+    print("[info] %d/%d Emblem loads have a platform"
+          % (sum(1 for l in emb if l.get("plat")), len(emb)))
 
     # -- ImportStaging: everything uncached, plus anything loaded in the last 30
     #    days (a recent load can still be re-summarized).
@@ -1071,6 +1141,10 @@ def build(full=False):
         "scope": SOURCE_IDS,
         "clients": clients,
         "specs": [list(s) for s in FILE_SPECS],
+        "emblem": {"client": EMBLEM_CLIENT, "root": EMBLEM_ROOT,
+                   "plat": [list(p) for p in EMBLEM_PLATFORMS],
+                   "n": sum(1 for l in loads if l.get("plat")),
+                   "tot": sum(1 for l in loads if l["client"] == EMBLEM_CLIENT)},
         "srcType": {str(k): list(v) for k, v in SOURCE_TYPE.items()},
         "st": st_rows,
         "stDef": dict(STAGING_STATUS),
@@ -1287,6 +1361,14 @@ HTML_TEMPLATE = r"""<!doctype html>
   .pill.closed { background:#e8f5e9; border-color:#c8e6c9; color:#1b5e20; }
   .pill.open { background:#fff4e5; border-color:#ffe0b2; color:#8a5300; }
   .pill.none { background:#fdecea; border-color:#f8c9c4; color:#8a1c13; }
+  /* Emblem platform indicator: one colour per Facets platform, so the Loads tab
+     can be scanned for "which platform did this month's file come from" */
+  .pill.plat { margin-left:6px; cursor:help; font-weight:600; letter-spacing:.02em; }
+  .pill.plat.CCI { background:#e8f0fb; border-color:#c5d8f2; color:#1f3d5c; }
+  .pill.plat.HIP { background:#eaf6ee; border-color:#c6e5d1; color:#1b5e20; }
+  .pill.plat.GHI { background:#f3ecfa; border-color:#ddcdef; color:#4a2a72; }
+  .pill.plat.unk { background:#f2f4f7; border-color:var(--border); color:var(--muted);
+                   font-weight:400; }
   tr.det td { background:#fbfcfd !important; padding:0; }
   tr.det table { margin:6px 0 10px 28px; width:auto; }
   tr.det th, tr.det td { border-bottom:1px solid #eef1f4; font-size:12px;
@@ -1449,6 +1531,9 @@ __EXPORT_CSS__
         <div class="card"><h2>File Type &mdash; layout</h2><div class="body">
           <table id="specs"></table></div>
           <p class="note">From the MMSEA&nbsp;-&nbsp;2026 tab of ClientTracker.2026.xlsx.</p></div>
+        <div class="card"><h2>Emblem platform indicator</h2><div class="body">
+          <table id="embkey"></table></div>
+          <p class="note" id="embnote"></p></div>
         <div class="card"><h2>StagingStatus</h2><div class="body">
           <table id="stkey"></table></div>
           <p class="note">Record counts across every load in window.</p></div>
@@ -1648,15 +1733,25 @@ __EXPORT_CSS__
       const wiCell = l.wi
         ? `<a href="${D.adoBase}${l.wi}" target="_blank" title="${esc(l.wit)}">${l.wi}</a>`
         : '<span class="pill none">none</span>';
-      // Aetna (ClientId 5) carries the MIR flags; only that client gets the tooltip
-      const isAetna = l.client === 'Aetna' && l.cid === 5;
+      // Aetna (ClientId 5) carries the MIR flags; only that client gets the
+      // tooltip - and not on Aetna MSP (SourceId 20), which is excluded by
+      // request.  Aetna NMSP (19) keeps it.
+      const isAetna = l.client === 'Aetna' && l.cid === 5 && l.src !== 20;
       const mirTip = isAetna
         ? `MIRProcessed: ${l.mir === '1' ? 'Yes' : l.mir === '0' ? 'No' : '\u2014'}`
           + `\nMIRProcessedDate: ${l.mird || '\u2014'}`
         : '';
+      // Emblem is multi-platform: show which Facets platform the file came from
+      const platCell = l.client === D.emblem.client
+        ? (l.plat
+            ? ` <span class="pill plat ${l.plat}" title="${esc('Platform: ' + l.platf
+                + '\nSubmitter/Receiver ID: ' + l.platid)}">${l.plat}</span>`
+            : ' <span class="pill plat unk" title="Platform could not be read from'
+              + ' the file (missing or unrecognised submitter ID)">?</span>')
+        : '';
       const cliCell = isAetna
         ? `<td class="mir" title="${esc(mirTip)}">${esc(l.client)}</td>`
-        : `<td>${esc(l.client)}</td>`;
+        : `<td>${esc(l.client)}${platCell}</td>`;
       out.push(`<tr class="load" data-sl="${l.sl}">` +
         `<td class="exp">${open?'\u2212':'+'}</td>` +
         `<td class="num">${l.sl}</td>` +
@@ -2237,6 +2332,35 @@ __EXPORT_CSS__
       '<th>SMART Client Codes</th></tr></thead><tbody>' +
       D.clients.map(c => `<tr><td class="num">${c.id}</td><td><b>${esc(c.name)}</b></td>` +
         `<td>${esc(c.codes||'')}</td></tr>`).join('') + '</tbody>';
+
+    const E = D.emblem;
+    $('embkey').innerHTML =
+      '<thead><tr><th class="num">Submitter / Receiver ID</th><th>Indicator</th>' +
+      '<th>Platform</th><th class="num">Loads in window</th></tr></thead><tbody>' +
+      E.plat.map(([id, short, full]) => {
+        const n = D.loads.filter(l => l.platid === id).length;
+        return `<tr class="${n?'':'dim'}"><td class="num"><b>${esc(id)}</b></td>` +
+               `<td><span class="pill plat ${short}">${short}</span></td>` +
+               `<td>${esc(full)}</td><td class="num">${n ? nf(n) : '—'}</td></tr>`;
+      }).join('') +
+      `<tr class="dim"><td class="num">—</td>` +
+      `<td><span class="pill plat unk">?</span></td>` +
+      `<td>Not determined — file unreadable or ID unrecognised</td>` +
+      `<td class="num">${nf(E.tot - E.n) || '—'}</td></tr>` +
+      '</tbody>';
+    $('embnote').innerHTML =
+      '<b>' + esc(E.client) + '</b> is a multi-platform client, so the Loads tab tags ' +
+      'every ' + esc(E.client) + ' row with the Facets platform its file came from ' +
+      '(hover the pill for the full platform name and ID). The platform is not in ' +
+      'the file name &mdash; it is the CMS submitter/receiver ID inside the file:' +
+      '<br>&bull; <b>MSP / Non-MSP</b>: the header record, <code>H</code> + 10-digit ID ' +
+      '&mdash; e.g. <code>H0000056205MSPR20260306</code> &rarr; 56205 &rarr; CCI_Facets.' +
+      '<br>&bull; <b>HEW</b> (X12 271): the <code>ISA</code> segment&rsquo;s receiver ID ' +
+      '&mdash; e.g. <code>ISA*00*&hellip;*ZZ*COB*ZZ*000055353</code> &rarr; 55353 &rarr; GHI_Facets.' +
+      '<br>Read from the file at <code>SourceLog.EntryName</code> under <code>' +
+      esc(E.root) + '</code>. Mapping per the <i>MMSEA Emblem question</i> thread ' +
+      '(T. Beach / L. Hutton, Apr 2022). ' + nf(E.n) + ' of ' + nf(E.tot) +
+      ' ' + esc(E.client) + ' loads in window resolved.';
 
     $('stkey').innerHTML = '<thead><tr><th class="num">Status</th><th>Definition</th>' +
       '<th class="num">Records</th></tr></thead><tbody>' +
