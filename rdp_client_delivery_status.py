@@ -1355,6 +1355,13 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     # is separately suppressed for Kaiser_WARx in alert_state. Remove once it
     # certifies.
     ("Kaiser_WARx", 2026, 7): "L",
+    # 2026-08-31 per user: "ModaRx was loaded and certified today. Please leave
+    # ModaRx on Tuesday, but add 8/31/26 to cert date cell." The cert landed on
+    # 8/31 (August) but ModaRx's first standing row is September
+    # (MONTHLY_STARTS_FROM), on the 2nd — so the September cell keeps its place
+    # and just carries the early 08/31/26 cert date. A real September cert wins
+    # automatically (step 1 runs before this override).
+    ("ModaRx", 2026, 9): date(2026, 8, 31),
     # 2026-08-05: BCBSSCRx's July delivery finally loaded (8/5 00:22), snapped
     # (8/5 02:31) and CERTIFIED 8/5 09:55 — per user "BCBSSCRx will be certified
     # today for the July delivery." The July tab now surfaces that cert via
