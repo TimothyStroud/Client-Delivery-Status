@@ -1447,8 +1447,9 @@ ADDITIONAL_ENTRIES = [
     ("monthly", date(2026, 8, 27), "Molina (Implementation)",
      date(2026, 8, 27), False, "yellow"),
     # 2026-08-27 per user: add 'ModaRx (Implementation)' to today's Monthly
-    # section; the standing 'ModaRx' monthly row starts on the 5th from
-    # September forward (MONTHLY_STARTS_FROM). RAMP feed 905 is built out
+    # section; the standing 'ModaRx' monthly row starts from September forward
+    # (MONTHLY_STARTS_FROM), on the 2nd as of 2026-08-31 (was the 5th when this
+    # row was written — see MONTHLY_EXPECTED_DAY_RANGE). RAMP feed 905 is built out
     # ('ModaRx 0100 Stage' / '0110 Load' / '0120 Snap' — the Snap job is still
     # Enabled=0) but nothing has certified yet, so the row is pinned by hand.
     # Per user 2026-08-27 the Date shows 8/27/26 (same treatment as Molina)
@@ -1621,8 +1622,9 @@ MONTHLY_RETIRED_FROM = {
 # Inverse of MONTHLY_RETIRED_FROM: new monthly clients that only start appearing
 # from the given (year, month) forward — earlier month tabs stay clean.
 # ModaRx added 2026-08-27 per user: "Add 'ModaRx' to the monthly section on the
-# 5th starting in September forward." (Today's Implementation row is a one-off
-# ADDITIONAL_ENTRIES entry on the August tab.)
+# 5th starting in September forward." (The 8/27 Implementation row is a one-off
+# ADDITIONAL_ENTRIES entry on the August tab.) Moved to the 2nd per user
+# 2026-08-31 — see MONTHLY_EXPECTED_DAY_RANGE["ModaRx"].
 MONTHLY_STARTS_FROM = {
     "ModaRx": (2026, 9),
 }
@@ -1735,10 +1737,15 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     "MedicalMutualMHS":       (1, 1),
     "NCStateRx":              (1, 1),
     "MedicalMutualOH":        (3, 8),
-    # ModaRx: monthly CLAIMS delivery only, anchored to the 5th per user
-    # 2026-08-27. No MONTHLY_PLACEMENT_WEEKDAY entry so it stays on the 5th
-    # itself rather than spreading across that work-week.
-    "ModaRx":                 (5, 5),
+    # ModaRx: monthly CLAIMS delivery only. Anchored to the 5th when it was
+    # wired 2026-08-27, MOVED TO THE 2nd per user 2026-08-31 ("Add ModaRx to the
+    # 2nd of each month instead of the 5th, starting with 9/2/26"). Sept 2026 is
+    # its first month on the report (MONTHLY_STARTS_FROM), so no earlier tab has
+    # a 5th-of-the-month cell to preserve and a plain range change is enough —
+    # no date-gated override needed. No MONTHLY_PLACEMENT_WEEKDAY entry so it
+    # stays on the 2nd itself (next Monday if the 2nd is a weekend) rather than
+    # spreading across that work-week.
+    "ModaRx":                 (2, 2),
     "MedImpactPBMRx":         (5, 10),
     "AetnaQNXTRx":            (5, 10),
     "BCBSVT":                 (5, 10),
@@ -5230,6 +5237,21 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         d, marker = apply_sticky_monthly(c, d, marker, year, month, today, told_otherwise)
         if d.month != month:
             continue
+        # A week straddling two months is rendered on whichever month owns 3+ of
+        # its weekdays (see month_weeks), so a day at the very start/end of a
+        # month can be missing from its OWN tab — e.g. Oct 1 and Oct 2 of 2026
+        # live in the 9/28-10/2 week, which September claims (3 Sept weekdays vs
+        # 2 Oct). place() keys the bucket by day and the renderers only draw days
+        # the tab has a column for, so such a row was SILENTLY DROPPED: verified
+        # 2026-08-31 that Chickering / Christus / MedicalMutualMHS / NCStateRx
+        # (all day-1 clients) had no October 2026 row at all, and the same held
+        # for January (1/1 Thu) and May (5/1 Fri). Moving ModaRx to the 2nd put
+        # it in the same hole. Snap the day onto the nearest day this tab really
+        # renders so a monthly row always has a home on its own month's tab.
+        if d not in all_days:
+            same_month_days = [x for x in all_days if x.month == month]
+            if same_month_days:
+                d = min(same_month_days, key=lambda x: (abs((x - d).days), x))
         # Only-when-active clients (HumanaRx): no placeholder row on a fixed
         # expected day — drop the month entirely unless something happened.
         if c in MONTHLY_ONLY_WHEN_ACTIVE and marker in ("", "No Data", "Inactive"):
