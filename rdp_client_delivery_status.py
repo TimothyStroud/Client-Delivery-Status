@@ -998,6 +998,13 @@ MANUAL_OVERRIDES = {
     #   4/17-4/24 TapeID 16120-16127 ┘ both → cert 8/24 → 8/24 cell as "(4/10-4/24)"
     ("HealthNetCA",   date(2026, 8, 17)): date(2026, 8, 19),
     ("HealthNetCA",   date(2026, 8, 24)): date(2026, 8, 24),
+    # 2026-08-31 per user: "HealthNetCA for 8/31 is for (4/24-6/5)." Same shape
+    # again — six backfill weeks (4/24-5/1 … 5/29-6/5, TapeID 16128-16171) all
+    # loaded inside the 8/24 calendar week (8/24 → 8/28) and certified together
+    # on 8/31 08:54. Their StatTimestamps are 8/24-8/28, i.e. the 8/24 week, so
+    # cert_in_week would file this cert on the already-pinned 8/24 cell and the
+    # 8/31 cell would come up empty. Pin the 8/31 cert to the 8/31 cell.
+    ("HealthNetCA",   date(2026, 8, 31)): date(2026, 8, 31),
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
@@ -1692,9 +1699,15 @@ HEALTHNETCA_FAILED_RANGES = {
 # certified together on Mon 8/24, so the 8/24 cell carries the merged span. The
 # 8/17 pin keeps that cell on the 3/27-4/3 week it certified for (8/19), and the
 # 4/3-4/10 week (cert 8/20) rides its own ADDITIONAL_ENTRIES row.
+#
+# 2026-08-31 per user: "HealthNetCA for 8/31 is for (4/24-6/5)." The six chunks
+# 4/24-5/1 / 5/1-5/8 / 5/8-5/15 / 5/15-5/22 / 5/22-5/29 / 5/29-6/5 all loaded in
+# the 8/24 week (8/24 through 8/28) but certified together 8/31, so the 8/31
+# cell carries the merged span while the 8/24 pin keeps that cell on 4/10-4/24.
 HEALTHNETCA_RANGE_LABEL_OVERRIDES = {
     date(2026, 8, 17): " (3/27-4/3)",
     date(2026, 8, 24): " (4/10-4/24)",
+    date(2026, 8, 31): " (4/24-6/5)",
 }
 
 # Override display name for a client (the label only; client_key stays the same).
