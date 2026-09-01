@@ -96,6 +96,9 @@ LATE_FILL = "FFFFC7CE"          # pink "Late - Outreach Date" fill on the Excel 
 CACHE = os.path.join(HERE, "cmse_report_cache.json")
 
 REPORT_NAME = "MMSEA_MSPi_CMSE"
+# Display title only.  REPORT_NAME stays the file name - the trgfile1 path and the
+# Notion link both point at MMSEA_MSPi_CMSE.html.
+REPORT_TITLE = "MMSEA, MSPi, CMSE Dashboard"
 
 OUTPUT_PATHS = [
     r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule"
@@ -1209,7 +1212,7 @@ def build(full=False):
 
     return {
         "generated": now.strftime("%Y-%m-%d %H:%M"),
-        "name": REPORT_NAME,
+        "name": REPORT_TITLE,
         "mspi": mspi,
         "mspiRawOrTransform": MSPI_RAW_OR_TRANSFORM,
         "windowStart": WINDOW_START,
@@ -1248,7 +1251,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>MMSEA_MSPi_CMSE</title>
+<title>MMSEA, MSPi, CMSE Dashboard</title>
 <style>
   :root {
     --bg:#f4f6f9; --card:#fff; --border:#e3e7ec; --text:#24292f; --muted:#656d76;
@@ -1309,10 +1312,10 @@ HTML_TEMPLATE = r"""<!doctype html>
   #mmsea td.entry { max-width:46ch; overflow:hidden; text-overflow:ellipsis; }
   #mmsea td.na { color:#b9bfc7; cursor:help; }
   #mmsea th.na { color:#b9bfc7; cursor:help; }
-  /* Copied from the MMSEA_Report export rather than computed from cmse_new.  A
-     dotted underline marks "hover me for provenance" here exactly as it does on
-     the Loads tab's MIRProcessed client names - no colour, because a snapshot
-     value is neither good nor bad. */
+  /* Read from the MSP-side reporting tables rather than computed from cmse_new.
+     A dotted underline marks "hover me for provenance" here exactly as it does
+     on the Loads tab's MIRProcessed client names - no colour, because a
+     borrowed value is neither good nor bad. */
   #mmsea td.snap { cursor:help; text-decoration:underline dotted #c9cfd6;
                    text-underline-offset:2px; }
   #mmsea td.sts { cursor:help; }
@@ -1473,6 +1476,8 @@ HTML_TEMPLATE = r"""<!doctype html>
              border-bottom:1px solid var(--border); }
   .card .body { padding:0; max-height:60vh; overflow:auto; }
   .card.wide { flex:1 1 560px; max-width:820px; }
+  /* forces a wrap in .cards so the card lands on its own row at the bottom */
+  .card.full { flex:1 1 100%; }
   #clikey td:last-child { white-space:normal; line-height:1.5; color:var(--muted);
                           font-size:12px; }
   .card p.note { margin:0; padding:8px 14px; font-size:12px; color:var(--muted);
@@ -1485,7 +1490,7 @@ __EXPORT_CSS__
 </head>
 <body>
 <header>
-  <h1>MMSEA_MSPi_CMSE &mdash; MMSEA Response Files &amp; MSPI File Loading</h1>
+  <h1>MMSEA, MSPi, CMSE Dashboard &mdash; MMSEA Response Files &amp; MSPI File Loading</h1>
   <div class="meta" id="meta"></div>
 </header>
 <main>
@@ -1493,7 +1498,7 @@ __EXPORT_CSS__
     <div class="seg" id="tabs">
       <button data-tab="loads" class="active">Loads</button>
       <button data-tab="cal">Calendar</button>
-      <button data-tab="mmsea">MMSEA_Report</button>
+      <button data-tab="mmsea">MMSEA Report</button>
       <button data-tab="msmo">MSPi Monthly</button>
       <button data-tab="msr">MSPi Report</button>
       <button data-tab="sum">Monthly Summary</button>
@@ -1613,9 +1618,6 @@ __EXPORT_CSS__
         <div class="card"><h2>File Type &mdash; layout</h2><div class="body">
           <table id="specs"></table></div>
           <p class="note">From the MMSEA&nbsp;-&nbsp;2026 tab of ClientTracker.2026.xlsx.</p></div>
-        <div class="card"><h2>Emblem platform indicator</h2><div class="body">
-          <table id="embkey"></table></div>
-          <p class="note" id="embnote"></p></div>
         <div class="card"><h2>StagingStatus</h2><div class="body">
           <table id="stkey"></table></div>
           <p class="note">Record counts across every load in window.</p></div>
@@ -1631,6 +1633,10 @@ __EXPORT_CSS__
           <p class="note">ClientId / ClientName from cmse_new..Client, joined to
             ClientCodeLookup for the SMART client codes.</p></div>
       </div>
+      <!-- Full-width, so it wraps onto its own row below the three columns. -->
+      <div class="card full"><h2>Emblem platform indicator</h2><div class="body">
+        <table id="embkey"></table></div>
+        <p class="note" id="embnote"></p></div>
     </div>
   </section>
 </main>
