@@ -17,9 +17,9 @@ Formerly two separate dashboards (CMSEReport.html + MSPIReport.html), merged
                  record counts).
   3. MMSEA_Report - the layout of MMSEA_Report_20250605.xlsx: one row per
                  SourceLog x StagingStatus, in the spreadsheet's column order.
-                 E % / MC % / # of Invs are *copied* from the newest
-                 MMSEA_Report export (mmsea_snapshots/) because they are MSP
-                 investigation metrics that keep changing after the load - see
+                 E % / MC % / # of Invs are read from the MSP-side reporting
+                 tables because they are investigation metrics that keep
+                 changing after the load - see read_mmsea_live(), and
                  UNSOURCED_COLUMNS for the proof they cannot be computed here.
   4. MSPi Monthly - the MSPI dashboard's client/contract x Jan..Dec matrix of
                  files loaded, ported unchanged.
@@ -34,9 +34,11 @@ Formerly two separate dashboards (CMSEReport.html + MSPIReport.html), merged
 Data:
   TRGRepSQL3 / cmse_new    Source, SourceLog, ImportStaging, Client, ClientCodeLookup
   TRGINTP3 / MSP           etl.Tape + history.DET / history.PRM / history.MSP
-  mmsea_snapshots/         Adam West's emailed MMSEA_Report_<YYYYMMDD>.xlsx, the
-                           only source of E % / MC % / # of Invs (auto-ingested
-                           from Documents / the Outlook attachment cache)
+  TRGRepSQL3 / MMSEA       report.MMSEAReport - E % / MC % (by SourceLogID)
+  TRGRD2 / CARLQT          dbo.rptCMSESourceCounts.Completed - # of Invs
+  mmsea_snapshots/         Adam West's emailed MMSEA_Report_<YYYYMMDD>.xlsx, now
+                           only a fallback for those three (auto-ingested from
+                           Documents / the Outlook attachment cache)
   ADO / TFS                MMSEA work items, matched to a load by its PCN
                            (SourceLog.ProductionControlId) appearing in the
                            work-item description.
@@ -283,9 +285,15 @@ RT_BY_FEED = {
 # arithmetic hunt (an exhaustive 2.1M-ratio search over 1,445 derived values
 # found only coincidences; a null test on invented targets scored higher).
 #
-# They are therefore *copied* from the newest MMSEA_Report export instead - see
-# read_mmsea_snapshot().  A load with no snapshot value still renders an em-dash.
-UNSOURCED_COLUMNS = ["E %", "MC %", "# of Invs"]
+# They are therefore read from the reporting tables that *do* hold them - see
+# read_mmsea_live() - with the MMSEA_Report export kept only as a fallback for
+# loads those tables don't cover.  A load with neither still renders an em-dash.
+#
+# 2026-09-01: read access to the MMSEA database was granted, and all three are
+# now sourced live, so nothing is unsourced any more.  Kept (empty) because the
+# payload key and its column-tooltip machinery are still wired up - put a column
+# name back here and it reverts to the em-dash rendering.
+UNSOURCED_COLUMNS = []
 
 # Adam West's emailed MMSEA_Report_<YYYYMMDD>.xlsx exports, which are the only
 # available source for E % / MC % / # of Invs.  Copies are kept in
@@ -415,6 +423,71 @@ def read_mmsea_snapshot():
             "invs": None if invs is None else int(invs),   # a count, not a rate
         }
     return out, iso, ""
+
+
+# Live source for E % / MC % / # of Invs, reachable since read access to the
+# MMSEA database was granted (2026-09-01).  Both tables are keyed on the CMSE
+# SourceLogID, and both keep accruing after the load finishes - which is exactly
+# why the counts in cmse_new can't reproduce them.
+#
+# Verified against MMSEA_Report_20250804.xlsx over the 808 loads it holds:
+#   E %        526/808 exact          (182 higher, 100 lower - a ratio, moves both ways)
+#   MC %       308/808 exact, 500 higher, 0 lower
+#   # of Invs  384/673 exact, 289 higher, 0 lower   <- Completed, NOT Hits (3/673)
+# The non-exact ones are all small deltas in the accrual direction: the export is
+# a frozen 2025-08-04 reading of the same live numbers.
+LIVE_SERVER = "TRGRepSQL3"
+LIVE_DATABASE = "MMSEA"
+INVS_SERVER = "TRGRD2"
+INVS_DATABASE = "CARLQT"
+
+
+def read_mmsea_live():
+    """report.MMSEAReport + rptCMSESourceCounts -> ({sourcelogid: {...}}, note).
+
+    Degrades to an empty dict with a note rather than raising: losing the MMSEA
+    grant again must not kill the 5am run, it must fall back to the snapshot.
+    """
+    out, notes = {}, []
+
+    def num(s):
+        try:
+            return float(str(s).replace(",", ""))
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        rows = sql("SELECT SourceLogID, DistinctMatchPercentage_Eligibility,"
+                   " TotalMatchPercentage_Cache FROM report.MMSEAReport",
+                   server=LIVE_SERVER, database=LIVE_DATABASE)
+    except Exception as exc:                     # sqlcmd failure / no grant
+        rows = []
+        notes.append("%s..report.MMSEAReport: %s" % (LIVE_DATABASE, str(exc)[:120]))
+    for r in rows:
+        if len(r) < 3 or not r[0]:
+            continue
+        e, m = num(r[1]), num(r[2])
+        # stored as a 0-1 rate; the report shows 2dp percent like the spreadsheet
+        out[r[0]] = {"epct": None if e is None else e * 100.0,
+                     "mcpct": None if m is None else m * 100.0,
+                     "invs": None}
+
+    try:
+        rows = sql("SELECT cmsesourcelogid, Completed FROM dbo.rptCMSESourceCounts",
+                   server=INVS_SERVER, database=INVS_DATABASE)
+    except Exception as exc:
+        rows = []
+        notes.append("%s..rptCMSESourceCounts: %s" % (INVS_DATABASE, str(exc)[:120]))
+    for r in rows:
+        if len(r) < 2 or not r[0]:
+            continue
+        n = num(r[1])
+        if n is None:
+            continue
+        out.setdefault(r[0], {"epct": None, "mcpct": None})["invs"] = int(n)
+
+    return out, "; ".join(notes)
+
 
 # Loads whose ticket the PCN search can't find (the PCN isn't written in any
 # work item description).  Keyed on the ProductionControlId; a key that is the
@@ -1040,12 +1113,18 @@ def build(full=False):
 
     save_cache(cache)
 
-    # -- E % / MC % / # of Invs from the newest MMSEA_Report export
+    # -- E % / MC % / # of Invs: live tables first, MMSEA_Report export as backup
+    live, live_note = read_mmsea_live()
+    if live_note:
+        print("[warn] live: %s" % live_note)
+    if live:
+        print("[live] %d loads carry E %%/MC %%/# of Invs" % len(live))
+
     snap, snap_date, snap_note = read_mmsea_snapshot()
     if snap_note:
         print("[warn] snapshot: %s" % snap_note)
     elif snap:
-        print("[snapshot] %s: %d loads carry E %%/MC %%/# of Invs" % (snap_date, len(snap)))
+        print("[snapshot] %s: %d loads (fallback)" % (snap_date, len(snap)))
 
     # -- attach ADO + staging to each load, prefer an MMSEA-tagged ticket
     for l in loads:
@@ -1070,13 +1149,15 @@ def build(full=False):
         l["file"] = l["entry"].rsplit("\\", 1)[-1]
         l["um"] = cache["um"].get(str(l["sl"]), 0)
         l["rt"] = RT_BY_FEED.get((l["cid"], l["src"]), "")
-        # E % / MC % / # of Invs are copied from the newest MMSEA_Report export -
-        # nothing in cmse_new can produce them (see UNSOURCED_COLUMNS).  Loads
-        # newer than the export simply have no value.
-        snap_row = snap.get(str(l["sl"]))
-        l["epct"] = snap_row["epct"] if snap_row else None
-        l["mcpct"] = snap_row["mcpct"] if snap_row else None
-        l["invs"] = snap_row["invs"] if snap_row else None
+        # E % / MC % / # of Invs come from the live MSP-side reporting tables;
+        # nothing in cmse_new can produce them (see read_mmsea_live).  Per column
+        # fallback to the export, so a load the live tables miss still shows
+        # whatever the last snapshot held.
+        live_row = live.get(str(l["sl"])) or {}
+        snap_row = snap.get(str(l["sl"])) or {}
+        for col in ("epct", "mcpct", "invs"):
+            v = live_row.get(col)
+            l[col] = snap_row.get(col) if v is None else v
 
     tracker, tracker_note = read_tracker()
     if tracker_note:
@@ -1150,6 +1231,7 @@ def build(full=False):
         "stDef": dict(STAGING_STATUS),
         "unsourced": UNSOURCED_COLUMNS,
         "snap": {"date": snap_date, "n": len(snap), "note": snap_note,
+                 "live": len(live), "liveNote": live_note,
                  "hit": sum(1 for l in loads if l.get("epct") is not None)},
         "tools": [list(t) for t in TOOLS],
         "regFile": REG_FILE,
@@ -1809,22 +1891,17 @@ __EXPORT_CSS__
     ['file',    'File Name',            'entry'],
   ];
   const MNA = new Set(D.unsourced || []);
-  const SNAP = D.snap || {date:'', n:0, hit:0, note:''};
+  const SNAP = D.snap || {date:'', n:0, hit:0, note:'', live:0};
   // These three are MSP investigation metrics that keep accruing after the load
-  // finishes, so they are copied from Adam West's MMSEA_Report export rather
-  // than computed.  Proof they are not computable: across the 782 loads in both
-  // the 2025-06-05 and 2025-08-04 exports with identical count columns, MC %
-  // moved on 448 of them.
-  const NA_TIP = SNAP.date
-    ? 'From the MMSEA_Report export of ' + SNAP.date + '. Tracks MSP '
-      + 'investigation activity and keeps changing after the load — not derived '
-      + 'from cmse_new. Loads newer than the export have no value.'
-    : 'Not available from cmse_new — this column comes from outside the CMSE '
-      + 'database and is left blank.';
-  const NOVAL_TIP = SNAP.date
-    ? 'No value: this load is newer than the MMSEA_Report export of '
-      + SNAP.date + ' (or is absent from it).'
-    : NA_TIP;
+  // finishes, so they are read live from MMSEA..report.MMSEAReport and
+  // CARLQT..rptCMSESourceCounts rather than computed.  Proof they are not
+  // computable from cmse_new: across the 782 loads in both the 2025-06-05 and
+  // 2025-08-04 exports with identical count columns, MC % moved on 448 of them.
+  const NA_TIP = 'From MMSEA..report.MMSEAReport / CARLQT..rptCMSESourceCounts. '
+    + 'Tracks MSP investigation activity and keeps changing after the load — '
+    + 'not derived from cmse_new.';
+  const NOVAL_TIP = 'No value: this load is not in the MSP-side reporting tables'
+    + (SNAP.date ? ' or the MMSEA_Report export of ' + SNAP.date : '') + '.';
   // 2dp like the spreadsheet; 0 is a real value here, not a missing one.
   const pf = v => (v == null ? null : v.toFixed(2));
   const snapCell = (v, fmt) => v == null
@@ -1902,15 +1979,16 @@ __EXPORT_CSS__
     // Row count, not load count: one load contributes one row per StagingStatus.
     const nLoads = new Set(rows.map(r => r.sl)).size;
     const nFilled = new Set(rows.filter(r => r.epct != null).map(r => r.sl)).size;
-    $('mmsea-note').innerHTML = SNAP.note
-      ? '⚠ ' + esc([...MNA].join(', ')) + ' unavailable: ' + esc(SNAP.note)
-      : (SNAP.date
-        ? '<b>' + esc([...MNA].join(', ')) + '</b> are copied from the '
-          + 'MMSEA_Report export of <b>' + esc(SNAP.date) + '</b> — they track MSP '
-          + 'investigation activity and keep changing after the load, so nothing in '
-          + 'cmse_new can produce them. <b>' + nFilled + ' of ' + nLoads + '</b> loads '
-          + 'shown are covered; newer loads show an em-dash until the next export.'
-        : '⚠ ' + esc([...MNA].join(', ')) + ' are not held in cmse_new and stay blank.');
+    const cov = '<b>' + nFilled + ' of ' + nLoads + '</b> loads shown are covered; '
+      + 'the rest show an em-dash.';
+    $('mmsea-note').innerHTML = SNAP.liveNote
+      ? '⚠ E %, MC % and # of Invs fell back to the MMSEA_Report export of <b>'
+        + esc(SNAP.date || 'n/a') + '</b> — live read failed: ' + esc(SNAP.liveNote)
+        + ' ' + cov
+      : '<b>E %</b> and <b>MC %</b> come from <b>MMSEA..report.MMSEAReport</b>, '
+        + '<b># of Invs</b> from <b>CARLQT..rptCMSESourceCounts</b> — they track MSP '
+        + 'investigation activity and keep changing after the load, so nothing in '
+        + 'cmse_new can produce them. ' + cov;
   }
 
   // ---- MSPi shared --------------------------------------------------------
@@ -2684,9 +2762,9 @@ __EXPORT_CSS__
           r.rec, r.ok, r.bad, r.age, r.dis, r.esrd, r.um,
           r.invs == null ? '' : r.invs,
           r.st, r.stn == null ? '' : r.stn, r.sl, r.file]),
-        note: 'cmse_new..SourceLog + ImportStaging · '
-              + (D.unsourced || []).join(', ') + ' copied from the MMSEA_Report '
-              + 'export of ' + (SNAP.date || 'n/a') + ', blank where not covered',
+        note: 'cmse_new..SourceLog + ImportStaging · E %, MC % from '
+              + 'MMSEA..report.MMSEAReport, # of Invs from '
+              + 'CARLQT..rptCMSESourceCounts, blank where not covered',
         rowsPerSlide: 12, fontSz: 600,
       };
     }
