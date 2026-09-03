@@ -1069,8 +1069,17 @@ CELL_ACTIVITY_AFTER = {
 # July tab shows 08/05/26 on its expected (18th-19th) cell and August stays open
 # for its own delivery (held at "No Data" by MONTHLY_MONTH_MARKER_OVERRIDES so the
 # July delivery's 8/5 load can't paint a premature "L" there).
+#
+# 2026-09-03 per user: "BCBSSCRx certified on 9/3 was the August delivery."
+# Same late-delivery pattern one month on — 'BCBSSC RX 0100 Stage' 9/1 07:40 ->
+# 9/2 10:20, 'BCBSSC RX 0110 Load' 9/3 08:24 -> 08:59 Successful, 0120 Snap /
+# 0140 MINE Snap 9/3, DHT cert 9/3 12:02 → the August tab shows 09/03/26 on its
+# expected (18th-19th) cell and September stays open for its own delivery (held
+# at "No Data" by MONTHLY_MONTH_MARKER_OVERRIDES, and moved to 9/25 by
+# MONTHLY_PLACEMENT_DAY_OVERRIDES per the user's re-add).
 MONTHLY_CERT_MONTH_REMAP = {
     ("BCBSSCRx", date(2026, 8, 5)): (2026, 7),
+    ("BCBSSCRx", date(2026, 9, 3)): (2026, 8),
 }
 
 # --- Sticky certifications --------------------------------------------------
@@ -1362,16 +1371,17 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     # and just carries the early 08/31/26 cert date. A real September cert wins
     # automatically (step 1 runs before this override).
     ("ModaRx", 2026, 9): date(2026, 8, 31),
-    # 2026-08-05: BCBSSCRx's July delivery finally loaded (8/5 00:22), snapped
-    # (8/5 02:31) and CERTIFIED 8/5 09:55 — per user "BCBSSCRx will be certified
-    # today for the July delivery." The July tab now surfaces that cert via
-    # MONTHLY_CERT_MONTH_REMAP (which also hides it from August), so the old
-    # ("BCBSSCRx", 2026, 7) "No Data" hold is gone. August is held at "No Data"
-    # until its OWN delivery loads — otherwise the July delivery's 8/5 load would
-    # satisfy load_this_month and paint a premature "L" on August's 18th/19th
-    # cell. A real August DHT cert still auto-wins (checked before this override).
-    # Remove once August's own file loads.
-    ("BCBSSCRx", 2026, 8): "No Data",
+    # 2026-09-03: BCBSSCRx's August delivery loaded 9/3 08:24, snapped 9/3 09:00
+    # and CERTIFIED 9/3 12:02 — per user "BCBSSCRx certified on 9/3 was the
+    # August delivery." The August tab now surfaces that cert via
+    # MONTHLY_CERT_MONTH_REMAP (which also hides it from September), so the old
+    # ("BCBSSCRx", 2026, 8) "No Data" hold is gone. September is held at
+    # "No Data" until its OWN delivery loads — otherwise the August delivery's
+    # 9/3 load would satisfy load_this_month and paint a premature "L" on
+    # September's cell (moved to 9/25 by MONTHLY_PLACEMENT_DAY_OVERRIDES). A
+    # real September DHT cert still auto-wins (checked before this override).
+    # Remove once September's own file loads.
+    ("BCBSSCRx", 2026, 9): "No Data",
     # 2026-07-21: BCBSFL Elig — June's file delivered LATE on 7/6 (shown as a
     # separate "BCBSFL Elig (June)" row). That stray 7/6 snap was pulling July's
     # auto-placement onto 7/6; July's 25th slot (renders Fri 7/24) was held at
@@ -1833,7 +1843,15 @@ MONTHLY_EXPECTED_DAY_RANGE = {
 # 15th (8/13 for August); this shifts August one week out to Thu 8/20. The markers
 # stay live — the 8/18 00:46 Stage → 0110 Load runs keep them at "L" (Kaiser_Amb*
 # are MONTHLY_CERT_ONLY + SNAP_KIND_ONLY) until each feed's DHT cert lands.
+#
+# 2026-09-03 per user: "Please re-add this client to 9/25 for September."
+# BCBSSCRx's September delivery is expected 9/25 (Fri) rather than its standing
+# 18th-19th anchor, which for September would land the row on Mon 9/21. Pairs
+# with the ("BCBSSCRx", 2026, 9) "No Data" marker hold above — both make
+# told_otherwise True, so the sticky cache can't drag the row back onto the 9/3
+# cert day it was cached on before the remap existed.
 MONTHLY_PLACEMENT_DAY_OVERRIDES = {
+    ("BCBSSCRx",    2026, 9): date(2026, 9, 25),
     ("Kaiser_AmbCO", 2026, 8): date(2026, 8, 20),
     ("Kaiser_AmbGA", 2026, 8): date(2026, 8, 20),
     ("Kaiser_AmbHI", 2026, 8): date(2026, 8, 20),
