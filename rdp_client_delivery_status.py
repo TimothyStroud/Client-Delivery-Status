@@ -346,6 +346,10 @@ WEEKLY_CLIENTS = {
     "MMOHRx":                ["Tuesday"],
     "Wellmark":              ["Tuesday"],
     # === WEDNESDAY ===
+    # BCBSMNRx — new weekly implementation per user 2026-09-04: standing
+    # Wednesday row starts 9/9/26 forward (see BLANK_BEFORE); the 9/4
+    # Implementation cert is pinned in ADDITIONAL_ENTRIES.
+    "BCBSMNRx":              ["Wednesday"],
     "CareSource":            ["Wednesday"],
     "CenteneFidelis":        ["Wednesday"],
     "CenteneFidelisRx":      ["Wednesday"],
@@ -1473,6 +1477,14 @@ ADDITIONAL_ENTRIES = [
     # rather than the "Implementation" marker.
     ("monthly", date(2026, 8, 27), "ModaRx (Implementation)",
      date(2026, 8, 27), False, "yellow"),
+    # 2026-09-04 per user: add 'BCBSMNRx (Implementation)' to the 9/4 Weekly
+    # section with 9/4/26 as the cert date. The standing weekly Wednesday row
+    # starts 9/9/26 forward (BLANK_BEFORE), so this pinned row is the only
+    # BCBSMNRx cell before then. Same treatment as Molina/ModaRx: a date marker
+    # renders as the cert date (MM/DD/YY, no pink) and the row is highlighted
+    # yellow to flag the implementation phase.
+    ("weekly", date(2026, 9, 4), "BCBSMNRx (Implementation)",
+     date(2026, 9, 4), False, "yellow"),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
@@ -1922,6 +1934,9 @@ BLANK_BEFORE = {
     # ElevanceMMMRx — only show June 2026 forward (per user 2026-06-16); earlier
     # cells were implementation-phase noise.
     "ElevanceMMMRx": date(2026, 6, 1),
+    # BCBSMNRx — per user 2026-09-04: add the weekly client to Wednesdays
+    # starting 9/9/26 forward; nothing before that date renders.
+    "BCBSMNRx": date(2026, 9, 9),
 }
 
 # Clients whose cells ON/AFTER a given date render empty (the standing row is
