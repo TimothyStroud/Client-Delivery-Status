@@ -8,7 +8,9 @@ also terminal (or the Load failed, or the Snap is clearly stuck), posts ONE
 combined Load+Snap Success/Failure message to a Slack Workflow Builder webhook:
   - RDP Ops - KaiserPrePay    -> #rps_kaiserprepay_discussion  (H:\slack_wf_kaiserprepay.txt)
 (The #team-rdp-operations-support post was removed 2026-07-07 per user request.)
-The message confirms the MA & SC files were staged and notes any missing one.
+The message confirms each known Canonical Prepay region file was staged and
+notes any missing one. New regions are learned automatically from the staged
+file names and persisted in the state file.
 
 State (last-posted Load QueueId) lives at H:\kaiserprepay_monitor_state.json so
 6/28 (watermark seed) is never posted; posting "starts with the next load".
@@ -25,6 +27,9 @@ JOB_STAGE, JOB_LOAD, JOB_SNAP = 10720, 10721, 10722
 SUPPORT_URL_FILE = r"H:\slack_wf_support.txt"
 PREPAY_URL_FILE  = r"H:\slack_wf_kaiserprepay.txt"
 STATE_FILE = r"H:\kaiserprepay_monitor_state.json"
+# Canonical Prepay regions known at build time; the monitor adds any new region
+# it sees in a staged file name to state["regions"] (NW first loaded 9/3/2026).
+KNOWN_REGIONS = ("MA", "NW", "SC")
 LOG_FILE   = r"H:\kaiserprepay_monitor.log"
 SEP = "\x1f"
 
@@ -188,7 +193,7 @@ def cycle_snap(load_end, load_date):
 
 
 def staged_files(stage_qid):
-    """MA/SC prepay files marked Staged under the given stage QueueId."""
+    """Prepay region files marked Staged under the given stage QueueId."""
     if not stage_qid:
         return {}
     rows = run_sql(
@@ -196,13 +201,31 @@ def staged_files(stage_qid):
         f"WHERE QueueId={stage_qid} AND Status='Staged' "
         "AND FileName LIKE '%Prepay_Claim_Lines%' ORDER BY FileName"
     )
+    return regions_from([r[0].strip() for r in rows])
+
+
+def regions_from(filenames):
     found = {}
-    for r in rows:
-        fn = r[0].strip()
+    for fn in filenames:
         m = re.search(r"_Lines_([A-Z]{2})_", fn)
         if m:
             found[m.group(1)] = fn
     return found
+
+
+def staged_regions_for_date(load_date):
+    """Regions staged in ANY cycle on load_date -> {region: filename}.
+
+    Regions now arrive in separate cycles (NW added 9/3/2026), so a region
+    missing from THIS cycle is only "NOT LOADED" if it is absent all day.
+    """
+    rows = run_sql(
+        "SET NOCOUNT ON; SELECT f.FileName FROM [RAMP].[ramp].[FileLog] f "
+        "JOIN [RAMP].[ramp].[Queue] q ON q.QueueId=f.QueueId "
+        f"WHERE q.JobId={JOB_STAGE} AND CAST(q.StartDate AS date)='{load_date}' "
+        "AND f.Status='Staged' AND f.FileName LIKE '%Prepay_Claim_Lines%'"
+    )
+    return regions_from([r[0].strip() for r in rows])
 
 
 def data_date_from(files):
@@ -223,7 +246,7 @@ def fmt_span(start, end):
     return "?"
 
 
-def build_message(stage, load, snap, files, load_date):
+def build_message(stage, load, snap, files, load_date, regions=KNOWN_REGIONS, day_files=None):
     ddate = data_date_from(files) or load_date
     load_cls = classify(load[1])
     snap_cls = classify(snap[1]) if snap else "PENDING"
@@ -250,11 +273,14 @@ def build_message(stage, load, snap, files, load_date):
     else:
         lines.append(f"0120 Snap: DID NOT COMPLETE (not terminal after {SNAP_WAIT_HOURS}h)")
 
-    for state in ("MA", "SC"):
-        if state in files:
-            lines.append(f":white_check_mark: {state}: {files[state]}")
+    day_files = day_files or {}
+    for region in sorted(set(regions) | set(files) | set(day_files)):
+        if region in files:
+            lines.append(f":white_check_mark: {region}: {files[region]}")
+        elif region in day_files:
+            lines.append(f":white_check_mark: {region}: staged in an earlier cycle today")
         else:
-            lines.append(f":x: {state}: NOT LOADED - no staged {state} file found")
+            lines.append(f":x: {region}: NOT LOADED - no staged {region} file found")
     return "\n".join(lines)
 
 
@@ -375,6 +401,7 @@ def certify_eligible():
 def run_monitor():
     state = load_state()
     watermark = int(state.get("last_load_queueid", 0))
+    regions = sorted(set(state.get("regions") or KNOWN_REGIONS))
 
     # Seed watermark on first run so 6/28 (and anything already done) is skipped
     # and posting "starts with the next load".
@@ -385,7 +412,7 @@ def run_monitor():
         )
         watermark = int(rows[0][0]) if rows else 0
         log(f"seeded watermark to current latest Load QueueId={watermark}; no post this run")
-        save_state({"last_load_queueid": watermark})
+        save_state({"last_load_queueid": watermark, "regions": regions})
         return 0
 
     new_loads = run_sql(
@@ -419,7 +446,13 @@ def run_monitor():
                 break  # don't advance watermark; re-check next run
 
         files = staged_files(stage[0] if stage else None)
-        msg = build_message(stage, load, snap, files, load_date)
+        day_files = staged_regions_for_date(load_date)
+        added = sorted((set(files) | set(day_files)) - set(regions))
+        if added:
+            regions = sorted(set(regions) | set(added))
+            state["regions"] = regions
+            log("new prepay region(s) added: " + ", ".join(added))
+        msg = build_message(stage, load, snap, files, load_date, regions, day_files)
         log(f"posting cycle Load QueueId={load_qid} ({load_date}):")
         for ln in msg.splitlines():
             log("    " + ln)
