@@ -179,6 +179,16 @@ def cycle_stage(load_start, load_date):
     return rows[0] if rows else None
 
 
+def snap_class(snap):
+    """Snap status. Unfinished (no EndDate) is never SUCCESS - the
+    'Kaiser Pareo Prepay 0120 Snap' job must complete for a success post."""
+    if not snap:
+        return "PENDING"
+    if not snap[3]:
+        return "RUNNING" if (snap[1] or "").strip().lower() != "ready" else "QUEUED"
+    return classify(snap[1])
+
+
 def cycle_snap(load_end, load_date):
     """Snap run (10722) for this cycle: earliest starting at/after the load
     end, same calendar day."""
@@ -249,12 +259,14 @@ def fmt_span(start, end):
 def build_message(stage, load, snap, files, load_date, regions=KNOWN_REGIONS, day_files=None):
     ddate = data_date_from(files) or load_date
     load_cls = classify(load[1])
-    snap_cls = classify(snap[1]) if snap else "PENDING"
+    snap_cls = snap_class(snap)
 
     if load_cls != "SUCCESS":
         head_emoji, head_word = ":x:", "Load FAILED"
-    elif snap is None or snap_cls == "PENDING":
-        head_emoji, head_word = ":warning:", "Load SUCCESS / Snap DID NOT COMPLETE"
+    elif snap_cls in ("PENDING", "QUEUED", "RUNNING"):
+        head_emoji, head_word = ":warning:", (
+            "Load SUCCESS / Snap NOT FINISHED" if snap_cls in ("QUEUED", "RUNNING")
+            else "Load SUCCESS / Snap DID NOT COMPLETE")
     elif snap_cls == "FAILED":
         head_emoji, head_word = ":x:", "Snap FAILED"
     else:
@@ -266,12 +278,14 @@ def build_message(stage, load, snap, files, load_date, regions=KNOWN_REGIONS, da
     else:
         lines.append("0100 Stage: (no matching stage run found)")
     lines.append(f"0110 Load: {load_cls} ({fmt_span(load[2], load[3])})")
-    if snap and snap_cls != "PENDING":
+    if snap_cls in ("QUEUED", "RUNNING"):
+        lines.append(f"0120 Snap: {snap_cls} - not finished ({fmt_span(snap[2], snap[3])})")
+    elif snap:
         lines.append(f"0120 Snap: {snap_cls} ({fmt_span(snap[2], snap[3])})")
     elif load_cls != "SUCCESS":
         lines.append("0120 Snap: N/A (load did not succeed)")
     else:
-        lines.append(f"0120 Snap: DID NOT COMPLETE (not terminal after {SNAP_WAIT_HOURS}h)")
+        lines.append(f"0120 Snap: NOT FINISHED (no completed snap run after {SNAP_WAIT_HOURS}h)")
 
     day_files = day_files or {}
     for region in sorted(set(regions) | set(files) | set(day_files)):
@@ -435,11 +449,11 @@ def run_monitor():
 
         stage = cycle_stage(load_start, load_date)
         snap = cycle_snap(load_end, load_date)
-        snap_cls = classify(snap[1]) if snap else "PENDING"
+        snap_cls = snap_class(snap)
 
         # Wait for the Snap only when the Load succeeded and the snap is still
         # in flight AND we're inside the grace window. Otherwise post now.
-        if load_cls == "SUCCESS" and snap_cls == "PENDING":
+        if load_cls == "SUCCESS" and snap_cls in ("PENDING", "QUEUED", "RUNNING"):
             le = parse_dt(load_end)
             if le and (now - le) < timedelta(hours=SNAP_WAIT_HOURS):
                 log(f"Load {load_qid} ({load_date}) ok; snap pending, waiting (<{SNAP_WAIT_HOURS}h). stop.")
