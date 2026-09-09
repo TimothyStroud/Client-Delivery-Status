@@ -758,21 +758,21 @@ def sql_job(server, name):
             if label:
                 head += f" - {label}"
         return (head, eta_detail(server, name))
-    # Idle: show the last run's outcome as Successful/Failed ONLY while its
-    # COMPLETION falls on today's date; at the start of the next day it reverts to
-    # "- Idle" (per user 2026-07-17: "only show as Successful until the start of
-    # the next day"). Gate on the completion time, NOT sp_help_job's last_run_date
-    # (= the START date): an overnight run that started yesterday but finished
-    # early today, like AetnaRx, must still count as today. NCStateAetna, which
-    # both started and finished yesterday, shows Idle.
+    # Idle: ALWAYS show the last run's outcome, whatever day it completed (per
+    # user 2026-09-09: "always show a post with Success for each Aetna Feed").
+    # This replaces the 2026-07-17 rule that reverted to a bare "- Idle" at the
+    # start of the next day -- a digest reading "Idle" right after an overnight
+    # load left the reader unable to tell whether it had finished clean. Anchored
+    # on the COMPLETION time, not sp_help_job's last_run_date (= the START date).
+    # The text is constant between runs, so content dedupe still holds this to one
+    # post per change.
     oc = RUN_OUTCOME.get(row[-11], row[-11])
     if oc in ('Succeeded', 'Failed'):
         comp = last_completion(server, name)
         ctext = comp.strftime('%m/%d/%Y %I:%M %p') if comp else fmt_dt(row[-13], row[-12])
-        if comp and comp.date() == datetime.now().date():
-            if oc == 'Succeeded':
-                return ("", [f":white_check_mark: Successful {ctext}"])
-            return ("", [f":x: Failed {ctext}"])
+        if oc == 'Succeeded':
+            return ("", [f":white_check_mark: Successful {ctext}"])
+        return ("", [f":x: Failed {ctext}"])
     st = EXEC_STATUS.get(status, f'State {status}')
     return (f"- {st}", [])
 

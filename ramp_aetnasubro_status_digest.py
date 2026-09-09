@@ -20,10 +20,11 @@ of -- they are standalone by convention, no shared module):
     'DTS AetnaSubro MasterLoad' is a SINGLE CmdExec step running a legacy DTS
     package, so there is nothing to read: whole-job survival history anchored to
     the live run's start is the only honest estimate available.
-  * Idle shows the last run's outcome + date ALWAYS, not only while the completion
-    falls on today. Subro is MONTHLY (runs ~the 11th-16th), so the HRP rule would
-    leave a bare '- Idle' for four weeks out of five. The text stays constant
-    between runs, so content dedupe still keeps it to a single post.
+  * A finished run ALWAYS reports ':white_check_mark: Successful <completion>' --
+    never 'Idle' (per user 2026-09-09, now the rule in all four Aetna digests).
+    Subro is MONTHLY (runs ~the 11th-16th), so the word 'Idle' would have covered
+    four weeks out of five. The text stays constant between runs, so content
+    dedupe still keeps it to a single post.
 
 Note: msdb.dbo.agent_datetime is permission-blocked here, so run_date/run_time
 are converted to a datetime manually.
@@ -199,15 +200,15 @@ def _started_today(start):
 
 def ramp_line(jobid):
     """Return (head, detail) for a RAMP job's LatestJobRun. 'head' = emoji +
-    status word for the main line; 'detail' = the quiet sub-line. A job that has
-    NOT run today is shown Idle with its last-run outcome."""
+    status word for the main line; 'detail' = the quiet sub-line. A finished run
+    always reports its outcome (Successful/FAILED) regardless of what day it ran
+    -- per user 2026-09-09 ("always show a post with Success for each Aetna Feed")
+    the old ':hourglass_flowing_sand: Idle' rendering for a run that started before
+    today is gone; it hid a clean load behind a word that reads like "nothing
+    happened"."""
     lr = job_run(jobid)
     status = lr.get('Status', '?')
     start = lr.get('StartDate'); end = lr.get('EndDate')
-    if end and not _started_today(start):
-        oc = 'Succeeded' if status in RAMP_OK else ('Failed' if status == 'Failed' else status)
-        icon = ':x:' if status == 'Failed' else ':hourglass_flowing_sand:'
-        return (f"{icon} Idle", f"last run {oc} {fmt(end)}")
     if end and status in RAMP_OK:
         return (f":white_check_mark: {status}", f"started {fmt(start)} | completed {fmt(end)}")
     if end and status == 'Failed':
@@ -635,20 +636,21 @@ def sql_job(server, name):
                     head += f" - {label}"
         return (head, eta_detail(server, name))
 
-    # Idle. Unlike the HRP/Rx digests (daily feeds, which revert to a bare '- Idle'
-    # at the start of the next day), Subro is MONTHLY, so keep showing the last
-    # run's outcome + date and mark whether it landed today. The text is constant
-    # between runs, so content dedupe still holds this to one post per change.
+    # Idle: ALWAYS show the last run's outcome, whatever day it completed (per
+    # user 2026-09-09: "always show a post with Success for each Aetna Feed").
+    # This replaces the 2026-07-17 rule that reverted to a bare "- Idle" at the
+    # start of the next day -- a digest reading "Idle" right after an overnight
+    # load left the reader unable to tell whether it had finished clean. Anchored
+    # on the COMPLETION time, not sp_help_job's last_run_date (= the START date).
+    # The text is constant between runs, so content dedupe still holds this to one
+    # post per change.
     oc = RUN_OUTCOME.get(row[-11], row[-11])
     if oc in ('Succeeded', 'Failed'):
         comp = last_completion(server, name)
         ctext = comp.strftime('%m/%d/%Y %I:%M %p') if comp else fmt_dt(row[-13], row[-12])
-        if comp and comp.date() == datetime.now().date():
-            icon = ':white_check_mark:' if oc == 'Succeeded' else ':x:'
-            word = 'Successful' if oc == 'Succeeded' else 'Failed'
-            return ("", [f"{icon} {word} {ctext}"])
-        icon = ':hourglass_flowing_sand:' if oc == 'Succeeded' else ':x:'
-        return ("", [f"{icon} Idle - last run {oc} {ctext}"])
+        if oc == 'Succeeded':
+            return ("", [f":white_check_mark: Successful {ctext}"])
+        return ("", [f":x: Failed {ctext}"])
     st = EXEC_STATUS.get(status, f'State {status}')
     return (f"- {st}", [])
 
