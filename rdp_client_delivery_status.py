@@ -444,9 +444,11 @@ FORCED_INACTIVE_FROM = {
     # up the weeks of 7/6 through 8/17 (all seven Mondays pinned "L" in
     # MANUAL_OVERRIDES; they will all certify on the same date). The 7/6 cutoff
     # would have overridden those cells with "Inactive".
-    # Oscar (weekly Wed) → Inactive 7/22/26 forward per user 2026-07-29. Earlier
-    # cells keep their history (incl. the 7/1/7/8/7/15 → 7/15 cert overrides).
-    "Oscar":           date(2026, 7, 22),
+    # Oscar REMOVED 2026-09-09 per user ("Remove 'Inactive' label from Oscar. We
+    # are currently loading for all missed weeks.") — was Inactive 7/22/26
+    # forward per user 2026-07-29. The missed Wednesdays 7/22 → 9/2 are pinned
+    # "L" in MANUAL_OVERRIDES (same pattern as Tufts_Audit_CIT's 2026-08-20
+    # catch-up); 9/9 auto-resolves from live load activity.
     # TuftsRx → Inactive 8/17/26 forward per user 2026-08-19: deliveries stop for
     # an implementation of HarvardPilgrim data. TuftsRx has BOTH a weekly Monday
     # row and a MONTHLY row, so the cutoff is honored in resolve_marker (weekly
@@ -916,6 +918,20 @@ MANUAL_OVERRIDES = {
     ("Oscar",         date(2026, 7, 1)):  date(2026, 7, 15),
     ("Oscar",         date(2026, 7, 8)):  date(2026, 7, 15),
     ("Oscar",         date(2026, 7, 15)): date(2026, 7, 15),
+    # 2026-09-09: Oscar is out of FORCED_INACTIVE_FROM and loading all the
+    # missed weeks. Pin each skipped Wednesday to "L" until they certify (same
+    # pattern as the Tufts_Audit_CIT catch-up); 9/9 is left unpinned so live
+    # load activity / its own cert resolves it.
+    ("Oscar",         date(2026, 7, 22)): "L",
+    ("Oscar",         date(2026, 7, 29)): "L",
+    ("Oscar",         date(2026, 8, 5)):  "L",
+    ("Oscar",         date(2026, 8, 12)): "L",
+    ("Oscar",         date(2026, 8, 19)): "L",
+    ("Oscar",         date(2026, 8, 26)): "L",
+    ("Oscar",         date(2026, 9, 2)):  "L",
+    # 2026-09-09: AetnaRx snapped in the midnight hour of 9/9 — the snap is
+    # attributed to its StartDate (9/8), so the 9/9 cell needs the pin.
+    ("AetnaRx",       date(2026, 9, 9)):  "✓",
     # 2026-07-09: AetnaHRP (daily) was in a Load Failure state — the 7/5, 7/6,
     # 7/7 data had not loaded, and the 7/8 certification did NOT include those
     # files. 2026-07-15: per user the backlog loaded and certified; the last-week
@@ -3970,7 +3986,11 @@ def auto_inactive_from_ramp(jobs):
 # certified today). Its 0100 Stage / 0110 Load jobs may still be disabled in RAMP,
 # so keep it out of the sweep and let the cert/load activity win.
 AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan", "TuftsRx",
-                        "ESIPBMRx", "Tufts_Audit_CIT", "HealthNetCA"}
+                        "ESIPBMRx", "Tufts_Audit_CIT", "HealthNetCA",
+                        # Oscar reactivated 2026-09-09 (loading all missed
+                        # weeks) — keep the auto-sweep from re-flagging it while
+                        # its 0100/0110 jobs are still being re-enabled.
+                        "Oscar"}
 
 
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
@@ -4199,7 +4219,7 @@ def us_federal_holidays(year):
     out[nth_weekday(2,  0, 3)]  = "Presidents' Day"       # 3rd Mon Feb
     out[last_weekday(5, 0)]     = "Memorial Day"          # last Mon May
     out[nth_weekday(9,  0, 1)]  = "Labor Day"             # 1st Mon Sep
-    out[nth_weekday(10, 0, 2)]  = "Columbus Day"          # 2nd Mon Oct
+    out[nth_weekday(10, 0, 2)]  = "Indigenous Peoples' Day"   # 2nd Mon Oct
     out[nth_weekday(11, 3, 4)]  = "Thanksgiving"          # 4th Thu Nov
     return out
 
