@@ -308,9 +308,14 @@ def cert_gate():
     certifying after the first cycle would certify before the second file's data
     is in. So require, on top of the DHT status:
       1. no manual hold file,
-      2. no in-flight Stage/Load/Snap run (EndDate NULL) in the last
-         CERT_INFLIGHT_LOOKBACK_HOURS,
-      3. the most recent Load succeeded, and its Snap exists and succeeded.
+      2. the most recent COMPLETED 0120 Snap succeeded.
+
+    2026-09-09 (per user "always certify every CertId after a Snap"): the old
+    gate also held on ANY in-flight Stage/Load/Snap, so a next cycle starting
+    minutes after a snap (9/9: snap ended 09:43, next Load started 09:45) parked
+    that snap's CertIDs until the following day. Each region now loads+snaps in
+    its own cycle, so a finished Snap means that CertID's data is in - certify it
+    and let the in-flight cycle certify after its own Snap.
     """
     if os.path.exists(CERT_HOLD_FILE):
         try:
@@ -319,41 +324,21 @@ def cert_gate():
             note = ""
         return False, f"manual hold file present ({CERT_HOLD_FILE}){': ' + note if note else ''}"
 
-    inflight = run_sql(
-        "SET NOCOUNT ON; SELECT TOP 1 QueueId, JobId, ISNULL(Status,''), "
-        "CONVERT(varchar(19),StartDate,121) FROM [RAMP].[ramp].[Queue] "
-        f"WHERE JobId IN ({JOB_STAGE},{JOB_LOAD},{JOB_SNAP}) AND EndDate IS NULL "
-        f"AND StartDate >= DATEADD(hour,-{CERT_INFLIGHT_LOOKBACK_HOURS}, GETDATE()) "
-        "ORDER BY QueueId DESC"
-    )
-    if inflight:
-        q, j, st, sd = (inflight[0] + ["", "", "", ""])[:4]
-        names = {str(JOB_STAGE): "0100 Stage", str(JOB_LOAD): "0110 Load", str(JOB_SNAP): "0120 Snap"}
-        return False, (f"cycle in flight: {names.get(j.strip(), 'Job ' + j)} "
-                       f"QueueId={q} status='{st.strip()}' started {sd.strip()} - not finished yet")
-
-    loads = run_sql(
+    snaps = run_sql(
         "SET NOCOUNT ON; SELECT TOP 1 QueueId, Status, "
         "CONVERT(varchar(19),StartDate,121), CONVERT(varchar(19),EndDate,121) "
-        f"FROM [RAMP].[ramp].[Queue] WHERE JobId={JOB_LOAD} ORDER BY QueueId DESC"
+        f"FROM [RAMP].[ramp].[Queue] WHERE JobId={JOB_SNAP} AND EndDate IS NOT NULL "
+        "ORDER BY QueueId DESC"
     )
-    if not loads:
-        return False, "no 0110 Load run found in RAMP"
-    load = loads[0]
-    load_cls = classify(load[1])
-    if load_cls != "SUCCESS":
-        return False, f"latest 0110 Load QueueId={load[0]} is {load_cls} ('{load[1].strip()}')"
-
-    snap = cycle_snap(load[3], load[2][:10])
-    if not snap:
-        return False, f"no 0120 Snap found yet for Load QueueId={load[0]}"
+    if not snaps:
+        return False, "no completed 0120 Snap run found in RAMP"
+    snap = snaps[0]
     snap_cls = classify(snap[1])
     if snap_cls != "SUCCESS":
-        return False, (f"0120 Snap QueueId={snap[0]} for Load QueueId={load[0]} "
-                       f"is {snap_cls} ('{snap[1].strip()}')")
+        return False, (f"latest completed 0120 Snap QueueId={snap[0]} is {snap_cls} "
+                       f"('{snap[1].strip()}')")
 
-    return True, (f"Load QueueId={load[0]} SUCCESS ({fmt_span(load[2], load[3])}), "
-                  f"Snap QueueId={snap[0]} SUCCESS ({fmt_span(snap[2], snap[3])})")
+    return True, f"Snap QueueId={snap[0]} SUCCESS ({fmt_span(snap[2], snap[3])})"
 
 
 def certify_eligible():
