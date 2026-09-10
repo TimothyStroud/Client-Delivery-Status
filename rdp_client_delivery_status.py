@@ -456,6 +456,17 @@ FORCED_INACTIVE_FROM = {
     # monthly cell anchors to the 10th, before the cutoff, so it keeps its real
     # cert/L state). Everything through Mon 8/10 keeps its history.
     "TuftsRx":         date(2026, 8, 17),
+    # 2026-09-10 per user: "Change Tufts_PublicPlan & HealthNetCA to 'Inactive'."
+    # Both are cut off at 9/1/26 so every September cell forward reads "Inactive"
+    # while the earlier record stays intact:
+    #   - Tufts_PublicPlan (monthly, pinned to the 10th) → the Sept 9/10 cell goes
+    #     Inactive via determine_monthly step 0-; Aug and earlier keep their certs.
+    #   - HealthNetCA (weekly Mon) → 9/7 forward Inactive; the backfill pins
+    #     (8/17 / 8/24 / 8/31 + the labeled 8/20 ADDITIONAL_ENTRIES row) all sit
+    #     before the cutoff and are MANUAL_OVERRIDES anyway, so they survive.
+    # Both stay in AUTO_INACTIVE_EXCLUDE on purpose (see FORCED_INACTIVE notes).
+    "Tufts_PublicPlan": date(2026, 9, 1),
+    "HealthNetCA":      date(2026, 9, 1),
 }
 
 # Clients whose load is running but snap step is disabled in RAMP — show
@@ -929,6 +940,19 @@ MANUAL_OVERRIDES = {
     ("Oscar",         date(2026, 8, 19)): "L",
     ("Oscar",         date(2026, 8, 26)): "L",
     ("Oscar",         date(2026, 9, 2)):  "L",
+    # 2026-09-10 per user: "Oscar for 9/9/26 should remain empty. The Load running
+    # is for backfill Elig for past weeks." The live 'Oscar Medical 0110 Load'
+    # (Ready 9/10, Failed 9/10, Successful 9/8→9/9) is the catch-up eligibility
+    # load, not a 9/9 claims delivery, so pin the cell blank (a "" pin renders
+    # empty AND suppresses the pink shade).
+    ("Oscar",         date(2026, 9, 9)):  "",
+    # 2026-09-10 per user: "BCBSMNRx should remain empty since we have not loaded
+    # claims files yet. Job 'BCBSMNRx Masterload 0100 Stage' does not show Claims,
+    # for future reference." BCBSMNRx has only the one Masterload chain in RAMP
+    # (0100 Stage → 0110 Load → 0120 Snap → 0130 Post Snap → 0140 MINE Snap), so
+    # there is no JobName keyword that separates claims from elig — LOAD_NAME_REQUIRED
+    # can't help. Blank the cell by hand until the first claims file loads.
+    ("BCBSMNRx",      date(2026, 9, 9)):  "",
     # 2026-09-09: AetnaRx snapped in the midnight hour of 9/9 — the snap is
     # attributed to its StartDate (9/8), so the 9/9 cell needs the pin.
     ("AetnaRx",       date(2026, 9, 9)):  "✓",
