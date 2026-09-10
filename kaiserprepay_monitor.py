@@ -299,7 +299,7 @@ def build_message(stage, load, snap, files, load_date, regions=KNOWN_REGIONS, da
 
 
 def cert_gate():
-    """Is it safe to auto-certify right now? -> (ok, reason)
+    """Is it safe to auto-certify right now? -> (ok, reason, snap_end)
 
     The DHT row reaches CERT_READY_STATUS *during the 0110 Load*, BEFORE the
     0120 Snap runs (e.g. 8/6 CertID 1308113: validated 08:45, snap 08:55-09:37),
@@ -316,13 +316,22 @@ def cert_gate():
     that snap's CertIDs until the following day. Each region now loads+snaps in
     its own cycle, so a finished Snap means that CertID's data is in - certify it
     and let the in-flight cycle certify after its own Snap.
+
+    2026-09-10 FIX: that relaxation left the gate time-blind - "the latest
+    completed Snap succeeded" is true all day every day, so on 9/10 the 9/9
+    10:58 snap opened the gate at 09:00 and certified CertID 1310033 (validated
+    08:45 during that morning's Load) while its own Snap QueueId=1442839 was
+    still 'Ready'. The successful snap's EndDate is now returned so
+    certify_eligible() can require it to be NEWER than the CertID's
+    ValidationTimestamp - i.e. a Snap that finished after that CertID was
+    created, not just any Snap. In-flight runs still never block.
     """
     if os.path.exists(CERT_HOLD_FILE):
         try:
             note = open(CERT_HOLD_FILE, encoding="utf-8").read().strip()[:200]
         except Exception:
             note = ""
-        return False, f"manual hold file present ({CERT_HOLD_FILE}){': ' + note if note else ''}"
+        return False, f"manual hold file present ({CERT_HOLD_FILE}){': ' + note if note else ''}", None
 
     snaps = run_sql(
         "SET NOCOUNT ON; SELECT TOP 1 QueueId, Status, "
@@ -331,14 +340,16 @@ def cert_gate():
         "ORDER BY QueueId DESC"
     )
     if not snaps:
-        return False, "no completed 0120 Snap run found in RAMP"
+        return False, "no completed 0120 Snap run found in RAMP", None
     snap = snaps[0]
     snap_cls = classify(snap[1])
     if snap_cls != "SUCCESS":
         return False, (f"latest completed 0120 Snap QueueId={snap[0]} is {snap_cls} "
-                       f"('{snap[1].strip()}')")
+                       f"('{snap[1].strip()}')"), None
 
-    return True, f"Snap QueueId={snap[0]} SUCCESS ({fmt_span(snap[2], snap[3])})"
+    return (True,
+            f"Snap QueueId={snap[0]} SUCCESS ({fmt_span(snap[2], snap[3])})",
+            snap[3].strip())
 
 
 def certify_eligible():
@@ -353,18 +364,23 @@ def certify_eligible():
     Gated by cert_gate(): the whole RAMP cycle (0110 Load + 0120 Snap) must have
     finished successfully first - the DHT status goes ready mid-load.
     """
-    ok, why = cert_gate()
+    ok, why, snap_end = cert_gate()
     if not ok:
         clog(f"HOLD - not certifying: {why}")
         return
     clog(f"gate open: {why}")
+    # Per-CertID gate: the successful Snap must have finished AFTER the CertID was
+    # validated, otherwise a previous day's Snap would certify today's CertID
+    # while today's Snap is still queued/running (see cert_gate docstring).
     q = (
-        "SET NOCOUNT ON; SELECT DISTINCT CAST(CertID AS varchar(30)) "
+        "SET NOCOUNT ON; SELECT CAST(CertID AS varchar(30)) "
         "FROM [DHTStats].[DHT].[TableList] "
         f"WHERE DatabaseName='{CERT_DBNAME}' AND isActive=1 "
         "AND CertID IS NOT NULL AND CertTimestamp IS NULL "
         f"AND CurrentStatus='{CERT_READY_STATUS}' "
         f"AND ValidationTimestamp >= DATEADD(day,-{CERT_BACKFILL_DAYS}, CAST(GETDATE() AS date)) "
+        "GROUP BY CertID "
+        f"HAVING MAX(ValidationTimestamp) < CONVERT(datetime,'{snap_end}',121) "
         "ORDER BY CAST(CertID AS varchar(30))"
     )
     rows = run_sql(q, db=DHT_DB)
@@ -372,7 +388,8 @@ def certify_eligible():
     if not certids:
         clog("no eligible KaiserPrePayCOB CertIDs to certify")
         return
-    clog(f"eligible CertIDs (ready, uncertified, ValidationTimestamp <= {CERT_BACKFILL_DAYS}d): "
+    clog(f"eligible CertIDs (ready, uncertified, validated before Snap end {snap_end}, "
+         f"within {CERT_BACKFILL_DAYS}d): "
          + ", ".join(certids))
     for cid in certids:
         if DRY:
