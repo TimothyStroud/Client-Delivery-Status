@@ -1442,6 +1442,12 @@ HTML_TEMPLATE = r"""<!doctype html>
                font-size:12px; padding:0 0 0 3px; }
   .tools .cp:hover { color:var(--accent); }
   .tools .sep { color:var(--border); }
+  /* A path we deliberately did NOT make a link, because this copy of the report
+     is served over http(s) and the browser would block file:// navigation.
+     Dotted underline instead of the accent colour, so it reads as "copy me"
+     rather than as a link that does nothing when clicked. */
+  .tools .nolink { font-weight:600; color:var(--text); cursor:default;
+                   border-bottom:1px dotted var(--border); }
   /* calendar */
   #cal td.mo { text-align:center; min-width:52px; padding:3px 6px;
                font-variant-numeric:tabular-nums; }
@@ -1676,22 +1682,47 @@ __EXPORT_CSS__
   // percent-encoded - unencoded spaces are why "File Transformer" never opened.
   const fileUrl = p => 'file:' + p.replace(/\\/g, '/').split('/')
                                   .map(encodeURIComponent).join('/');
+
+  // The same HTML is served from the trgfile1/OneDrive copies (file://) and from
+  // the hosted copy (https://).  A browser refuses to navigate to file:// from an
+  // http(s) page and does it *silently* - no error, the click just dies - so on
+  // the hosted copy we render the path as copy-only rather than as a link that
+  // looks fine and does nothing.  Custom protocol URLs (filedate:, etc.) are
+  // handed to the OS and keep working from any origin, so they stay links.
+  const fileLinksWork = location.protocol === 'file:';
+  const pathEl = (label, path, tip) => fileLinksWork
+    ? `<a href="${fileUrl(path)}" target="_blank" rel="noopener" title="${tip}">${esc(label)}</a>`
+    : `<span class="nolink" title="${tip}">${esc(label)}</span>`;
+
+  const winR = 'Copy it with ⧉ and paste into the Windows Run box (Win+R).';
   $('tools').innerHTML = '<span>Tools:</span>' + D.tools.map(([label, path, proto], i) => {
-    // a registered URL protocol launches the app; file:// is the fallback
-    const href = proto || fileUrl(path);
     const tip = esc(path) + (proto
       ? '\n\nOpens via the ' + proto.split(':')[0] + ': protocol. Nothing happens? '
         + 'Run ' + D.regFile + ' once (link at right), then restart the browser.'
-      : '\n\nOpens in its own app. If the browser blocks it, use the copy button '
-        + 'and paste the path into the Windows Run box (Win+R).');
+      : fileLinksWork
+        ? '\n\nOpens in its own app. If the browser blocks it, use the copy button '
+          + 'and paste the path into the Windows Run box (Win+R).'
+        : '\n\nThis page is served over the web, so the browser will not open a '
+          + 'network path directly. ' + winR);
+    // a registered URL protocol launches the app; a bare UNC path can only be a
+    // link on the file:// copies
+    const link = proto
+      ? `<a href="${proto}" title="${tip}">${esc(label)}</a>`
+      : pathEl(label, path, tip);
     return (i ? '<span class="sep">|</span>' : '') +
-      `<span><a href="${href}"${proto ? '' : ' target="_blank" rel="noopener"'} ` +
-      `title="${tip}">${esc(label)}</a>` +
+      `<span>${link}` +
       `<button class="cp" data-path="${esc(path)}" title="Copy path">⧉</button></span>`;
   }).join('')
     + `<span class="sep">|</span><span style="opacity:.8">first time on this PC? run ` +
-      `<a href="${fileUrl(D.regDir + '\\' + D.regFile)}">${esc(D.regFile)}</a> once ` +
-      `&middot; or copy a path with ⧉ and use Win+R</span>`;
+      pathEl(D.regFile, D.regDir + '\\' + D.regFile,
+             esc(D.regDir + '\\' + D.regFile) + (fileLinksWork ? ''
+               : '\n\nThis page is served over the web, so the browser will not '
+                 + 'open a network path directly. ' + winR)) +
+      // the tip above tells people to copy it, so give them something to click
+      (fileLinksWork ? '' :
+        `<button class="cp" data-path="${esc(D.regDir + '\\' + D.regFile)}" ` +
+        `title="Copy path">⧉</button>`) +
+      ` once &middot; or copy a path with ⧉ and use Win+R</span>`;
   $('tools').addEventListener('click', e => {
     const b = e.target.closest('button.cp'); if (!b) return;
     const p = b.dataset.path;
