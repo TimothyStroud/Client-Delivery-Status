@@ -2870,7 +2870,10 @@ def publish_to_sprout(written):
         if p.returncode:
             complain("push", p)
             return
-        print("[done] pushed hosted copy - CI will redeploy in ~15 min")
+        # Deliberately not "CI will redeploy": as of 2026-09-11 the repo has no
+        # build workflow and the registry pins an image tag, so a push alone
+        # does not move the hosted copy.  Don't let the log imply otherwise.
+        print("[done] pushed hosted copy to GitHub")
     except subprocess.TimeoutExpired:
         print("[warn] git timed out after %ds - hosted copy not pushed"
               % GIT_TIMEOUT)
