@@ -112,6 +112,19 @@ OUTPUT_PATHS = [
 # and never go stale.
 LEGACY_NAMES = ["CMSEReport.html", "MSPIReport.html"]
 
+# Hosted copy on SPROUT (https://mmsea-mspi-cmse.proto.dev.machinify.net).
+# Pushing index.html to this clone is what triggers CI -> ECR -> ArgoCD, so the
+# hosted dashboard trails the file-share copies by roughly 15 minutes.  Set
+# SPROUT_REPO to None to stop publishing without disturbing the rest of the run.
+#
+# Note this commits ~2.3 MB twice a day.  Git packs it well since it's text, but
+# if the repo ever gets unwieldy the fix is to squash history rather than to
+# publish less often.
+SPROUT_REPO = r"H:\proto-mmsea-mspi-cmse"
+SPROUT_BRANCH = "main"
+SPROUT_REMOTE = "origin"
+GIT_TIMEOUT = 180
+
 # SourceId -> (tracker row label, file-format spec label)
 SOURCE_TYPE = {
     4:  ("HEW",  "HEW"),
@@ -2802,6 +2815,69 @@ def generate_html(data):
             .replace("__DATA_JSON__", json.dumps(data, separators=(",", ":"))))
 
 
+def publish_to_sprout(written):
+    """Copy the report into the SPROUT clone and push it, refreshing the host.
+
+    Never raises.  The OUTPUT_PATHS copies are the ones people actually depend
+    on, so an expired credential or a GitHub outage must not turn an otherwise
+    good report run into a failed one - it just logs and leaves the hosted copy
+    one cycle stale.
+    """
+    if not SPROUT_REPO:
+        return
+    if not os.path.isdir(os.path.join(SPROUT_REPO, ".git")):
+        print("[warn] no SPROUT clone at %s - skipping hosted publish"
+              % SPROUT_REPO)
+        return
+
+    env = dict(os.environ)
+    # This runs unattended, so Git Credential Manager must fail rather than sit
+    # forever waiting on a prompt nobody is there to answer.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+
+    def git(*args):
+        return subprocess.run(("git", "-C", SPROUT_REPO) + args,
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=GIT_TIMEOUT, env=env)
+
+    def complain(step, p):
+        print("[warn] git %s failed: %s"
+              % (step, ((p.stderr or p.stdout or "")[:500]).strip()))
+
+    try:
+        shutil.copyfile(written, os.path.join(SPROUT_REPO, "index.html"))
+
+        # Pathspec-scoped commit: whatever else is sitting in the working tree
+        # or the index stays out of the refresh commit.
+        if git("diff", "--quiet", "HEAD", "--", "index.html").returncode:
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            p = git("commit", "-m", "Refresh dashboard - %s" % stamp,
+                    "--", "index.html")
+            if p.returncode:
+                complain("commit", p)
+                return
+
+        # Push whenever anything is unpushed, not just when we committed above -
+        # that also clears a commit left behind by a run whose push failed.
+        ahead = git("rev-list", "--count",
+                    "%s/%s..%s" % (SPROUT_REMOTE, SPROUT_BRANCH, SPROUT_BRANCH))
+        if ahead.returncode == 0 and ahead.stdout.strip() == "0":
+            print("[done] hosted copy already current - nothing to push")
+            return
+
+        p = git("push", SPROUT_REMOTE, SPROUT_BRANCH)
+        if p.returncode:
+            complain("push", p)
+            return
+        print("[done] pushed hosted copy - CI will redeploy in ~15 min")
+    except subprocess.TimeoutExpired:
+        print("[warn] git timed out after %ds - hosted copy not pushed"
+              % GIT_TIMEOUT)
+    except (OSError, shutil.Error) as e:
+        print("[warn] hosted publish failed: %s" % e)
+
+
 def main():
     full = "--full" in sys.argv
     data = build(full=full)
@@ -2850,6 +2926,8 @@ def main():
                 shutil.copyfile(src, dst)
             except (PermissionError, OSError) as e:
                 print("[warn] couldn't publish %s: %s" % (dst, e))
+
+    publish_to_sprout(written)
 
 
 if __name__ == "__main__":
