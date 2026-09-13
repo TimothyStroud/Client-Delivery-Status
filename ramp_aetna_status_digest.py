@@ -65,14 +65,22 @@ def _last_msg():
     return _load_state().get('last_msg')
 
 
-def _claim_slot(msg=None):
+def _last_blocks():
+    """Per-feed text of the blocks we most recently POSTED (per-feed dedupe)."""
+    return _load_state().get('last_blocks') or {}
+
+
+def _claim_slot(msg=None, blocks=None):
     """Stamp now as the last-emit time (atomic replace), claiming this slot. If
     msg is given, also record it as the last-posted message so an identical later
-    digest is skipped (content dedupe)."""
+    digest is skipped (content dedupe). blocks records each feed's current block
+    so an unchanged feed can be dropped from the next post (per-feed dedupe)."""
     st = _load_state()
     st['last_emit'] = datetime.now().isoformat()
     if msg is not None:
         st['last_msg'] = msg
+    if blocks is not None:
+        st['last_blocks'] = blocks
     tmp = STATE_FILE + '.tmp'
     with open(tmp, 'w') as f:
         json.dump(st, f)
@@ -843,12 +851,29 @@ def main():
     # Minimal PLAIN-TEXT format (per user 2026-07-16): the webhook renders only
     # :emoji: -- *bold*/_italic_/`code` show literally + Slack has no text color --
     # so no markup; the only standout is the icon on the ETA line.
-    lines = ["AETNA RCE - STATUS UPDATE", ""]
+    blocks = {}
     for server, name, label in SQL_JOBS:
         status_text, detail = sql_job(server, name)
-        lines.append(f"{label} {status_text}".rstrip())
-        lines.extend(detail)
-        lines.append("")
+        blocks[label] = "\n".join([f"{label} {status_text}".rstrip()] + list(detail))
+
+    # Per-feed dedupe (per user 2026-09-13): a feed's state is worth showing ONCE.
+    # While Aetna RCE steps through a load the digest re-posts every change, but a
+    # feed whose own block hasn't moved since its last post (e.g. NCStateAetna
+    # already reported Successful) is dropped from that post rather than repeated.
+    # It comes back the moment its own status changes. This keeps the "always show
+    # Success, never a bare Idle" rule -- the Success line still posts, just once.
+    prev = _last_blocks()
+    changed = [l for l in blocks if blocks[l] != prev.get(l)]
+    if not changed and not force:
+        _claim_slot(blocks=blocks)
+        print("NO_POST: no feed changed since last post")
+        return
+
+    lines = ["AETNA RCE - STATUS UPDATE", ""]
+    for server, name, label in SQL_JOBS:
+        if force or label in changed:
+            lines.append(blocks[label])
+            lines.append("")
 
     # Staged AetnaRCE input file(s) from the 'Aetna RCE 300 ETL Stage' job's
     # Related Files panel (per user 2026-07-30): file name + size + created date.
@@ -870,9 +895,10 @@ def main():
     # flips back to Executing). Replaces the old "both succeeded today -> go
     # silent" skip, which could leave the last post stuck on a stale 'Executing'.
     if not force and msg == _last_msg():
+        _claim_slot(blocks=blocks)
         print("NO_POST: status unchanged since last post")
         return
-    _claim_slot(msg)
+    _claim_slot(msg, blocks)
     print("SLACK|" + msg.replace("\n", "\\n"))
 
 
