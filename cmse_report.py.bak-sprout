@@ -120,10 +120,7 @@ LEGACY_NAMES = ["CMSEReport.html", "MSPIReport.html"]
 # Note this commits ~2.3 MB twice a day.  Git packs it well since it's text, but
 # if the repo ever gets unwieldy the fix is to squash history rather than to
 # publish less often.
-# Sprout torn down 2026-09-14 - the registry entry was deleted from
-# vlognow/k8s-prototypes, so there is nothing to refresh.  Publishing is off;
-# restore by setting this back to r"H:\proto-mmsea-mspi-cmse".
-SPROUT_REPO = None
+SPROUT_REPO = r"H:\proto-mmsea-mspi-cmse"
 SPROUT_BRANCH = "main"
 SPROUT_REMOTE = "origin"
 GIT_TIMEOUT = 180
