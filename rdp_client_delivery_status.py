@@ -930,21 +930,24 @@ MANUAL_OVERRIDES = {
     ("Oscar",         date(2026, 7, 8)):  date(2026, 7, 15),
     ("Oscar",         date(2026, 7, 15)): date(2026, 7, 15),
     # 2026-09-09: Oscar is out of FORCED_INACTIVE_FROM and loading all the
-    # missed weeks. Pin each skipped Wednesday to "L" until they certify (same
-    # pattern as the Tufts_Audit_CIT catch-up); 9/9 is left unpinned so live
-    # load activity / its own cert resolves it.
-    ("Oscar",         date(2026, 7, 22)): "L",
-    ("Oscar",         date(2026, 7, 29)): "L",
-    ("Oscar",         date(2026, 8, 5)):  "L",
-    ("Oscar",         date(2026, 8, 12)): "L",
-    ("Oscar",         date(2026, 8, 19)): "L",
-    ("Oscar",         date(2026, 8, 26)): "L",
-    ("Oscar",         date(2026, 9, 2)):  "L",
+    # missed weeks; each skipped Wednesday was pinned "L" until it certified.
+    # 2026-09-14 per user: "Oscar certified today goes for all missing weeks to
+    # 9/2/26" — one catch-up cert covering 7/22 through 9/2, so show the 9/14
+    # cert date on every backfilled Wednesday (same pattern as the 7/15 cert).
+    ("Oscar",         date(2026, 7, 22)): date(2026, 9, 14),
+    ("Oscar",         date(2026, 7, 29)): date(2026, 9, 14),
+    ("Oscar",         date(2026, 8, 5)):  date(2026, 9, 14),
+    ("Oscar",         date(2026, 8, 12)): date(2026, 9, 14),
+    ("Oscar",         date(2026, 8, 19)): date(2026, 9, 14),
+    ("Oscar",         date(2026, 8, 26)): date(2026, 9, 14),
+    ("Oscar",         date(2026, 9, 2)):  date(2026, 9, 14),
     # 2026-09-10 per user: "Oscar for 9/9/26 should remain empty. The Load running
     # is for backfill Elig for past weeks." The live 'Oscar Medical 0110 Load'
     # (Ready 9/10, Failed 9/10, Successful 9/8→9/9) is the catch-up eligibility
     # load, not a 9/9 claims delivery, so pin the cell blank (a "" pin renders
     # empty AND suppresses the pink shade).
+    # 2026-09-14 per user: the 9/9/26 file still has not been loaded — keep the
+    # cell empty.
     ("Oscar",         date(2026, 9, 9)):  "",
     # 2026-09-10 per user: "BCBSMNRx should remain empty since we have not loaded
     # claims files yet. Job 'BCBSMNRx Masterload 0100 Stage' does not show Claims,
