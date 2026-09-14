@@ -660,9 +660,9 @@ SOFT_OVERRIDES = {
     # 2026-08-19 per user: CenteneFidelis Medical's Wednesday cell is not
     # loading yet — 'Centene Fidelis Medical 0120 Claims Stage' is still Ready.
     # Self-clears the moment the Claims Load lands / the week certifies.
-    # 2026-08-24 per user: Cambia (weekly Mon) is staging, not loading —
-    # 'Cambia 0100 Claims Stage' Ready since 8/22, no Claims Load yet.
-    ("Cambia", date(2026, 8, 24)): "Staging",
+    # 2026-08-24 per user: Cambia (weekly Mon) was staging, not loading —
+    # 'Cambia 0100 Claims Stage' Ready since 8/22, no Claims Load yet. Its soft
+    # "Staging" label was replaced 2026-09-14 by hard MANUAL_OVERRIDES pins.
     # 2026-08-24 per user: "CenteneFidelis for 8/26/26 is loading Elig and will
     # move to Claims next." LOAD_NAME_REQUIRED restricts CenteneFidelis to the
     # Claims Load, so the running Eligibility Load can't paint L on its own.
@@ -735,6 +735,17 @@ def file_gate_satisfied(directory, pattern):
 # express on their own (e.g. retroactively assigning a cert date to a Friday
 # cell, or marking a known deployment-blocked Wednesday).
 MANUAL_OVERRIDES = {
+    # 2026-09-14 per user: "Cambia certified is for the 8/24/26 cell." The DHT
+    # cert (CertTimestamp 2026-09-14 09:13, StatTimestamp 9/12) auto-placed on
+    # the 9/7 AND 9/14 weeks, so the one cert showed in three cells. Pin it to
+    # the delivery it actually covers, and pin the other two to their real
+    # states: 9/7 is a plain miss (like 8/31), 9/14 has not landed yet.
+    # These must be HARD pins — the soft label self-cleared once the cert
+    # appeared, which is what let the cert bleed onto the later weeks.
+    ("Cambia",        date(2026, 8, 24)): date(2026, 9, 14),
+    ("Cambia",        date(2026, 9, 7)):  "!",
+    ("Cambia",        date(2026, 9, 14)): "",
+
     ("AetnaHRP",  date(2026, 5, 1)): "✓",
     ("WebTPA",    date(2026, 5, 1)): "No Data",
     ("CenteneRx", date(2026, 5, 1)): date(2026, 5, 5),
