@@ -289,3 +289,23 @@ Outside monthly check window (15th-20th); today is the 12. Skipping.
 Outside monthly check window (15th-20th); today is the 13. Skipping.
 Outside monthly check window (15th-20th); today is the 14. Skipping.
 Outside monthly check window (15th-20th); today is the 14. Skipping.
+Load start (anchor): 2026-09-15 08:34:53.900000
+SLA deadline:        2026-09-18 08:34:53.900000
+Response files found: 2/5
+  [-- ] RESP_RWGS_CEE_FF_*  
+  [-- ] RESP_EH_RAWLINGS_GPPO_MEMELIG_FA_FM01_PROD_*  
+  [-- ] RESP_CCI_RAWLINGS_MULTI_MEMELIG_FA_FM01_PROD_*  
+  [OK ] RESP_CCI_RAWLINGS_CCOMM_EMPGRP_FA_FM01_PROD_*  2026-09-15 08:47
+  [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-09-15 08:47
+Now:                 2026-09-15 09:00:03.063805  (before deadline)
+Not all 5 uploaded yet, still within SLA -- no email (waiting).
+Load start (anchor): 2026-09-15 08:34:53.900000
+SLA deadline:        2026-09-18 08:34:53.900000
+Response files found: 2/5
+  [-- ] RESP_RWGS_CEE_FF_*  
+  [-- ] RESP_EH_RAWLINGS_GPPO_MEMELIG_FA_FM01_PROD_*  
+  [-- ] RESP_CCI_RAWLINGS_MULTI_MEMELIG_FA_FM01_PROD_*  
+  [OK ] RESP_CCI_RAWLINGS_CCOMM_EMPGRP_FA_FM01_PROD_*  2026-09-15 08:47
+  [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-09-15 08:47
+Now:                 2026-09-15 14:00:04.061522  (before deadline)
+Not all 5 uploaded yet, still within SLA -- no email (waiting).
