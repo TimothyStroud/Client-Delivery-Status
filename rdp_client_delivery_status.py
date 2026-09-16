@@ -173,6 +173,16 @@ CLIENT_ALIASES = {
                              "aetnarxnewelig", "aetnarxmining",
                              "aetnarxcobcmasterload", "aetnarxcobc",
                              "aetnarxcaqh", "aetnarxtrr", "aetnarxihp"],
+    # 2026-09-16 per user: "AetnaRx Legacy 0110 Load was running at the 8am
+    # refresh, but was not noted." The monthly AetnaRx_LegacyDMG row (anchored
+    # to the 16th) had no alias, so its base key "aetnarxlegacydmg" never
+    # matched the JobName "AetnaRx Legacy 0110 Load" -> "aetnarxlegacy0110load"
+    # (nor the digit-collapsed "aetnarxlegacyload"), and find_matching_jobs
+    # returned nothing -> is_loading_today could never fire. The "DMG" suffix is
+    # ours, not RAMP's. Alias on the real job prefix; AetnaRx (daily) is
+    # unaffected because LOAD_NAME_REQUIRED["AetnaRx"] whitelists only
+    # claim 0110/0120/0130 + masterload, so the Legacy job can't paint its row.
+    "AetnaRx_LegacyDMG":    ["aetnarxlegacy"],
     # CenteneFidelis / CenteneFidelisRx job prefixes
     "CenteneFidelis":       ["centenefidelis", "centenefidelismedical"],
     "CenteneFidelisRx":     ["centenefidelisrx", "centenefidelisrxmasterload"],
@@ -960,6 +970,21 @@ MANUAL_OVERRIDES = {
     # 2026-09-14 per user: the 9/9/26 file still has not been loaded — keep the
     # cell empty.
     ("Oscar",         date(2026, 9, 9)):  "",
+    # 2026-09-16 per user: "Clear Oscar for 9/16 - Data has not loaded yet."
+    # Same situation as the 9/9 cell: a hard blank keeps the Wednesday cell
+    # empty and unshaded until the real weekly delivery lands.
+    ("Oscar",         date(2026, 9, 16)): "",
+    # 2026-09-16 per user: "EverNorthRx for 9/14 should not be Inactive. A
+    # certification will be completed today." Two things were hiding the real
+    # state: the RAMP auto-inactive sweep (fixed via AUTO_INACTIVE_EXCLUDE) and,
+    # once that cleared, a "Load Failure" from the 9/15 18:56 'EvernorthRx
+    # Masterload 0110 Load' run. That failure is stale — the job is now
+    # Enabled=0, and the 9/14 delivery's own chain finished 9/15 (0120 Snap
+    # 16:52, 0130 Delivery Ticket, 0140 Post Snap, 0150 MINE Snap 18:11 all
+    # Successful). has_recent_failure does not test Enabled, so a disabled
+    # job's last failure still trips it. Hard-pin "L" until today's cert lands
+    # in DHT (latest cert is still 9/9), then swap this to the cert date.
+    ("EverNorthRx",   date(2026, 9, 14)): "L",
     # 2026-09-10 per user: "BCBSMNRx should remain empty since we have not loaded
     # claims files yet. Job 'BCBSMNRx Masterload 0100 Stage' does not show Claims,
     # for future reference." BCBSMNRx has only the one Masterload chain in RAMP
@@ -1925,6 +1950,17 @@ MONTHLY_PLACEMENT_DAY_OVERRIDES = {
     ("Kaiser_AmbN",  2026, 8): date(2026, 8, 20),
     ("Kaiser_AmbNW", 2026, 8): date(2026, 8, 20),
     ("Kaiser_AmbS",  2026, 8): date(2026, 8, 20),
+    # 2026-09-16 per user: "Move all Kaiser Amb feeds to 9/24 since they were
+    # not loaded this week." _kaiser_amb_anchor() puts September on Thu 9/17
+    # (closest Thursday to the 15th); shift all seven one week out to Thu 9/24.
+    # Markers stay live (Kaiser_Amb* resolve from load/snap/cert activity).
+    ("Kaiser_AmbCO", 2026, 9): date(2026, 9, 24),
+    ("Kaiser_AmbGA", 2026, 9): date(2026, 9, 24),
+    ("Kaiser_AmbHI", 2026, 9): date(2026, 9, 24),
+    ("Kaiser_AmbM",  2026, 9): date(2026, 9, 24),
+    ("Kaiser_AmbN",  2026, 9): date(2026, 9, 24),
+    ("Kaiser_AmbNW", 2026, 9): date(2026, 9, 24),
+    ("Kaiser_AmbS",  2026, 9): date(2026, 9, 24),
 }
 
 # Spread monthly clients across the Mon-Fri week of their anchor day.
@@ -4028,7 +4064,16 @@ AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan", "TuftsRx",
                         # Oscar reactivated 2026-09-09 (loading all missed
                         # weeks) — keep the auto-sweep from re-flagging it while
                         # its 0100/0110 jobs are still being re-enabled.
-                        "Oscar"}
+                        "Oscar",
+                        # EverNorthRx added 2026-09-16 per user: "EverNorthRx
+                        # for 9/14 should not be Inactive. A certification will
+                        # be completed today." Its 'EvernorthRx Masterload 0100
+                        # Stage' / '0110 Load' are both Enabled=0 (RAMP staging
+                        # paused per Tim), so the auto-sweep dropped it into
+                        # FORCED_INACTIVE and resolve_marker step 5 returned
+                        # "Inactive" before the cert lookup could run. Excluded,
+                        # today's cert lands on the 9/14 Monday cell naturally.
+                        "EverNorthRx"}
 
 
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
