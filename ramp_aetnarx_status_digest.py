@@ -35,6 +35,17 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 RAMP_OK = ('Successful', 'Resolved')
 
+# ---- RxClaims file batch (added 2026-09-17 per user) -------------------------
+# Mirrors the HRP digest: show the whole batch the LAST 'AetnaRX Claim 0100
+# Split Stage' picked up (from RAMP's [ramp].[FileLog] on TRGUTIL10 keyed by
+# that stage's QueueId), not whatever happens to be on the file share, so stale
+# stragglers are excluded and it matches exactly what the stage staged.
+RAMP_SQL_SERVER = 'TRGUTIL10'
+STAGE_JOBID = 1921     # RAMP 'AetnaRX Claim 0100 Split Stage'
+LOAD_JOBID = 1923      # RAMP 'AetnaRX Claim 0120 Load'
+SNAP_JOBID = 1924      # RAMP 'AetnaRX Claim 0130 Start Snap'
+RXCLAIMS_LIKE = "'%RXCLAIMS%'"
+
 
 def _load_state():
     try:
@@ -777,6 +788,110 @@ def sql_job(server, name):
     return (f"- {st}", [])
 
 
+def _ramp_sql(query):
+    """Run a query against the RAMP db on TRGUTIL10; return rows as lists of
+    stripped string fields (headers suppressed with -h -1). Returns [] on error."""
+    try:
+        out = subprocess.run(
+            ['sqlcmd', '-S', RAMP_SQL_SERVER, '-d', 'RAMP', '-E', '-W',
+             '-h', '-1', '-s', '|', '-Q', 'SET NOCOUNT ON; ' + query],
+            capture_output=True, text=True, timeout=120)
+    except Exception:
+        return []
+    rows = []
+    for line in out.stdout.splitlines():
+        line = line.rstrip()
+        if not line or set(line) <= set('-|') or 'rows affected' in line:
+            continue
+        rows.append([c.strip() for c in line.split('|')])
+    return rows
+
+
+def _parse_rxclaims_dt(name):
+    """Parse the data date from ...DAILY.RXCLAIMS.<YYYYMMDD>.<HHMMSS>.<seq>.txt."""
+    m = re.search(r'RXCLAIMS[.](\d{8})[.](\d{6})', name, re.I)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1) + m.group(2), '%Y%m%d%H%M%S')
+    except ValueError:
+        return None
+
+
+def _last_queue(job_id):
+    """(Status, StartDate, EndDate) of the newest run of a RAMP job, as strings."""
+    rows = _ramp_sql(
+        "SELECT TOP 1 Status, CONVERT(varchar(19), StartDate, 121), "
+        "CONVERT(varchar(19), EndDate, 121) "
+        f"FROM [ramp].[Queue] WHERE JobId = {job_id} ORDER BY QueueId DESC")
+    if not rows or len(rows[0]) < 3:
+        return None, None, None
+    return rows[0][0], (rows[0][1] or None), (rows[0][2] or None)
+
+
+def last_stage_batch():
+    """The RxClaims files the LAST 'AetnaRX Claim 0100 Split Stage' staged, from
+    FileLog. Returns (stage_qid, stage_end_datetime, [(name, size_gb, data_dt)]
+    oldest-first), or (None, None, []) if unavailable. The stage QueueId is the
+    newest one whose FileLog actually holds RXCLAIMS files (a stage job can also
+    log a fileless phase we must skip)."""
+    qrows = _ramp_sql(
+        "SELECT TOP 1 fl.QueueId FROM [ramp].[FileLog] fl "
+        "JOIN [ramp].[Queue] q ON q.QueueId = fl.QueueId "
+        f"WHERE q.JobId = {STAGE_JOBID} AND fl.FileName LIKE {RXCLAIMS_LIKE} "
+        "ORDER BY fl.QueueId DESC")
+    if not qrows:
+        return None, None, []
+    qid = qrows[0][0]
+    erows = _ramp_sql(
+        f"SELECT CONVERT(varchar(19), EndDate, 121) FROM [ramp].[Queue] WHERE QueueId = {qid}")
+    stage_end = _to_dt(erows[0][0]) if erows and erows[0] else None
+    frows = _ramp_sql(
+        "SELECT FileName, CAST(FileSize / 1073741824.0 AS decimal(10,2)) "
+        f"FROM [ramp].[FileLog] WHERE QueueId = {qid} AND FileName LIKE {RXCLAIMS_LIKE} "
+        "ORDER BY FileName")
+    files = [(r[0], r[1], _parse_rxclaims_dt(r[0])) for r in frows if r and r[0]]
+    files.sort(key=lambda x: (x[2] or datetime.min))
+    return qid, stage_end, files
+
+
+def batch_state(stage_end):
+    """How far the last Stage's batch has progressed through Load -> Snap, as a
+    label. A Snap only counts once it ran for the CURRENT load (same rule as the
+    HRP digest)."""
+    l_status, l_start_s, l_end_s = _last_queue(LOAD_JOBID)
+    l_start, l_end = _to_dt(l_start_s), _to_dt(l_end_s)
+    # Is the latest Load run the one for this stage batch (started after staging)?
+    if not (l_start and stage_end and l_start >= stage_end):
+        return 'staged, pending load'
+    if l_status == 'Failed' and l_end:
+        return 'load FAILED'
+    if l_end and l_status in RAMP_OK:
+        s_status, s_start_s, _s_end = _last_queue(SNAP_JOBID)
+        s_start = _to_dt(s_start_s)
+        if s_start and s_start >= l_start and s_status in RAMP_OK:
+            return 'loaded + snapped'
+        return 'loaded (snap pending)'
+    return 'loading'
+
+
+def rxclaims_file_lines(files):
+    """Slack lines for the RxClaims section: the whole batch from the last Split
+    Stage, each file with its size and data date. The batch's Load/Snap progress
+    is carried in the section header (see main)."""
+    if not files:
+        return ["- (RAMP FileLog unavailable / no RXCLAIMS files in last stage)"]
+    out = []
+    for name, size_gb, dt in files:
+        dstr = dt.strftime('%m/%d/%Y') if dt else '?'
+        try:
+            gb = f"{float(size_gb):.2f} GB"      # sqlcmd prints '.81', not '0.81'
+        except (TypeError, ValueError):
+            gb = "? GB"
+        out.append(f"- {name}  |  {gb}  |  {dstr}")   # plain text (no markup renders)
+    return out
+
+
 def job_succeeded_today(server, name):
     """True if a SQL Agent job is Idle with last run Succeeded today."""
     row = _sp_help_job(server, name)
@@ -850,6 +965,13 @@ def main():
         lines.append(f"{label} {status_text}".rstrip())
         lines.extend(detail)
         lines.append("")
+    # RxClaims file batch (per user 2026-09-17): the files the last 'AetnaRX Claim
+    # 0100 Split Stage' picked up, with how far they have gotten through Load/Snap.
+    _stage_qid, stage_end, files = last_stage_batch()
+    staged_on = stage_end.strftime('%m/%d/%Y') if stage_end else '?'
+    lines.append(f"RxClaims Files - last AetnaRX Claim 0100 Split Stage   "
+                 f"(staged {staged_on}, {batch_state(stage_end)})")
+    lines.extend(rxclaims_file_lines(files))
     while lines and lines[-1] == "":
         lines.pop()
     msg = "\n".join(lines)
