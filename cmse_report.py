@@ -1528,6 +1528,7 @@ __EXPORT_CSS__
     </div>
     <select id="year" class="cal-only"></select>
     <select id="client"></select>
+    <select id="plat" class="plat-only"></select>
     <select id="source"></select>
     <select id="ticket" class="loads-only">
       <option value="">All loads</option>
@@ -1677,7 +1678,7 @@ __EXPORT_CSS__
   const nf = n => (n == null ? '' : Number(n).toLocaleString('en-US'));
 
   const latestYear = D.years[D.years.length - 1];
-  let S = { tab:'loads', year:latestYear, client:'', source:'', ticket:'', q:'',
+  let S = { tab:'loads', year:latestYear, client:'', plat:'', source:'', ticket:'', q:'',
             sortK:'sl', sortD:-1, msortK:'', msortD:1, open:new Set() };
 
   // ---- tool links ---------------------------------------------------------
@@ -1747,6 +1748,11 @@ __EXPORT_CSS__
                         .filter(Boolean).sort((a,b) => a.localeCompare(b));
   $('client').innerHTML = '<option value="">All clients</option>' +
     clientNames.map(c => `<option>${esc(c)}</option>`).join('');
+  // Emblem is the one multi-platform client - this narrows its loads to a single
+  // Facets platform (HIP / GHI / CCI), read off each file's submitter ID
+  $('plat').innerHTML = '<option value="">All Emblem platforms</option>' +
+    D.emblem.plat.map(p => `<option value="${p[1]}">${esc(p[1])} &middot; ${esc(p[2])}</option>`).join('') +
+    '<option value="unk">? &middot; platform unknown</option>';
   $('source').innerHTML = '<option value="">All source types</option>' +
     D.scope.map(id => `<option value="${id}">${id} &middot; ${esc(SRC[id]||'')}</option>`).join('');
 
@@ -1767,6 +1773,9 @@ __EXPORT_CSS__
     const t = useTicket === false ? '' : S.ticket;
     return D.loads.filter(l =>
       (!S.client || l.client === S.client) &&
+      // a platform pick is implicitly an Emblem-only filter
+      (!S.plat || (l.client === D.emblem.client &&
+                   (S.plat === 'unk' ? !l.plat : l.plat === S.plat))) &&
       (!S.source || String(l.src) === S.source) &&
       (t !== 'y' || l.wi) && (t !== 'n' || !l.wi) &&
       (!q || hay(l).includes(q)));
@@ -2567,6 +2576,9 @@ __EXPORT_CSS__
     document.querySelectorAll('.loads-only').forEach(e => e.hidden = S.tab !== 'loads');
     $('source').hidden = !(S.tab === 'loads' || S.tab === 'mmsea');
     $('client').hidden = !mmseaTab;
+    // platform lives on the file, so it only means something on the load tabs
+    document.querySelectorAll('.plat-only').forEach(e =>
+      e.hidden = !(S.tab === 'loads' || S.tab === 'mmsea'));
     $('search').hidden = !mmseaTab;
     $('clear').hidden = !mmseaTab;
     hideTip();
@@ -2592,6 +2604,7 @@ __EXPORT_CSS__
   });
   $('year').addEventListener('change', e => { S.year = e.target.value; render(); });
   $('client').addEventListener('change', e => { S.client = e.target.value; render(); });
+  $('plat').addEventListener('change', e => { S.plat = e.target.value; render(); });
   $('source').addEventListener('change', e => { S.source = e.target.value; render(); });
   $('ticket').addEventListener('change', e => { S.ticket = e.target.value; render(); });
   let t; $('search').addEventListener('input', e => {
@@ -2599,9 +2612,10 @@ __EXPORT_CSS__
     t = setTimeout(() => { S.q = v; render(); }, 160);
   });
   $('clear').addEventListener('click', () => {
-    S.client = S.source = S.ticket = S.q = ''; S.year = latestYear; S.open.clear();
+    S.client = S.plat = S.source = S.ticket = S.q = ''; S.year = latestYear; S.open.clear();
     S.msortK = ''; S.msortD = 1;
-    $('client').value = ''; $('source').value = ''; $('ticket').value = '';
+    $('client').value = ''; $('plat').value = '';
+    $('source').value = ''; $('ticket').value = '';
     $('search').value = ''; $('year').value = latestYear; render();
   });
   $('loads-head').addEventListener('click', e => {
