@@ -754,7 +754,9 @@ MANUAL_OVERRIDES = {
     # appeared, which is what let the cert bleed onto the later weeks.
     ("Cambia",        date(2026, 8, 24)): date(2026, 9, 14),
     ("Cambia",        date(2026, 9, 7)):  "!",
-    ("Cambia",        date(2026, 9, 14)): "",
+    # 2026-09-18 per user: "Mark Cambia & ElixirRx with '!'." The 9/14 delivery
+    # never landed — flip the blank hold to the pink missed-delivery flag.
+    ("Cambia",        date(2026, 9, 14)): "!",
 
     ("AetnaHRP",  date(2026, 5, 1)): "✓",
     ("WebTPA",    date(2026, 5, 1)): "No Data",
@@ -974,8 +976,10 @@ MANUAL_OVERRIDES = {
     # once completed." Both Wednesdays are now actively loading, so replace the
     # hard blanks with "L"; when the single catch-up cert lands, swap BOTH of
     # these to that same cert date (same pattern as the 9/14 backfill cert).
-    ("Oscar",         date(2026, 9, 9)):  "L",
-    ("Oscar",         date(2026, 9, 16)): "L",
+    # 2026-09-18 (later) per user: "Oscar for 9/9 & 9/16 was certified today."
+    # The single catch-up cert landed — swap both "L" pins to the 9/18 date.
+    ("Oscar",         date(2026, 9, 9)):  date(2026, 9, 18),
+    ("Oscar",         date(2026, 9, 16)): date(2026, 9, 18),
     # 2026-09-16 per user: "EverNorthRx for 9/14 should not be Inactive. A
     # certification will be completed today." Two things were hiding the real
     # state: the RAMP auto-inactive sweep (fixed via AUTO_INACTIVE_EXCLUDE) and,
@@ -986,7 +990,9 @@ MANUAL_OVERRIDES = {
     # Successful). has_recent_failure does not test Enabled, so a disabled
     # job's last failure still trips it. Hard-pin "L" until today's cert lands
     # in DHT (latest cert is still 9/9), then swap this to the cert date.
-    ("EverNorthRx",   date(2026, 9, 14)): "L",
+    # 2026-09-18 per user: "Add certification date of 9/16 to EverNorthRx on
+    # 9/14." The cert landed 9/16 — swap the "L" hold for the pinned date.
+    ("EverNorthRx",   date(2026, 9, 14)): date(2026, 9, 16),
     # 2026-09-10 per user: "BCBSMNRx should remain empty since we have not loaded
     # claims files yet. Job 'BCBSMNRx Masterload 0100 Stage' does not show Claims,
     # for future reference." BCBSMNRx has only the one Masterload chain in RAMP
@@ -1445,6 +1451,10 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     # August DHT cert auto-wins (step 1 runs before this override), so this
     # self-clears the moment August certifies.
     ("ElixirRx", 2026, 8): "!",
+    # 2026-09-18 per user: "Mark Cambia & ElixirRx with '!'." September (expected
+    # Tue 9/15) also never delivered. A real September DHT cert auto-wins, so
+    # this self-clears the moment it certifies.
+    ("ElixirRx", 2026, 9): "!",
     # 2026-07-17: Kaiser_WARx (monthly cert-only) — per user, show "L" (loading,
     # awaiting cert) on its expected day, NOT the auto "No Data". A DHT cert this
     # month auto-wins (checked before this override). The Friday pink escalation
