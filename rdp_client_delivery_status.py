@@ -969,11 +969,13 @@ MANUAL_OVERRIDES = {
     # empty AND suppresses the pink shade).
     # 2026-09-14 per user: the 9/9/26 file still has not been loaded — keep the
     # cell empty.
-    ("Oscar",         date(2026, 9, 9)):  "",
-    # 2026-09-16 per user: "Clear Oscar for 9/16 - Data has not loaded yet."
-    # Same situation as the 9/9 cell: a hard blank keeps the Wednesday cell
-    # empty and unshaded until the real weekly delivery lands.
-    ("Oscar",         date(2026, 9, 16)): "",
+    # 2026-09-18 per user: "Oscar is loading for 9/9 and 9/16 delivery dates.
+    # Mark both at 'L' and then mark both with the same certification date,
+    # once completed." Both Wednesdays are now actively loading, so replace the
+    # hard blanks with "L"; when the single catch-up cert lands, swap BOTH of
+    # these to that same cert date (same pattern as the 9/14 backfill cert).
+    ("Oscar",         date(2026, 9, 9)):  "L",
+    ("Oscar",         date(2026, 9, 16)): "L",
     # 2026-09-16 per user: "EverNorthRx for 9/14 should not be Inactive. A
     # certification will be completed today." Two things were hiding the real
     # state: the RAMP auto-inactive sweep (fixed via AUTO_INACTIVE_EXCLUDE) and,
@@ -991,7 +993,9 @@ MANUAL_OVERRIDES = {
     # (0100 Stage → 0110 Load → 0120 Snap → 0130 Post Snap → 0140 MINE Snap), so
     # there is no JobName keyword that separates claims from elig — LOAD_NAME_REQUIRED
     # can't help. Blank the cell by hand until the first claims file loads.
-    ("BCBSMNRx",      date(2026, 9, 9)):  "",
+    # 2026-09-18 per user: "Mark BCBSMNRx for 9/9 with 9/16/26 date." The first
+    # claims delivery for the 9/9 cycle certified 9/16 — pin the cert date.
+    ("BCBSMNRx",      date(2026, 9, 9)):  date(2026, 9, 16),
     # 2026-09-09: AetnaRx snapped in the midnight hour of 9/9 — the snap is
     # attributed to its StartDate (9/8), so the 9/9 cell needs the pin.
     ("AetnaRx",       date(2026, 9, 9)):  "✓",
