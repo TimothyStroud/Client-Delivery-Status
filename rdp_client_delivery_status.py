@@ -753,10 +753,14 @@ MANUAL_OVERRIDES = {
     # These must be HARD pins — the soft label self-cleared once the cert
     # appeared, which is what let the cert bleed onto the later weeks.
     ("Cambia",        date(2026, 8, 24)): date(2026, 9, 14),
-    ("Cambia",        date(2026, 9, 7)):  "!",
-    # 2026-09-18 per user: "Mark Cambia & ElixirRx with '!'." The 9/14 delivery
-    # never landed — flip the blank hold to the pink missed-delivery flag.
-    ("Cambia",        date(2026, 9, 14)): "!",
+    # 2026-09-23 per user: "All missing Cambia dates can be filled with 9/23/26
+    # cert date." One catch-up cert covers every missed Monday delivery, so 8/31,
+    # 9/7, 9/14 and 9/21 all carry the 9/23 date (the 8/24 cell above keeps its
+    # own 9/14 cert). Replaces the 9/18 "!" missed-delivery flags.
+    ("Cambia",        date(2026, 8, 31)): date(2026, 9, 23),
+    ("Cambia",        date(2026, 9, 7)):  date(2026, 9, 23),
+    ("Cambia",        date(2026, 9, 14)): date(2026, 9, 23),
+    ("Cambia",        date(2026, 9, 21)): date(2026, 9, 23),
 
     ("AetnaHRP",  date(2026, 5, 1)): "✓",
     ("WebTPA",    date(2026, 5, 1)): "No Data",
@@ -944,7 +948,10 @@ MANUAL_OVERRIDES = {
     # 2026-08-24 per user: "CenteneFidelis for 8/19/26 change to Missing in
     # Pink" — the 8/19 Wednesday delivery never arrived (was labelled "Staging"
     # on 8/19). "Missing" is a pink problem-state marker (see alert_state).
-    ("CenteneFidelis", date(2026, 8, 19)): "Missing",
+    # 2026-09-23 per user: "CenteneFidelis that is now Loading is for 8/19 and
+    # 9/23." The delivery that never arrived on 8/19 is in this load, so the cell
+    # goes from "Missing" back to "L" until it certifies.
+    ("CenteneFidelis", date(2026, 8, 19)): "L",
     # 2026-07-09: Oscar (weekly Wed) — was Inactive 7/1 & 7/8. 2026-07-15: per
     # user a backfill certified today (7/15) covering BOTH the 7/1 and 7/8
     # deliveries. 2026-07-17: per user the 7/15 cell certified 7/15 (show the
@@ -1098,6 +1105,54 @@ MANUAL_OVERRIDES = {
     # cert_in_week would file this cert on the already-pinned 8/24 cell and the
     # 8/31 cell would come up empty. Pin the 8/31 cert to the 8/31 cell.
     ("HealthNetCA",   date(2026, 8, 31)): date(2026, 8, 31),
+
+    # ===== 2026-09-23 per user =====
+    # "WellcareRx is currently loading for 8/28/26 through 9/25/26. Please label
+    # all of these with 'L' and they will all get the same certification date
+    # once completed." WellCareRx is weekly Friday, so that range is exactly the
+    # five Friday cells below. When the single catch-up cert lands, swap all five
+    # "L" pins to that one date (same pattern as the 8/3 WellCareRx cert above).
+    ("WellCareRx",    date(2026, 8, 28)): "L",
+    ("WellCareRx",    date(2026, 9, 4)):  "L",
+    ("WellCareRx",    date(2026, 9, 11)): "L",
+    ("WellCareRx",    date(2026, 9, 18)): "L",
+    ("WellCareRx",    date(2026, 9, 25)): "L",
+    # "CenteneRx Claims that will load after Elig will be for 8/28/26 through
+    # 9/25/26. Please label all of these with 'L' when loading starts and give
+    # the same certification date once completed." Weekly Friday — same five
+    # cells. LOAD_NAME_REQUIRED keeps the Elig load from painting L on its own,
+    # hence the hard pins.
+    ("CenteneRx",     date(2026, 8, 28)): "L",
+    ("CenteneRx",     date(2026, 9, 4)):  "L",
+    ("CenteneRx",     date(2026, 9, 11)): "L",
+    ("CenteneRx",     date(2026, 9, 18)): "L",
+    ("CenteneRx",     date(2026, 9, 25)): "L",
+    # "CenteneFidelisRx Claims that will load after Elig will be for 8/28/26
+    # through 9/25/26 ... label all with 'L' ... same certification date once
+    # completed." CenteneFidelisRx is weekly WEDNESDAY, so the Wednesday cells
+    # inside that range are 9/2 - 9/23.
+    ("CenteneFidelisRx", date(2026, 9, 2)):  "L",
+    ("CenteneFidelisRx", date(2026, 9, 9)):  "L",
+    ("CenteneFidelisRx", date(2026, 9, 16)): "L",
+    ("CenteneFidelisRx", date(2026, 9, 23)): "L",
+    # "UPMC for 9/17/26 was certified on 9/23/26. Current week is now loading."
+    # UPMC is weekly Thursday.
+    ("UPMC",          date(2026, 9, 17)): date(2026, 9, 23),
+    ("UPMC",          date(2026, 9, 24)): "L",
+    # "ExcellusRx for 9/16/26 was certified on 9/18/26." (The current 9/23 week
+    # is expected to certify today — left to auto-resolve off DHT.)
+    ("ExcellusRx",    date(2026, 9, 16)): date(2026, 9, 18),
+    # "TuftsMedPref for 7/6/26 & 7/13/26 were certified on 9/21/26." Both cells
+    # sit on/after FORCED_INACTIVE_FROM["TuftsMedPref"] = 7/6/26, and a pin
+    # bypasses resolve_marker, so these two Mondays now show the cert date while
+    # every later Monday stays "Inactive".
+    ("TuftsMedPref",  date(2026, 7, 6)):  date(2026, 9, 21),
+    ("TuftsMedPref",  date(2026, 7, 13)): date(2026, 9, 21),
+    # "CenteneFidelis that certified today was for the 9/16 delivery" — and the
+    # load now running is for the 8/19 and 9/23 deliveries (8/19 flipped from
+    # "Missing" to "L" above).
+    ("CenteneFidelis", date(2026, 9, 16)): date(2026, 9, 23),
+    ("CenteneFidelis", date(2026, 9, 23)): "L",
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
