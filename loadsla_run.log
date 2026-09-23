@@ -838,3 +838,29 @@ State saved.
    already reported this period -- dormant until restart
 [optum_pbm] LoadQ=1439110 LoadEnd=2026-09-06T00:01:32.233 SnapEnd=2026-09-06T00:06:20.7 tag=09042026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
    cycle 09042026 already reported -- dormant until next cycle
+[caresource] (weekly) QueueId=1445993 Status=Successful End=2026-09-15T15:27:30.87 period=2026-W39
+   this completion already reported -- skip
+[wellmark] (weekly) QueueId=1451596 Status=Successful End=2026-09-21T03:44:42.187 period=2026-W39
+   send -> Sent. | SLA Update - Wellmark 0210 Claims Load - SUCCESS
+[healthspring_fwa] (monthly) QueueId=1441005 Status=Successful End=2026-09-08T16:24:48.39 period=2026-09
+   already reported this period -- dormant until restart
+[optum_pbm] LoadQ=1439110 LoadEnd=2026-09-06T00:01:32.233 SnapEnd=2026-09-06T00:06:20.7 tag=09042026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   cycle 09042026 already reported -- dormant until next cycle
+State saved.
+[caresource] (weekly) QueueId=1452096 Status=Ready End=None period=2026-W39
+   still running / not complete -- skip
+[wellmark] (weekly) QueueId=1451596 Status=Successful End=2026-09-21T03:44:42.187 period=2026-W39
+   already reported this period -- dormant until restart
+[healthspring_fwa] (monthly) QueueId=1441005 Status=Successful End=2026-09-08T16:24:48.39 period=2026-09
+   already reported this period -- dormant until restart
+[optum_pbm] LoadQ=1439110 LoadEnd=2026-09-06T00:01:32.233 SnapEnd=2026-09-06T00:06:20.7 tag=09042026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   cycle 09042026 already reported -- dormant until next cycle
+[caresource] (weekly) QueueId=1452096 Status=Successful End=2026-09-22T08:34:14.723 period=2026-W39
+   send -> Sent. | SLA Update - Caresource 0200 Load - SUCCESS
+[wellmark] (weekly) QueueId=1451596 Status=Successful End=2026-09-21T03:44:42.187 period=2026-W39
+   already reported this period -- dormant until restart
+[healthspring_fwa] (monthly) QueueId=1441005 Status=Successful End=2026-09-08T16:24:48.39 period=2026-09
+   already reported this period -- dormant until restart
+[optum_pbm] LoadQ=1439110 LoadEnd=2026-09-06T00:01:32.233 SnapEnd=2026-09-06T00:06:20.7 tag=09042026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   cycle 09042026 already reported -- dormant until next cycle
+State saved.
