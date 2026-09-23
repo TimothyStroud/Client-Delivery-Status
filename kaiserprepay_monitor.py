@@ -224,18 +224,26 @@ def regions_from(filenames):
 
 
 def staged_regions_for_date(load_date):
-    """Regions staged in ANY cycle on load_date -> {region: filename}.
+    """Regions staged in ANY cycle on load_date -> {region: stage EndDate}.
 
     Regions now arrive in separate cycles (NW added 9/3/2026), so a region
     missing from THIS cycle is only "NOT LOADED" if it is absent all day.
+    The stage EndDate lets build_message tell an *earlier* (already loaded)
+    cycle from a *later* one that has staged but not loaded yet.
     """
     rows = run_sql(
-        "SET NOCOUNT ON; SELECT f.FileName FROM [RAMP].[ramp].[FileLog] f "
+        "SET NOCOUNT ON; SELECT f.FileName, CONVERT(varchar,q.EndDate,120) "
+        "FROM [RAMP].[ramp].[FileLog] f "
         "JOIN [RAMP].[ramp].[Queue] q ON q.QueueId=f.QueueId "
         f"WHERE q.JobId={JOB_STAGE} AND CAST(q.StartDate AS date)='{load_date}' "
         "AND f.Status='Staged' AND f.FileName LIKE '%Prepay_Claim_Lines%'"
     )
-    return regions_from([r[0].strip() for r in rows])
+    out = {}
+    for r in rows:
+        m = re.search(r"_Lines_([A-Z]{2})_", r[0].strip())
+        if m:
+            out[m.group(1)] = (r[1] or "").strip()
+    return out
 
 
 def data_date_from(files):
@@ -288,11 +296,21 @@ def build_message(stage, load, snap, files, load_date, regions=KNOWN_REGIONS, da
         lines.append(f"0120 Snap: NOT FINISHED (no completed snap run after {SNAP_WAIT_HOURS}h)")
 
     day_files = day_files or {}
+    load_start = parse_dt(load[2])
     for region in sorted(set(regions) | set(files) | set(day_files)):
         if region in files:
             lines.append(f":white_check_mark: {region}: {files[region]}")
         elif region in day_files:
-            lines.append(f":white_check_mark: {region}: staged in an earlier cycle today")
+            # Only a cycle that finished staging BEFORE this load started was
+            # actually loaded; anything staged after it is still waiting.
+            stage_end = parse_dt(day_files[region])
+            if stage_end and load_start and stage_end <= load_start:
+                lines.append(
+                    f":white_check_mark: {region}: staged & loaded in an earlier cycle today")
+            else:
+                when = f" (staged {stage_end:%H:%M})" if stage_end else ""
+                lines.append(
+                    f":x: {region}: NOT LOADED - staged in a later cycle{when}, not loaded yet")
         else:
             lines.append(f":x: {region}: NOT LOADED - no staged {region} file found")
     return "\n".join(lines)
