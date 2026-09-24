@@ -449,7 +449,12 @@ FORCED_INACTIVE = {"MedicalMutualMHS"}
 # user 2026-07-29 (deliveries stopped as of that Monday; earlier weeks keep their
 # history). Takes precedence over the cert lookup in resolve_marker.
 FORCED_INACTIVE_FROM = {
-    "TuftsMedPref":    date(2026, 7, 6),
+    # TuftsMedPref REMOVED 2026-09-24 per user: "TuftsMedPref from 7/20 to
+    # 9/21 has a cert date of 9/24/26. Remove Inactive for TuftsMedPref on
+    # 9/28/26 forward." Every Monday 7/6 - 9/21 is now pinned in
+    # MANUAL_OVERRIDES (7/6 & 7/13 → 9/21/26, 7/20 - 9/21 → 9/24/26), so
+    # dropping the cutoff only affects 9/28 forward, which auto-resolves.
+    # Also added to AUTO_INACTIVE_EXCLUDE so the RAMP sweep can't re-flag it.
     # Tufts_Audit_CIT REMOVED 2026-08-20 per user: it is loading again, catching
     # up the weeks of 7/6 through 8/17 (all seven Mondays pinned "L" in
     # MANUAL_OVERRIDES; they will all certify on the same date). The 7/6 cutoff
@@ -1148,6 +1153,18 @@ MANUAL_OVERRIDES = {
     # every later Monday stays "Inactive".
     ("TuftsMedPref",  date(2026, 7, 6)):  date(2026, 9, 21),
     ("TuftsMedPref",  date(2026, 7, 13)): date(2026, 9, 21),
+    # "TuftsMedPref from 7/20 to 9/21 has a cert date of 9/24/26." (user
+    # 2026-09-24) — the ten remaining catch-up Mondays all certify together.
+    ("TuftsMedPref",  date(2026, 7, 20)): date(2026, 9, 24),
+    ("TuftsMedPref",  date(2026, 7, 27)): date(2026, 9, 24),
+    ("TuftsMedPref",  date(2026, 8, 3)): date(2026, 9, 24),
+    ("TuftsMedPref",  date(2026, 8, 10)): date(2026, 9, 24),
+    ("TuftsMedPref",  date(2026, 8, 17)): date(2026, 9, 24),
+    ("TuftsMedPref",  date(2026, 8, 24)): date(2026, 9, 24),
+    ("TuftsMedPref",  date(2026, 8, 31)): date(2026, 9, 24),
+    ("TuftsMedPref",  date(2026, 9, 7)): date(2026, 9, 24),
+    ("TuftsMedPref",  date(2026, 9, 14)): date(2026, 9, 24),
+    ("TuftsMedPref",  date(2026, 9, 21)): date(2026, 9, 24),
     # "CenteneFidelis that certified today was for the 9/16 delivery" — and the
     # load now running is for the 8/19 and 9/23 deliveries (8/19 flipped from
     # "Missing" to "L" above).
@@ -4142,7 +4159,10 @@ AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan", "TuftsRx",
                         # FORCED_INACTIVE and resolve_marker step 5 returned
                         # "Inactive" before the cert lookup could run. Excluded,
                         # today's cert lands on the 9/14 Monday cell naturally.
-                        "EverNorthRx"}
+                        "EverNorthRx",
+                        # TuftsMedPref reactivated 2026-09-24 (7/20 - 9/21
+                        # catch-up certified 9/24/26; 9/28 forward is live).
+                        "TuftsMedPref"}
 
 
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
