@@ -1132,14 +1132,15 @@ MANUAL_OVERRIDES = {
     ("CenteneRx",     date(2026, 9, 11)): "L",
     ("CenteneRx",     date(2026, 9, 18)): "L",
     ("CenteneRx",     date(2026, 9, 25)): "L",
-    # "CenteneFidelisRx Claims that will load after Elig will be for 8/28/26
-    # through 9/25/26 ... label all with 'L' ... same certification date once
-    # completed." CenteneFidelisRx is weekly WEDNESDAY, so the Wednesday cells
-    # inside that range are 9/2 - 9/23.
-    ("CenteneFidelisRx", date(2026, 9, 2)):  "L",
-    ("CenteneFidelisRx", date(2026, 9, 9)):  "L",
-    ("CenteneFidelisRx", date(2026, 9, 16)): "L",
-    ("CenteneFidelisRx", date(2026, 9, 23)): "L",
+    # "CenteneFidelisRx for 8/19/26 to 9/23/26 was certified on 9/24/26" (user
+    # 2026-09-24) — the catch-up cert closes out every Wednesday delivery in
+    # that range, replacing the earlier "L" pins on 9/2 - 9/23.
+    ("CenteneFidelisRx", date(2026, 8, 19)): date(2026, 9, 24),
+    ("CenteneFidelisRx", date(2026, 8, 26)): date(2026, 9, 24),
+    ("CenteneFidelisRx", date(2026, 9, 2)):  date(2026, 9, 24),
+    ("CenteneFidelisRx", date(2026, 9, 9)):  date(2026, 9, 24),
+    ("CenteneFidelisRx", date(2026, 9, 16)): date(2026, 9, 24),
+    ("CenteneFidelisRx", date(2026, 9, 23)): date(2026, 9, 24),
     # "UPMC for 9/17/26 was certified on 9/23/26. Current week is now loading."
     # UPMC is weekly Thursday.
     ("UPMC",          date(2026, 9, 17)): date(2026, 9, 23),
