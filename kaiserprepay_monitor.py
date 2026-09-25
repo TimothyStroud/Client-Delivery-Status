@@ -459,6 +459,13 @@ def run_monitor():
         log(f"no new Load since QueueId {watermark}")
         return 0
 
+    # Dedupe key: the cycle's 0120 Snap QueueId. A single cycle can have more
+    # than one 0110 Load run (9/25: Loads 1455136 08:50-08:50 and 1455231
+    # 08:51-08:57 both fed Snap 1455237), which posted the same Success message
+    # twice. One post per Snap; later loads sharing that snap just advance the
+    # watermark. Keeps the last 30 snap ids.
+    posted_snaps = [int(x) for x in (state.get("posted_snap_queueids") or [])]
+
     now = datetime.now()
     for row in new_loads:
         load_qid = int(row[0])
@@ -486,12 +493,23 @@ def run_monitor():
             regions = sorted(set(regions) | set(added))
             state["regions"] = regions
             log("new prepay region(s) added: " + ", ".join(added))
+        snap_qid = int(snap[0]) if snap else None
+        if snap_qid is not None and snap_qid in posted_snaps:
+            log(f"Load {load_qid} ({load_date}): cycle Snap QueueId={snap_qid} "
+                f"already posted - skipping duplicate post, advancing watermark.")
+            state["last_load_queueid"] = load_qid
+            save_state(state)
+            continue
+
         msg = build_message(stage, load, snap, files, load_date, regions, day_files)
         log(f"posting cycle Load QueueId={load_qid} ({load_date}):")
         for ln in msg.splitlines():
             log("    " + ln)
         post_all(msg)
 
+        if snap_qid is not None:
+            posted_snaps = (posted_snaps + [snap_qid])[-30:]
+            state["posted_snap_queueids"] = posted_snaps
         state["last_load_queueid"] = load_qid
         save_state(state)
 
