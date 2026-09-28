@@ -1,0 +1,9 @@
+Headless smoke test. Work silently, do not ask questions.
+
+1. Run: python H:\unconfigured_weekly_notion.py
+   It prints a complete `<details>` block. Use its output verbatim.
+2. Insert that block on the Notion page id 3e95356b3971815daf04d23a6b46d7f9 using
+   notion-update-page with command "update_content":
+     old_str = "### Weekly Team Wins (Thursday)"
+     new_str = <the block from step 1> + "\n### Weekly Team Wins (Thursday)"
+3. Print one line: the summary line (date + record count), or the error if it failed.

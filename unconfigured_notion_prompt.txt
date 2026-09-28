@@ -1,0 +1,30 @@
+Daily Unconfigured Files Notion update. Work silently and do not ask any questions.
+
+1. Run: python H:\unconfigured_weekly_notion.py
+   It prints a complete `<details>` block: the day's summary line, then one nested
+   `<details>` toggle per client whose children are that client's file names (in
+   backticks) + create dates. Do not reformat or re-sort its output - insert it verbatim.
+
+2. Insert that block on the Notion page "Data Operations - Big Board - Agenda"
+   (page id 2b05356b39718021b597dd85097ff220), immediately AFTER the last existing
+   daily `<details>` toggle under the heading
+   `### [Unconfigured Files](http://ramp/Ramp/UnconfiguredFiles) Review (Tuesday)`.
+   The heading says "(Tuesday)" because that is the day the team reviews it - the
+   update itself still runs daily. Do NOT rename the heading.
+
+   Use notion-update-page with command "update_content" and an old_str/new_str pair.
+   NEVER use replace_content on this page.
+
+   Cheap path (try this FIRST, it avoids fetching the whole page):
+     old_str = "</details>\n### Weekly Team Wins (Thursday)"
+     new_str = "</details>\n" + <the block from step 1> + "\n### Weekly Team Wins (Thursday)"
+   If that call fails (anchor not found or not unique), THEN notion-fetch the page and
+   anchor on the last existing toggle's closing tag instead.
+
+3. KEEP ONLY THE SEVEN MOST RECENT DAILY TOGGLES. After inserting, if there are more
+   than seven, delete the oldest ones (one update_content call per toggle, replacing
+   that whole `<details>...</details>` block with an empty new_str) so exactly seven
+   days remain. You will need to notion-fetch the page to do this accurately.
+
+4. Print one line only: the summary line (date + record count) and which day's toggle,
+   if any, you pruned. Do not paste the whole block back.
