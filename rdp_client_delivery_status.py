@@ -1115,13 +1115,17 @@ MANUAL_OVERRIDES = {
     # "WellcareRx is currently loading for 8/28/26 through 9/25/26. Please label
     # all of these with 'L' and they will all get the same certification date
     # once completed." WellCareRx is weekly Friday, so that range is exactly the
-    # five Friday cells below. When the single catch-up cert lands, swap all five
-    # "L" pins to that one date (same pattern as the 8/3 WellCareRx cert above).
-    ("WellCareRx",    date(2026, 8, 28)): "L",
-    ("WellCareRx",    date(2026, 9, 4)):  "L",
-    ("WellCareRx",    date(2026, 9, 11)): "L",
-    ("WellCareRx",    date(2026, 9, 18)): "L",
-    ("WellCareRx",    date(2026, 9, 25)): "L",
+    # five Friday cells below.
+    # ===== 2026-09-28 per user: the catch-up cert landed =====
+    # "WellcareRx from 8/28 to 9/25 were certified on 9/28/26." Swapped all five
+    # "L" pins to that one cert date (same pattern as the 8/3 cert above).
+    # Loading for 10/2/26 has not started — see CELL_ACTIVITY_AFTER, which keeps
+    # this 9/28 cert (StatTimestamps land in the 9/28 week) off the 10/2 cell.
+    ("WellCareRx",    date(2026, 8, 28)): date(2026, 9, 28),
+    ("WellCareRx",    date(2026, 9, 4)):  date(2026, 9, 28),
+    ("WellCareRx",    date(2026, 9, 11)): date(2026, 9, 28),
+    ("WellCareRx",    date(2026, 9, 18)): date(2026, 9, 28),
+    ("WellCareRx",    date(2026, 9, 25)): date(2026, 9, 28),
     # "CenteneRx Claims that will load after Elig will be for 8/28/26 through
     # 9/25/26. Please label all of these with 'L' when loading starts and give
     # the same certification date once completed." Weekly Friday — same five
@@ -1215,6 +1219,11 @@ CERT_CELL_REMAP = {
 # or an "L" from the weekly cert-client "activity this week" fallback.
 CELL_ACTIVITY_AFTER = {
     ("WebTPA", date(2026, 8, 28)): date(2026, 8, 25),
+    # 2026-09-28 per user: "WellcareRx from 8/28 to 9/25 were certified on
+    # 9/28/26. Loading for 10/2/26 has not started yet." The catch-up cert's
+    # StatTimestamps fall in the 9/28 week, so cert_in_week would stamp 9/28 on
+    # the 10/2 cell. Gate it — the cell stays blank until real 10/2 activity.
+    ("WellCareRx", date(2026, 10, 2)): date(2026, 9, 28),
 }
 
 # --- Monthly cert-to-month reattribution ------------------------------------
