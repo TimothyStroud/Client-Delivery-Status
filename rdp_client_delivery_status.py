@@ -287,6 +287,13 @@ CLIENT_ALIASES = {
     # BCBSFLEligibilityLoad: the RAMP job is "BCBSFL Eligibility ..." → key
     # "bcbsfleligibility" after stripping load/stage/digits.
     "BCBSFLEligibilityLoad": ["bcbsfleligibility"],
+    # NavitusPBMRx (new weekly implementation per user 2026-10-01): the RAMP jobs
+    # are 'NavitusPBMRx MasterLoad Eligibility 0100 Stage' / '... 0110 Load', so
+    # build_snap_index keys the completion under the whole pre-digit prefix
+    # ("navituspbmrxmasterloadeligibility") — register it, since
+    # _src_matches_client is strict-equality and the bare "navituspbmrx" key
+    # would never match.
+    "NavitusPBMRx":          ["navituspbmrxmasterloadeligibility"],
     # Kaiser monthly aliases
     "Kaiser_GE":            ["kaiserge"],
     "Kaiser_AmbCO":         ["kaiserambulanceco", "kaiserambco"],
@@ -379,6 +386,10 @@ WEEKLY_CLIENTS = {
     "Kaiser_NW":             ["Thursday"],
     "KaiserNCPareo":         ["Thursday"],
     "KaiserSCPareo":         ["Thursday"],
+    # NavitusPBMRx — new weekly implementation per user 2026-10-01: "Add ...
+    # as 'NavitusPBMRx' to the dashboard ... Add to the Weekly Section on
+    # Thursday's for now." Nothing before 10/1/26 renders (see BLANK_BEFORE).
+    "NavitusPBMRx":          ["Thursday"],
     "Premera":               ["Thursday"],
     "PrimePBMRx":            ["Thursday"],
     "UPMC":                  ["Thursday"],   # moved from Tuesday per user 2026-07-02
@@ -1197,6 +1208,14 @@ MANUAL_OVERRIDES = {
 CERT_CELL_REMAP = {
     ("AetnaRCE",     date(2026, 8, 3)): date(2026, 7, 31),
     ("NCStateAetna", date(2026, 8, 3)): date(2026, 7, 31),
+    # 2026-10-01 per user: "Premera has already been certified." DHT certified
+    # Premera PCN 1110154 on 9/30 15:19 (StatTimestamp 9/30), which belongs to
+    # the Thu 10/1 delivery cell. Premera is CERT_DIRECTION "forward" — the
+    # 10/1 cell only looks 10/1..10/7, so a cert that lands the DAY BEFORE the
+    # scheduled Thursday is out of reach and the cell was stuck on "L". Remap
+    # it onto 10/1; this also keeps it off the 9/24 cell, which already carries
+    # its own 9/24 09:46 cert.
+    ("Premera",      date(2026, 9, 30)): date(2026, 10, 1),
 }
 
 # --- Per-cell "ignore earlier activity" gate --------------------------------
@@ -1674,12 +1693,32 @@ ADDITIONAL_ENTRIES = [
 #   - a (placement_date, marker) TUPLE — forces BOTH the calendar column the row
 #     lands on AND the marker (used when the EOM/SOM cycle should sit on a
 #     non-Tuesday day, e.g. its data/exception date).
+# First month whose EOM/SOM cycle uses the "1st of the month" anchor. Per user
+# 2026-10-01: "The 'CignaRx(EOM/SOM)(p)' should always be on the 1st of the
+# month, or Monday if on a weekend. Please move it to 10/1/26 and adjust going
+# forward." Months before this keep the original first-Tuesday placement so
+# already-published tabs don't shift.
+CIGNARX_EOM_SOM_ANCHOR_FROM = date(2026, 10, 1)
+
 CIGNARX_EOM_SOM_OVERRIDES = {
     # 2026-07-06: the July EOM/SOM cycle certified 7/2 (StatTimestamp/data date
     # 7/1, mining rows recorded as "Exception"). Per user, place it on 7/1/26
     # instead of the default first-Tuesday (7/7). Show 7/1/26 in the cell.
     (2026, 7): (date(2026, 7, 1), date(2026, 7, 1)),
 }
+
+def cignarx_eom_som_anchor(year, month):
+    """Calendar day the (year, month) CignaRx EOM/SOM cycle is placed on.
+
+    CIGNARX_EOM_SOM_ANCHOR_FROM onward: the 1st of the month, or the following
+    Monday when the 1st falls on a weekend. Earlier months: the first Tuesday
+    of the month (the original rule, kept so past tabs render unchanged).
+    """
+    first = date(year, month, 1)
+    if first < CIGNARX_EOM_SOM_ANCHOR_FROM:
+        return first + timedelta(days=(1 - first.weekday()) % 7)
+    return next_monday_if_weekend(first)
+
 
 # Per-client cert window direction (default = backward / same Mon-Fri week).
 # "forward" = look forward 7 days from scheduled day (used when a cert that
@@ -2038,6 +2077,15 @@ MONTHLY_EXPECTED_DAY_RANGE = {
 # told_otherwise True, so the sticky cache can't drag the row back onto the 9/3
 # cert day it was cached on before the remap existed.
 MONTHLY_PLACEMENT_DAY_OVERRIDES = {
+    # 2026-10-01 per user: "The BCBSFL Elig on 9/30 is still loading. Keep it a
+    # 'L' on 9/30 ... Once the Load job finishes, then the one on 9/30 can get a
+    # checkmark." September's standing anchor is the 25th (Fri 9/25), but the
+    # cycle actually staged + started loading on 9/30, so pin the row there. The
+    # marker stays live: step 2 holds "L" while 'BCBSFL 0110 Eligibility Load' is
+    # in flight, then step 4 flips it to ✓ on this same cell when it completes
+    # (the load usually finishes 2-3 days later, i.e. in October — hence the
+    # out-of-month clamp in step 4).
+    ("BCBSFLEligibilityLoad", 2026, 9): date(2026, 9, 30),
     ("BCBSSCRx",    2026, 9): date(2026, 9, 25),
     ("Kaiser_AmbCO", 2026, 8): date(2026, 8, 20),
     ("Kaiser_AmbGA", 2026, 8): date(2026, 8, 20),
@@ -2123,6 +2171,11 @@ BLANK_BEFORE = {
     # BCBSMNRx — per user 2026-09-04: add the weekly client to Wednesdays
     # starting 9/9/26 forward; nothing before that date renders.
     "BCBSMNRx": date(2026, 9, 9),
+    # NavitusPBMRx — per user 2026-10-01: added "for now" on Thursdays. Its RAMP
+    # jobs (11496/11497) were only created in late September, so suppress every
+    # Thursday cell before 10/1/26 rather than pink-flagging weeks the client
+    # did not exist for.
+    "NavitusPBMRx": date(2026, 10, 1),
 }
 
 # Clients whose cells ON/AFTER a given date render empty (the standing row is
@@ -2161,6 +2214,7 @@ SNAP_ONLY_CLIENTS = {
     "MedImpactPBMRx", "PrimePBMRx",
     "AetnaSubro", "HumanaRx",
     "WPRxDMGCOBMining",
+    "NavitusPBMRx",              # weekly; ✓ on load completion (no cert yet)
     "BCBSKSMedAdv", "TuftsRx",   # snap weekly, cert monthly
     "NCState",                   # blocked from DHT cert by Chimera; track via snap
 }
@@ -2205,6 +2259,12 @@ SNAP_KIND_ONLY_CLIENTS = {
 LOAD_AS_DELIVERY_CLIENTS = {
     "OptumPBMRx", "HumanaRx", "BCBSKSMedAdv",
     "AetnaRCE", "AetnaRx", "NCStateAetna",
+    # NavitusPBMRx per user 2026-10-01: "Mark as 'L' for loading and then a
+    # checkmark once the Load job finishes." Unlike the other PBMRx feeds it is
+    # deliberately NOT in SNAP_KIND_ONLY_CLIENTS — there is no snap step yet, so
+    # the '0110 Load' completion IS the delivery. Membership here also makes
+    # is_loading_today load-only, so the quick '0100 Stage' never shows "L".
+    "NavitusPBMRx",
 }
 
 # Clients whose LOAD step uses a non-standard verb ("Pull" instead of "Load")
@@ -3873,17 +3933,11 @@ def load_this_month(client, snap_idx, year, month, on_or_before):
     return best
 
 
-def is_loading_today(client, queue, jobs):
-    """True if a matching enabled job is currently Ready/Running.
+def _loading_job_ids(client, jobs):
+    """JobIds whose Ready/Running state means "this client is loading".
 
-    The set of "L"-triggering job types depends on client class:
-      - LOAD_AS_DELIVERY clients (AetnaRx/AetnaHRP/etc.): only LOAD jobs.
-        Once their load step finishes, ✓ takes over.
-      - All other clients (CenteneRx/WellCareRx/etc.): LOAD or SNAP jobs.
-        These need a cert to complete the cycle, so they stay L through
-        both the load and snap steps until the cert lands.
-
-    Stage / logfile / sftp / upload jobs never count as L.
+    Split out of is_loading_today so loading_start_day() selects exactly the
+    same jobs — the two must never disagree on what counts as a load.
     """
     matched = find_matching_jobs(client, jobs)
     load_only = client in LOAD_AS_DELIVERY_CLIENTS or client in L_ON_LOAD_ONLY_CLIENTS
@@ -3912,10 +3966,54 @@ def is_loading_today(client, queue, jobs):
         else:
             if is_load or is_snap:
                 job_ids.add(j.get("JobId"))
+    return job_ids
+
+
+def is_loading_today(client, queue, jobs):
+    """True if a matching enabled job is currently Ready/Running.
+
+    The set of "L"-triggering job types depends on client class:
+      - LOAD_AS_DELIVERY clients (AetnaRx/AetnaHRP/etc.): only LOAD jobs.
+        Once their load step finishes, ✓ takes over.
+      - All other clients (CenteneRx/WellCareRx/etc.): LOAD or SNAP jobs.
+        These need a cert to complete the cycle, so they stay L through
+        both the load and snap steps until the cert lands.
+
+    Stage / logfile / sftp / upload jobs never count as L.
+    """
+    job_ids = _loading_job_ids(client, jobs)
     for q in queue:
         if q.get("JobId") in job_ids and q.get("Status") in ("Ready", "Running"):
             return True
     return False
+
+
+def loading_start_day(client, queue, jobs):
+    """Calendar day the client's in-flight load STARTED, or None when nothing
+    is in flight (or RAMP has no usable date on the queue row yet).
+
+    Earliest Ready/Running run wins, so a multi-step cycle reports the day the
+    cycle began. Ready rows often have no StartDate yet — fall back to
+    CreateDate for those.
+
+    Why this exists: build_snap_index attributes every COMPLETION by start date,
+    so anchoring the in-flight "L" to the same day keeps a cell from jumping
+    when the load finishes, and keeps a load that runs across a month boundary
+    on its own month's tab instead of duplicating onto the new one. Per user
+    2026-10-01 (BCBSFL Elig: the 9/30 load was still running on 10/1 — keep the
+    "L" on 9/30 and drop the duplicate October row).
+    """
+    job_ids = _loading_job_ids(client, jobs)
+    best = None
+    for q in queue:
+        if q.get("JobId") not in job_ids:
+            continue
+        if q.get("Status") not in ("Ready", "Running"):
+            continue
+        dt = parse_dt(q.get("StartDate")) or parse_dt(q.get("CreateDate"))
+        if dt and (best is None or dt < best):
+            best = dt
+    return best.date() if best else None
 
 
 def scan_adhoc_loads(queue, jobs, today, since, weekend_shift=True):
@@ -5168,9 +5266,22 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 return expected_date, "L"
             return expected_date, "No Data"
 
-        # 2) Currently loading right now → today + L (outranks past completion).
-        if today_in_month and is_loading_today(client, ramp_queue, ramp_jobs):
-            return today, "L"
+        # 2) Currently loading right now → "L", anchored to the day the in-flight
+        # load STARTED (loading_start_day), not to today. build_snap_index
+        # attributes completions by start date too, so the cell doesn't jump when
+        # the load finishes — and a load that runs across a month boundary stays
+        # on its OWN month's tab instead of being duplicated onto the new one
+        # (the row is simply absent from the months it didn't start in).
+        # Per user 2026-10-01: "The BCBSFL Elig on 9/30 is still loading. Keep it
+        # a 'L' on 9/30 and remove the one from 10/5/26." Falls back to today when
+        # RAMP has no date on the queue row yet.
+        if is_loading_today(client, ramp_queue, ramp_jobs):
+            ld = loading_start_day(client, ramp_queue, ramp_jobs) or (
+                today if today_in_month else None)
+            if ld is not None and ld.year == year and ld.month == month:
+                if ld.weekday() >= 5:
+                    ld = next_monday_if_weekend(ld)
+                return ld, "L"
 
         # 3) Recent failure today → today + Load Failure
         if today_in_month and has_recent_failure(client, ramp_queue, ramp_jobs, today):
@@ -5181,7 +5292,16 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         sn = latest_snap_this_month(client, snap_idx, year, month, today)
         if sn:
             d = sn.date()
-            if d.weekday() >= 5:
+            if d.year != year or d.month != month:
+                # The run STARTED in this month (that's how snap_idx keyed it)
+                # but FINISHED after the month rolled over — BCBSFL Elig's
+                # 'BCBSFL 0110 Eligibility Load' routinely takes 2-3 days. A
+                # placement day outside the month is dropped when the tab
+                # renders, so anchor the ✓ to this month's expected day
+                # instead of losing the row. Per user 2026-10-01 (the 9/30
+                # load "can get a checkmark" on 9/30 once it finishes).
+                d = expected_date
+            elif d.weekday() >= 5:
                 d = next_monday_if_weekend(d)
             return d, "✓"
 
@@ -5661,20 +5781,29 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             break
 
     # CignaRx EOM/SOM injection — second CignaRx cycle closing out prior month.
-    # Surfaces on the first Tuesday of each month (per user 2026-06-03), EXCEPT
-    # while it is actively loading in the current month: then it moves to TODAY
-    # with an "L" so the live cycle shows where the activity is (per user
-    # 2026-07-01 — the current 'Cigna RX 0110 Load' IS the EOM/SOM). Once the
-    # cert lands the row returns to the first Tuesday with the cert date.
-    cigna_target = None
+    # Placement: cignarx_eom_som_anchor() — the 1st of the month (next Monday if
+    # that is a weekend) from October 2026 on, the first Tuesday before that.
+    # Per user 2026-10-01: "should always be on the 1st of the month, or Monday if
+    # on a weekend."
+    #
+    # The anchor can sit on a tab OTHER than its own month's: month_weeks() gives
+    # a boundary week to whichever month owns 3+ of its weekdays, so e.g. Thu
+    # 10/1/26 is rendered on the SEPTEMBER tab. Walk every month represented in
+    # this tab's days and emit the cycle whose anchor actually falls here — that
+    # places the row exactly once across the workbook, on the day the user asked
+    # for, instead of being bounced onto a fallback cell in its own month.
+    cigna_cycles = []
     for d in all_days:
-        if d.month == month and d.weekday() == 1:  # Tuesday
-            cigna_target = d
-            break
-    if cigna_target is not None:
+        if (d.year, d.month) not in cigna_cycles:
+            cigna_cycles.append((d.year, d.month))
+    for cig_year, cig_month in cigna_cycles:
+        cigna_target = cignarx_eom_som_anchor(cig_year, cig_month)
+        if cigna_target not in all_days:
+            continue
+        legacy_anchor = date(cig_year, cig_month, 1) < CIGNARX_EOM_SOM_ANCHOR_FROM
         cig_label = "CignaRx (EOM/SOM)(p)"
         placement_override = None
-        override = CIGNARX_EOM_SOM_OVERRIDES.get((year, month))
+        override = CIGNARX_EOM_SOM_OVERRIDES.get((cig_year, cig_month))
         if override is not None:
             if isinstance(override, tuple):
                 placement_override, marker = override
@@ -5682,12 +5811,12 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                 marker = override
         else:
             # Window: from the 1st of the month through 14 days in. Restricted
-            # to the current month (was -7 days) so the prior month's regular
+            # to the cycle's own month (was -7 days) so the prior month's regular
             # weekly CignaRx certs (e.g. 6/24, 6/30) aren't pulled onto this
             # cell — the EOM/SOM cycle is the NEXT CignaRx load in the new
             # month, which stays blank until it loads. Per user 2026-07-01.
-            win_start = date(year, month, 1)
-            win_end   = date(year, month, 1) + timedelta(days=14)
+            win_start = date(cig_year, cig_month, 1)
+            win_end   = win_start + timedelta(days=14)
             # Cert preference: earliest cert in the window.
             cig_cert = None
             for key in _keys_for_client("CignaRx"):
@@ -5715,19 +5844,28 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                         break
                 # Also show "L" while the EOM/SOM Cigna RX 0110 Load is
                 # Ready/Running right now (before it lands in snap_idx) — only
-                # for the CURRENT month tab so past months aren't disturbed.
-                is_current = (year == today.year and month == today.month)
+                # for the CURRENT month's cycle so past months aren't disturbed.
+                is_current = (cig_year == today.year and cig_month == today.month)
                 if loaded or (is_current and is_loading_today("CignaRx", ramp_queue, ramp_jobs)):
                     marker = "L"
+                elif is_current and has_recent_failure("CignaRx", ramp_queue, ramp_jobs, today):
+                    # The EOM/SOM cycle IS the next 'Cigna RX 0110 Load' of the
+                    # new month, so a fresh failure on that job belongs to this
+                    # row — label it instead of leaving an empty pink "!".
+                    # Surfaced 2026-10-01, when the anchor moved onto the 1st
+                    # (today's cell) and both 10/1 load attempts had Failed.
+                    marker = "Load Failure"
                 else:
                     marker = ""   # blank until the next load
-        # A tuple override forces the placement day; otherwise, while loading in
-        # the current month place the row on TODAY; else (blank / landed cert)
-        # keep it on the first Tuesday.
+        # A tuple override forces the placement day. Legacy (pre-October-2026)
+        # cycles also still jump to TODAY while loading; from October on the row
+        # stays pinned to the 1st, which is the whole point of the new anchor.
         placement = cigna_target
         if placement_override is not None and placement_override in all_days:
             placement = placement_override
-        elif marker == "L" and year == today.year and month == today.month and today in all_days:
+        elif (legacy_anchor and marker == "L"
+              and cig_year == today.year and cig_month == today.month
+              and today in all_days):
             placement = today
         alert = alert_state("CignaRx", placement, marker)
         weekly[placement].append((cig_label, marker, alert, None))
