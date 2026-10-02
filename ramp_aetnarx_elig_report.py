@@ -46,6 +46,12 @@ FAMILIES = [
     ('RXBOR-CVSCMK.ELIGCMP', 'RXBOR-CVSCMK.ELIGCMP'),
 ]
 
+# Families whose gaps are never real misses -- the data arrives inside other
+# files, so a date with no APCCF file of its own is still covered (per user
+# 2026-10-02: "all of the missing files can be removed ... not actually missing").
+# These feeds show their header line only.
+NO_MISSING = {'APCCF'}
+
 QUERY = r"""SET NOCOUNT ON;
 WITH b AS (
     SELECT REVERSE(SUBSTRING(REVERSE(t.FileName), 1,
@@ -154,7 +160,7 @@ def build(fams, today):
 
         # Only call out misses (per user 2026-07-31) -- a clean feed is just its
         # header line, no "No missing files" reassurance line.
-        miss = missing_by_month(days, dows)
+        miss = {} if key in NO_MISSING else missing_by_month(days, dows)
         for (y, m) in sorted(miss, reverse=True):
             ds = miss[(y, m)]
             total_missing += len(ds)
