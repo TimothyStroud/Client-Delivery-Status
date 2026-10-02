@@ -1981,14 +1981,19 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     "NCStateRx":              (1, 1),
     "MedicalMutualOH":        (3, 8),
     # ModaRx: monthly CLAIMS delivery only. Anchored to the 5th when it was
-    # wired 2026-08-27, MOVED TO THE 2nd per user 2026-08-31 ("Add ModaRx to the
-    # 2nd of each month instead of the 5th, starting with 9/2/26"). Sept 2026 is
-    # its first month on the report (MONTHLY_STARTS_FROM), so no earlier tab has
-    # a 5th-of-the-month cell to preserve and a plain range change is enough —
-    # no date-gated override needed. No MONTHLY_PLACEMENT_WEEKDAY entry so it
-    # stays on the 2nd itself (next Monday if the 2nd is a weekend) rather than
-    # spreading across that work-week.
-    "ModaRx":                 (2, 2),
+    # wired 2026-08-27, moved to the 2nd 2026-08-31, and MOVED TO THE 1st per
+    # user 2026-10-02 ("add ModaRx to the monthly section on the 1st of each
+    # month, or Monday afterwards if the 1st is on a weekend"). The weekend rule
+    # is the default next_monday_if_weekend in determine_monthly, and there is
+    # no MONTHLY_PLACEMENT_WEEKDAY entry, so the row stays on the 1st itself.
+    # September 2026 (its first month — MONTHLY_STARTS_FROM) is pinned back to
+    # 9/2 by MONTHLY_PLACEMENT_DAY_OVERRIDES so the already-published Tuesday
+    # cell with its 8/31 cert date is preserved. Note the day-1 tab quirk shared
+    # with Chickering / Christus / MedicalMutualMHS / NCStateRx: when the 1st
+    # falls in a week the PREVIOUS month's tab claims (e.g. 10/1/26 lives in the
+    # 9/28-10/2 week), plan_calendar snaps the row to the nearest day its own
+    # tab actually renders — Mon 10/5 for October 2026.
+    "ModaRx":                 (1, 1),
     "MedImpactPBMRx":         (5, 10),
     "AetnaQNXTRx":            (5, 10),
     "BCBSVT":                 (5, 10),
@@ -2077,6 +2082,12 @@ MONTHLY_EXPECTED_DAY_RANGE = {
 # told_otherwise True, so the sticky cache can't drag the row back onto the 9/3
 # cert day it was cached on before the remap existed.
 MONTHLY_PLACEMENT_DAY_OVERRIDES = {
+    # ModaRx moved from the 2nd to the 1st on 2026-10-02 (see
+    # MONTHLY_EXPECTED_DAY_RANGE). September 2026 already shipped with the row
+    # on Wed 9/2 carrying the 8/31 cert date, so pin that month to the 2nd
+    # rather than retroactively sliding it to 9/1. The marker still comes from
+    # MONTHLY_MONTH_MARKER_OVERRIDES[("ModaRx", 2026, 9)] = 8/31/26.
+    ("ModaRx", 2026, 9): date(2026, 9, 2),
     # 2026-10-01 per user: "The BCBSFL Elig on 9/30 is still loading. Keep it a
     # 'L' on 9/30 ... Once the Load job finishes, then the one on 9/30 can get a
     # checkmark." September's standing anchor is the 25th (Fri 9/25), but the
@@ -5542,16 +5553,31 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
                     continue
             place(weekly, "weekly", c, d)
 
-    # NYShip_Rx rotates 4x/month
-    for daynum in NYSHIP_DAYS:
-        try:
-            tgt = next_monday_if_weekend(date(year, month, daynum))
-        except ValueError:
-            continue
-        if tgt.month != month:
-            continue
+    # NYShip_Rx rotates 4x/month.
+    # The rotation days are generated for the PREVIOUS, CURRENT and NEXT month
+    # and then filtered to the days this tab actually renders. A week straddling
+    # two months belongs to whichever month owns 3+ of its weekdays
+    # (see month_weeks), so a rotation day can sit on the neighbouring month's
+    # tab — e.g. 10/1/26 lives in the 9/28-10/2 week, which September claims.
+    # Keying only off (year, month) used to emit 10/1 while building the October
+    # tab, where there is no 10/1 column, and the row was SILENTLY DROPPED
+    # (per user 2026-10-02: "Add NYSHIP_Rx(1st) to 10/1/26. Somehow it wasn't
+    # added."). Every date appears on exactly one tab, so this can't duplicate
+    # a cell. NYSHIP_OVERRIDES stays keyed by the rotation day's OWN month.
+    nyship_cells = []
+    for ny_y, ny_m in ((year - 1, 12) if month == 1 else (year, month - 1),
+                       (year, month),
+                       (year + 1, 1) if month == 12 else (year, month + 1)):
+        for daynum in NYSHIP_DAYS:
+            try:
+                t = next_monday_if_weekend(date(ny_y, ny_m, daynum))
+            except ValueError:
+                continue
+            if t in all_days:
+                nyship_cells.append((ny_y, ny_m, daynum, t))
+    for ny_y, ny_m, daynum, tgt in nyship_cells:
         label = f"NYShip_Rx ({NYSHIP_LABEL[daynum]})"
-        ov = NYSHIP_OVERRIDES.get((year, month, daynum))
+        ov = NYSHIP_OVERRIDES.get((ny_y, ny_m, daynum))
         if ov is not None:
             # One-off override (e.g. 1st & 8th combined cycle): force the
             # marker. date(...) renders as the cert date; strings ("L") render
