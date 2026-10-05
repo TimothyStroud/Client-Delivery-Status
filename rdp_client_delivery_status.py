@@ -492,7 +492,7 @@ FORCED_INACTIVE_FROM = {
     #     before the cutoff and are MANUAL_OVERRIDES anyway, so they survive.
     # Both stay in AUTO_INACTIVE_EXCLUDE on purpose (see FORCED_INACTIVE notes).
     "Tufts_PublicPlan": date(2026, 9, 1),
-    "HealthNetCA":      date(2026, 9, 1),
+    # HealthNetCA removed 2026-10-05 — active again (see HEALTHNETCA_STAGE_FROM).
 }
 
 # Clients whose load is running but snap step is disabled in RAMP — show
@@ -1121,6 +1121,11 @@ MANUAL_OVERRIDES = {
     # cert_in_week would file this cert on the already-pinned 8/24 cell and the
     # 8/31 cell would come up empty. Pin the 8/31 cert to the 8/31 cell.
     ("HealthNetCA",   date(2026, 8, 31)): date(2026, 8, 31),
+    # 2026-10-05 per user — data-week cells for the backfill.
+    ("HealthNetCA",   date(2026, 5, 18)): date(2026, 8, 26),
+    ("HealthNetCA",   date(2026, 5, 25)): date(2026, 8, 27),
+    ("HealthNetCA",   date(2026, 6, 1)):  date(2026, 8, 28),
+    ("HealthNetCA",   date(2026, 6, 8)):  date(2026, 8, 28),
 
     # ===== 2026-09-23 per user =====
     # "WellcareRx is currently loading for 8/28/26 through 9/25/26. Please label
@@ -1926,6 +1931,15 @@ HEALTHNETCA_CLAIM_RANGE_RE = re.compile(
 # here so it doesn't merge back into the 8/10 label — per user it belongs on the
 # 8/17 cell, which HEALTHNETCA_RANGE_LABEL_OVERRIDES supplies. (The set is
 # really "ranges excluded from their own load-week label".)
+# 2026-10-05 per user: "HealthNetCA is no longer Inactive - Use HealthNet 0100
+# Claims Stage to know which weekly run we are loading … currently loading
+# 20260605_20260612 for the 6/15/26 date." The stage job is enabled again and
+# its ramp.FileLog carries the claims filenames, so from this date forward each
+# staged week is placed on its DATA-week cell (Monday after the end date) via
+# healthnetca_stage_markers() instead of the load-week tblTape labels above.
+HEALTHNETCA_STAGE_FROM   = date(2026, 10, 1)
+HEALTHNETCA_STAGE_JOB_ID = 1811
+
 HEALTHNETCA_FAILED_RANGES = {
     (date(2026, 3, 27), date(2026, 4, 3)),
 }
@@ -3151,6 +3165,67 @@ def fetch_healthnetca_claim_loads(since=None):
     return out
 
 
+def fetch_healthnetca_stage_runs(since):
+    """[(stage_start_dt, data_start, data_end)] for 'HealthNet 0100 Claims Stage'
+    (JobId 1811) runs since `since`, read from ramp.FileLog claims filenames.
+    See HEALTHNETCA_STAGE_FROM."""
+    q = (
+        "SET NOCOUNT ON; "
+        "SELECT DISTINCT CONVERT(varchar(19), q.StartDate, 120), f.FileName "
+        "FROM ramp.Queue q JOIN ramp.FileLog f ON f.QueueId = q.QueueId "
+        f"WHERE q.JobId = {HEALTHNETCA_STAGE_JOB_ID} "
+        f"  AND q.StartDate >= '{since.isoformat()}' "
+        "  AND f.FileName LIKE 'HNT_VENDOR_CLAIM%'"
+    )
+    r = subprocess.run(
+        ["sqlcmd", "-S", "TRGUTIL10", "-d", "RAMP", "-E", "-Q", q,
+         "-W", "-s", "\t", "-h", "-1"],
+        capture_output=True, text=True, check=False,
+    )
+    out = set()
+    for line in r.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        m = HEALTHNETCA_CLAIM_RANGE_RE.search(parts[1])
+        if not m:
+            continue
+        try:
+            out.add((datetime.strptime(parts[0].strip(), "%Y-%m-%d %H:%M:%S"),
+                     datetime.strptime(m.group(1), "%Y%m%d").date(),
+                     datetime.strptime(m.group(2), "%Y%m%d").date()))
+        except ValueError:
+            continue
+    return sorted(out)
+
+
+def healthnetca_stage_markers(stage_runs, cert_idx, today):
+    """{cell_monday: marker} for the HealthNetCA stage-driven backfill.
+
+    Each staged claims week lands on the Monday after its end date (data
+    20260605_20260612 → 6/15 cell). Marker = earliest DHT cert at/after the
+    stage start, else "L". Monday cells after the newest staged week through
+    today read blank (catching up — not a miss, and today's backfill cert must
+    not land on the current-week cell).
+    """
+    keys = list(_keys_for_client(HEALTHNETCA_CLIENT))
+    out = {}
+    for start_dt, _ds, de in stage_runs:
+        cell = de + timedelta(days=(7 - de.weekday()) % 7 or 7)
+        cert = None
+        for key in keys:
+            for dt, status in cert_idx.get(key, ()):
+                if status == "Certified" and dt >= start_dt and (cert is None or dt < cert):
+                    cert = dt
+        out[cell] = cert.date() if cert else "L"
+    if out:
+        d = max(out) + timedelta(days=7)
+        while d <= today:
+            out[d] = ""
+            d += timedelta(days=7)
+    return out
+
+
 def healthnetca_range_labels(claim_loads):
     """{cell_monday: " (M/D-M/D)"} for the HealthNetCA backfill.
 
@@ -3166,6 +3241,9 @@ def healthnetca_range_labels(claim_loads):
     by_week = defaultdict(list)
     for e in claim_loads or ():
         ld = e["load_date"]
+        if ld >= HEALTHNETCA_STAGE_FROM:
+            continue   # stage-driven cells are keyed by data week, not load week
+
         monday = (ld + timedelta(days=1) if ld.weekday() == 6
                   else ld - timedelta(days=ld.weekday()))
         by_week[monday].append((e["start"], e["end"]))
@@ -7182,6 +7260,18 @@ def main():
         print(f"[warn]   HealthNetCA claims fetch failed: {e}")
         healthnetca_claim_loads = []
     healthnetca_ranges = healthnetca_range_labels(healthnetca_claim_loads)
+    try:
+        hn_stage = healthnetca_stage_markers(
+            fetch_healthnetca_stage_runs(HEALTHNETCA_STAGE_FROM), cert_idx, today)
+    except Exception as e:
+        print(f"[warn]   HealthNetCA stage-run fetch failed: {e}")
+        hn_stage = {}
+    for cell, mk in hn_stage.items():
+        # hand pins in MANUAL_OVERRIDES win
+        MANUAL_OVERRIDES.setdefault((HEALTHNETCA_CLIENT, cell), mk)
+    if hn_stage:
+        print("[info]   HealthNetCA stage cells: "
+              + ", ".join(f"{d.month}/{d.day}={m or 'blank'}" for d, m in sorted(hn_stage.items())))
     if healthnetca_ranges:
         print("[info]   HealthNetCA backfill: "
               + ", ".join(f"{d.month}/{d.day} cell{lbl}"
