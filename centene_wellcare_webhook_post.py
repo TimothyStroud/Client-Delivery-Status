@@ -24,7 +24,7 @@ LOG_FILE = r'H:\centene_wellcare_webhook_post.log'
 STATE_FILE = os.path.join(BASE, 'centene_wellcare_post_state.json')
 RAMP_SQL_SERVER = 'TRGUTIL10'
 RAMP_OK = ('Successful', 'Resolved')
-MAX_FILES = 12
+MAX_FILES = 25
 
 # key: (title, emoji, [(JobId, name), ...])
 GROUPS = {
@@ -109,13 +109,19 @@ def hrs(mins):
 
 
 def staged_files(jobid):
-    """Files from the newest Queue run of this Stage job that logged any files."""
-    q = ramp_sql(f"SELECT TOP 1 fl.QueueId FROM ramp.FileLog fl JOIN ramp.Queue q ON q.QueueId = fl.QueueId "
-                 f"WHERE q.JobId = {int(jobid)} ORDER BY fl.QueueId DESC")
-    if not q or not q[0][0].isdigit():
-        return []
-    return [r[0] for r in ramp_sql(f"SELECT FileName FROM ramp.FileLog WHERE QueueId = {q[0][0]} ORDER BY FileName")
-            if r and r[0]]
+    """(files, expected) for the newest Queue run of this Stage job that logged
+    files. expected = most common file count across its last 8 batches."""
+    q = [r for r in ramp_sql(f"SELECT TOP 8 fl.QueueId, COUNT(*) FROM ramp.FileLog fl "
+                             f"JOIN ramp.Queue q ON q.QueueId = fl.QueueId WHERE q.JobId = {int(jobid)} "
+                             f"GROUP BY fl.QueueId ORDER BY fl.QueueId DESC")
+         if len(r) == 2 and r[0].isdigit() and r[1].isdigit()]
+    if not q:
+        return [], 0
+    counts = [int(r[1]) for r in q]
+    expected = max(set(counts), key=lambda c: (counts.count(c), c))
+    files = [r[0] for r in ramp_sql(f"SELECT FileName FROM ramp.FileLog WHERE QueueId = {q[0][0]} ORDER BY FileName")
+             if r and r[0]]
+    return files, expected
 
 
 def job_line(name, j):
@@ -133,7 +139,7 @@ def job_line(name, j):
         icon, det = ':grey_question:', (f"started {fmt(s)} | ended {fmt(e)}" if s else "no run on record")
     if j and j.get('Enabled') != 1:
         det += " | job DISABLED in RAMP"
-    return f"{icon} {name} - {st}\n      {det}"
+    return f"{icon} {name} - {st}\n{det}"
 
 
 def review_notes(names, jobs, queue):
@@ -169,17 +175,20 @@ def build(key):
     names = dict(members)
     body = []
     for jid, nm in members:
-        body.append(job_line(nm, jobs.get(jid)))
+        block = job_line(nm, jobs.get(jid))
         if nm.endswith('Stage'):
-            files = staged_files(jid)
+            files, expected = staged_files(jid)
             if files:
-                body.append(f"      files staged ({len(files)}): " + ", ".join(files[:MAX_FILES])
-                            + (f", +{len(files) - MAX_FILES} more" if len(files) > MAX_FILES else ""))
-    msg = "\n".join(body)
+                cnt = f"{expected} expected" if len(files) == expected else f"{len(files)} of {expected} expected"
+                block += f"\n\nFiles staged ({cnt}):\n" + "\n".join(files[:MAX_FILES])
+                if len(files) > MAX_FILES:
+                    block += f"\n+{len(files) - MAX_FILES} more"
+        body.append(block)
+    msg = "\n\n".join(body)
     notes = review_notes(names, jobs, queue)
     if notes:
         msg += "\n\nFor review:\n" + "\n".join(notes)
-    return f"{emoji} {title} weekly load status - {datetime.now():%m/%d %I:%M%p}\n\n{msg}", msg
+    return f"{title} load status - {datetime.now():%m/%d %I:%M%p}\n{msg}", msg
 
 
 def main():
