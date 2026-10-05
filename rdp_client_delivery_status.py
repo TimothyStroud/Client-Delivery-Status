@@ -1141,12 +1141,12 @@ MANUAL_OVERRIDES = {
     # 9/25/26. Please label all of these with 'L' when loading starts and give
     # the same certification date once completed." Weekly Friday — same five
     # cells. LOAD_NAME_REQUIRED keeps the Elig load from painting L on its own,
-    # hence the hard pins.
-    ("CenteneRx",     date(2026, 8, 28)): "L",
-    ("CenteneRx",     date(2026, 9, 4)):  "L",
-    ("CenteneRx",     date(2026, 9, 11)): "L",
-    ("CenteneRx",     date(2026, 9, 18)): "L",
-    ("CenteneRx",     date(2026, 9, 25)): "L",
+    # hence the hard pins. Certified 10/5/26 (user 2026-10-05).
+    ("CenteneRx",     date(2026, 8, 28)): date(2026, 10, 5),
+    ("CenteneRx",     date(2026, 9, 4)):  date(2026, 10, 5),
+    ("CenteneRx",     date(2026, 9, 11)): date(2026, 10, 5),
+    ("CenteneRx",     date(2026, 9, 18)): date(2026, 10, 5),
+    ("CenteneRx",     date(2026, 9, 25)): date(2026, 10, 5),
     # "CenteneFidelisRx for 8/19/26 to 9/23/26 was certified on 9/24/26" (user
     # 2026-09-24) — the catch-up cert closes out every Wednesday delivery in
     # that range, replacing the earlier "L" pins on 9/2 - 9/23.
