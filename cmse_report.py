@@ -163,6 +163,40 @@ EMBLEM_PLATFORMS = [
 ]
 EMBLEM_PLATFORM_BY_ID = {i: (short, full) for i, short, full in EMBLEM_PLATFORMS}
 
+# ---- BCBSFL / BCBS SC file segments (2026-10-06) ----------------------------
+#
+# Same idea as the Emblem platform pill, but these two clients send one file
+# per business segment and the segment is in the file NAME, so no file read:
+#   BCBSFL   S111_20260912_MSP_IN.txt / S111_20260904_MSP_TRU_IN.txt
+#   BCBS SC  bcbssc.medicare.rspn.aso.Jul2026.mgaso.txt  (also .mgfi / .naaso)
+#            bcbssc.medicare.rspn.aso.history.naaso.txt  -> segment + "history"
+# (key, short, description, filename regex); first match wins, so TRU_IN is
+# tested before IN.
+SEGMENT_CLIENTS = [
+    {"client": "BCBSFL", "root": r"\trgdatacap2\MMSEA\BCBSFL",
+     "segs": [("TRU_IN", "TRU_IN", "'TRU_IN' files (..._TRU_IN.txt)", r"_TRU_IN\.txt$"),
+              ("IN",     "IN",     "'IN' files (..._IN.txt)",         r"(?<!TRU)_IN\.txt$")]},
+    {"client": "BCBS SC", "root": r"\trgdatacap2\MMSEA\BCBSSC",
+     "segs": [("mgaso", "mgaso", "mgaso files (rspn.aso ... .mgaso.txt)", r"\.mgaso\.txt$"),
+              ("mgfi",  "mgfi",  "mgfi files (rspn.fi ... .mgfi.txt)",    r"\.mgfi\.txt$"),
+              ("naaso", "naaso", "naaso files (rspn.aso ... .naaso.txt)", r"\.naaso\.txt$")],
+     "hist": r"\.history\."},
+]
+
+
+def file_segment(client, entry):
+    """(key, short, description, is_history) for a BCBSFL / BCBS SC file, else None."""
+    name = (entry or "").rsplit("\\", 1)[-1]
+    for c in SEGMENT_CLIENTS:
+        if c["client"] != client:
+            continue
+        hist = bool(c.get("hist") and re.search(c["hist"], name, re.I))
+        for key, short, desc, pat in c["segs"]:
+            if re.search(pat, name, re.I):
+                return key, short, desc, hist
+        return None
+    return None
+
 # File Type / Display Length table from the right of the Excel calendar (S1:X8)
 FILE_SPECS = [
     ("HEW",        302,  300,  "Yes - %HO%",    "38",   "29"),
@@ -1087,6 +1121,13 @@ def build(full=False):
             l["platid"], l["plat"], l["platf"] = got
     print("[info] %d/%d Emblem loads have a platform"
           % (sum(1 for l in emb if l.get("plat")), len(emb)))
+    # -- BCBSFL / BCBS SC segment, straight off the file name
+    for l in loads:
+        got = file_segment(l["client"], l["entry"])
+        if got:
+            l["platid"], l["plat"], l["platf"], hist = got
+            if hist:
+                l["hist"] = 1
 
     # -- ImportStaging: everything uncached, plus anything loaded in the last 30
     #    days (a recent load can still be re-summarized).
@@ -1245,7 +1286,8 @@ def build(full=False):
         row = cal_row(client, l["ft"], l["cid"])
         row["m"].setdefault(l["start"][:7], []).append(
             {"sl": l["sl"], "wi": l["wi"], "pcn": l["pcn"], "d": l["start"][8:10],
-             "rec": l["rec"], "file": l["file"], "src": l["src"]})
+             "rec": l["rec"], "file": l["file"], "src": l["src"],
+             "plat": l.get("plat", ""), "hist": l.get("hist", 0)})
         e = l["entry"].lower()
         row["_h"]["Pad" if "pad" in e else "Unwrap" if "unwrap" in e else ""] += 1
     for cid, fts in EXTRA_CAL_CLIENTS.items():
@@ -1333,6 +1375,11 @@ def build(full=False):
                    "plat": [list(p) for p in EMBLEM_PLATFORMS],
                    "n": sum(1 for l in loads if l.get("plat")),
                    "tot": sum(1 for l in loads if l["client"] == EMBLEM_CLIENT)},
+        "segs": [{"client": c["client"], "root": c["root"],
+                  "segs": [[k, sh, d] for k, sh, d, _ in c["segs"]],
+                  "hist": bool(c.get("hist")),
+                  "tot": sum(1 for l in loads if l["client"] == c["client"])}
+                 for c in SEGMENT_CLIENTS],
         "srcType": {str(k): list(v) for k, v in SOURCE_TYPE.items()},
         "st": st_rows,
         "stDef": dict(STAGING_STATUS),
@@ -1562,6 +1609,14 @@ HTML_TEMPLATE = r"""<!doctype html>
   .pill.plat.CCI { background:#e8f0fb; border-color:#c5d8f2; color:#1f3d5c; }
   .pill.plat.HIP { background:#eaf6ee; border-color:#c6e5d1; color:#1b5e20; }
   .pill.plat.GHI { background:#f3ecfa; border-color:#ddcdef; color:#4a2a72; }
+  /* BCBSFL / BCBS SC file segments - same pill, read off the file name */
+  .pill.plat.IN     { background:#e8f0fb; border-color:#c5d8f2; color:#1f3d5c; }
+  .pill.plat.TRU_IN { background:#fdf0e6; border-color:#f3d5bd; color:#7a3e10; }
+  .pill.plat.mgaso  { background:#eaf6ee; border-color:#c6e5d1; color:#1b5e20; }
+  .pill.plat.mgfi   { background:#f3ecfa; border-color:#ddcdef; color:#4a2a72; }
+  .pill.plat.naaso  { background:#e8f0fb; border-color:#c5d8f2; color:#1f3d5c; }
+  .pill.plat.hist   { background:#f2f4f7; border-color:var(--border); color:var(--muted);
+                      font-style:italic; font-weight:500; }
   .pill.plat.unk { background:#f2f4f7; border-color:var(--border); color:var(--muted);
                    font-weight:400; }
   tr.det td { background:#fbfcfd !important; padding:0; }
@@ -1748,6 +1803,9 @@ __EXPORT_CSS__
       <div class="card full"><h2>Emblem platform indicator</h2><div class="body">
         <table id="embkey"></table></div>
         <p class="note" id="embnote"></p></div>
+      <div class="card full"><h2>BCBSFL &amp; BCBS SC file segments</h2><div class="body">
+        <table id="segkey"></table></div>
+        <p class="note" id="segnote"></p></div>
     </div>
   </section>
 </main>
@@ -1838,9 +1896,30 @@ __EXPORT_CSS__
     clientNames.map(c => `<option>${esc(c)}</option>`).join('');
   // Emblem is the one multi-platform client - this narrows its loads to a single
   // Facets platform (HIP / GHI / CCI), read off each file's submitter ID
-  $('plat').innerHTML = '<option value="">All Emblem platforms</option>' +
-    D.emblem.plat.map(p => `<option value="${p[1]}">${esc(p[1])} &middot; ${esc(p[2])}</option>`).join('') +
-    '<option value="unk">? &middot; platform unknown</option>';
+  // BCBSFL / BCBS SC get the same treatment for their file-name segments.
+  // Option values are "client|short" so one dropdown serves all three clients.
+  const SEGC = new Set([D.emblem.client, ...D.segs.map(c => c.client)]);
+  $('plat').innerHTML = '<option value="">All platforms / segments</option>' +
+    `<optgroup label="${esc(D.emblem.client)} platform">` +
+    D.emblem.plat.map(p => `<option value="${esc(D.emblem.client)}|${p[1]}">${esc(p[1])} &middot; ${esc(p[2])}</option>`).join('') +
+    `<option value="${esc(D.emblem.client)}|unk">? &middot; platform unknown</option></optgroup>` +
+    D.segs.map(c => `<optgroup label="${esc(c.client)} segment">` +
+      c.segs.map(p => `<option value="${esc(c.client)}|${p[1]}">${esc(c.client)} &middot; ${esc(p[1])}</option>`).join('') +
+      (c.hist ? `<option value="${esc(c.client)}|hist">${esc(c.client)} &middot; *history files</option>` : '') +
+      `<option value="${esc(c.client)}|unk">${esc(c.client)} &middot; ? unknown</option></optgroup>`).join('');
+
+  // Platform (Emblem) / segment (BCBSFL, BCBS SC) pill(s) for a load
+  function platPill(l) {
+    if (!SEGC.has(l.client)) return '';
+    if (!l.plat) return ' <span class="pill plat unk" title="' + esc(l.client === D.emblem.client
+      ? 'Platform could not be read from the file (missing or unrecognised submitter ID)'
+      : 'Segment not recognised in the file name') + '">?</span>';
+    const tip = l.client === D.emblem.client
+      ? 'Platform: ' + l.platf + '\nSubmitter/Receiver ID: ' + l.platid
+      : 'Segment: ' + l.platf;
+    return ` <span class="pill plat ${esc(l.plat)}" title="${esc(tip)}">${esc(l.plat)}</span>` +
+      (l.hist ? ' <span class="pill plat hist" title="History file (.history. in the file name)">history</span>' : '');
+  }
   $('source').innerHTML = '<option value="">All source types</option>' +
     D.scope.map(id => `<option value="${id}">${id} &middot; ${esc(SRC[id]||'')}</option>`).join('');
 
@@ -1861,9 +1940,11 @@ __EXPORT_CSS__
     const t = useTicket === false ? '' : S.ticket;
     return D.loads.filter(l =>
       (!S.client || l.client === S.client) &&
-      // a platform pick is implicitly an Emblem-only filter
-      (!S.plat || (l.client === D.emblem.client &&
-                   (S.plat === 'unk' ? !l.plat : l.plat === S.plat))) &&
+      // a platform/segment pick is implicitly a filter to that one client
+      (!S.plat || (l.client === S.plat.split('|')[0] &&
+                   (S.plat.endsWith('|unk') ? !l.plat
+                    : S.plat.endsWith('|hist') ? !!l.hist
+                    : l.plat === S.plat.split('|')[1]))) &&
       (!S.source || String(l.src) === S.source) &&
       (t !== 'y' || l.wi) && (t !== 'n' || !l.wi) &&
       (!q || hay(l).includes(q)));
@@ -1897,7 +1978,8 @@ __EXPORT_CSS__
         const loads = r.m[ym] || [];
         if (loads.length) {
           const t = `${loads.length} file${loads.length>1?'s':''} loaded ${MN[i]} ${S.year}\n`
-                  + loads.map(x => `\u00b7 ${x.file} (${MN[i]} ${x.d}, ${nf(x.rec)} records)`)
+                  + loads.map(x => `\u00b7 ${x.plat ? '[' + x.plat + (x.hist ? ' history' : '') + '] ' : ''}`
+                                 + `${x.file} (${MN[i]} ${x.d}, ${nf(x.rec)} records)`)
                          .join('\n');
           return `<td class="mo has" title="${esc(t)}">X</td>`;
         }
@@ -1972,14 +2054,8 @@ __EXPORT_CSS__
         ? `MIRProcessed: ${l.mir === '1' ? 'Yes' : l.mir === '0' ? 'No' : '\u2014'}`
           + `\nMIRProcessedDate: ${l.mird || '\u2014'}`
         : '';
-      // Emblem is multi-platform: show which Facets platform the file came from
-      const platCell = l.client === D.emblem.client
-        ? (l.plat
-            ? ` <span class="pill plat ${l.plat}" title="${esc('Platform: ' + l.platf
-                + '\nSubmitter/Receiver ID: ' + l.platid)}">${l.plat}</span>`
-            : ' <span class="pill plat unk" title="Platform could not be read from'
-              + ' the file (missing or unrecognised submitter ID)">?</span>')
-        : '';
+      // Emblem platform / BCBSFL + BCBS SC segment the file came from
+      const platCell = platPill(l);
       const cliCell = isAetna
         ? `<td class="mir" title="${esc(mirTip)}">${esc(l.client)}</td>`
         : `<td>${esc(l.client)}${platCell}</td>`;
@@ -2069,7 +2145,8 @@ __EXPORT_CSS__
                      idate:(l.start || '').slice(0, 10), rec:l.rec, ok:l.ok, bad:l.bad,
                      age:l.age, dis:l.dis, esrd:l.esrd, um:l.um, sl:l.sl,
                      epct:l.epct, mcpct:l.mcpct, invs:l.invs,
-                     file:l.file, entry:l.entry, src:l.src, ft:l.ft };
+                     file:l.file, entry:l.entry, src:l.src, ft:l.ft,
+                     plat:l.plat, platf:l.platf, platid:l.platid, hist:l.hist };
       const stats = Object.keys(agg).sort((a, b) => Number(a) - Number(b));
       if (!stats.length) out.push(Object.assign({ st:'', stn:null }, base));
       else stats.forEach(s => out.push(Object.assign({ st:s, stn:agg[s] }, base)));
@@ -2105,7 +2182,7 @@ __EXPORT_CSS__
     $('mmsea-body').innerHTML = rows.map(r => {
       const stTip = r.st ? (D.stDef[r.st] || 'undocumented StagingStatus') : '';
       return '<tr>' +
-        `<td>${esc(r.client)}</td>` +
+        `<td>${esc(r.client)}${platPill(r)}</td>` +
         `<td>${esc(r.ftname)}</td>` +
         `<td class="mid">${esc(r.rt)}</td>` +
         `<td>${esc(r.idate)}</td>` +
@@ -2589,6 +2666,31 @@ __EXPORT_CSS__
       '(T. Beach / L. Hutton, Apr 2022). ' + nf(E.n) + ' of ' + nf(E.tot) +
       ' ' + esc(E.client) + ' loads in window resolved.';
 
+    $('segkey').innerHTML =
+      '<thead><tr><th>Client</th><th>Indicator</th><th>Segment</th>' +
+      '<th class="num">Loads in window</th></tr></thead><tbody>' +
+      D.segs.map(c => {
+        const L = D.loads.filter(l => l.client === c.client);
+        const row = (pill, desc, n) => `<tr class="${n?'':'dim'}"><td><b>${esc(c.client)}</b></td>` +
+          `<td>${pill}</td><td>${desc}</td><td class="num">${n ? nf(n) : '—'}</td></tr>`;
+        return c.segs.map(([k, sh, d]) => row(`<span class="pill plat ${esc(sh)}">${esc(sh)}</span>`,
+                 esc(d), L.filter(l => l.plat === sh).length)).join('') +
+          (c.hist ? row('<span class="pill plat hist">history</span>',
+                 '*history files (<code>.history.</code> in the name) &mdash; shown alongside the segment pill',
+                 L.filter(l => l.hist).length) : '') +
+          row('<span class="pill plat unk">?</span>', 'Segment not recognised in the file name',
+              L.filter(l => !l.plat).length);
+      }).join('') + '</tbody>';
+    $('segnote').innerHTML =
+      'BCBSFL and BCBS SC each send one response file per business segment, so ' +
+      'like Emblem their rows on the Loads and MMSEA Report tabs carry a pill (and the ' +
+      'Calendar hover lists it per file). Unlike Emblem the segment is in the file ' +
+      '<i>name</i> at <code>SourceLog.EntryName</code>: BCBSFL <code>S111_&lt;date&gt;_MSP_IN.txt</code> ' +
+      '/ <code>_TRU_IN.txt</code> under <code>' + esc(D.segs[0].root) + '</code>; BCBS SC ' +
+      '<code>bcbssc.medicare.rspn.aso.&lt;Mon&gt;&lt;yyyy&gt;.mgaso.txt</code> (also <code>.mgfi</code>, ' +
+      '<code>.naaso</code>), with <code>.history.</code> marking the history files, under <code>' +
+      esc(D.segs[1].root) + '</code>.';
+
     $('stkey').innerHTML = '<thead><tr><th class="num">Status</th><th>Definition</th>' +
       '<th class="num">Records</th></tr></thead><tbody>' +
       D.st.map(([code, desc, n]) =>
@@ -2829,9 +2931,10 @@ __EXPORT_CSS__
                   ' loads \u00b7 generated ' + D.generated,
         headers: ['SourceLogId','SourceId','Source Name','File Type','Client Name',
                   'Client Id','EntryName','Import Start','Import Complete',
-                  'Records','Success','Failed','PCN','ADO Ticket'],
+                  'Records','Success','Failed','PCN','ADO Ticket','Platform / Segment'],
         rows: rows.map(l => [l.sl, l.src, SRC[l.src]||'', l.ft, l.client, l.cid,
-          l.entry, l.start, l.done, l.rec, l.ok, l.bad, l.pcn, l.wi||'']),
+          l.entry, l.start, l.done, l.rec, l.ok, l.bad, l.pcn, l.wi||'',
+          (l.plat || '') + (l.hist ? ' (history)' : '')]),
         note: 'cmse_new..SourceLog, SourceId ' + D.scope.join(', '),
         rowsPerSlide: 12, fontSz: 700,
       };
