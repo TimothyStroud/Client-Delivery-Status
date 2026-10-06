@@ -5,7 +5,7 @@
  "centenemed": "a1916d455a107f4dafd774d4ae6bbf5e4d183e09",
  "fidelismed": "d5c8dc3386df1cfcd0cffcb58400a9a58823341e",
  "healthnet": "8fe2150b04f558040742f149f86d59c7fb36f7f9",
- "wellcarerx": "4ab312f359acfa5290bb517714458449aaf4fc76",
+ "wellcarerx": "2318366b6162a80fa69f614feb3160261f0a1184",
  "wellcaremed": "0038d68d3931f2a3445b630068c5b9d299c32bde",
  "announced": {
   "qualchoice": {
@@ -24,6 +24,9 @@
    "10020": "2026-10-05T17:23:30.17",
    "10017": "2026-10-06T05:20:41.46"
   },
-  "healthnet": {}
+  "healthnet": {},
+  "wellcarerx": {
+   "10553": "2026-10-06T10:45:46.253"
+  }
  }
 }

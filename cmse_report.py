@@ -8,9 +8,11 @@ MMSEA-2026 tab of
 Formerly two separate dashboards (CMSEReport.html + MSPIReport.html), merged
 2026-08-14.  Six tabs:
   1. Calendar  - Client / File Type / Frequency / Handling + Jan..Dec grid, one
-                 cell per month holding the ADO ticket number(s) of the loads
-                 that landed that month ("E" = expected, carried over from the
-                 tracker; pink = tracker outreach/late date).
+                 cell per month.  Built from CMSE SourceLog + the ADO MMSEA
+                 file-review tickets (title "<Client> - MMSEA ... <type> File
+                 Review - <date>"); ClientTracker.2026.xlsx is only the layout
+                 template and is no longer read.  "E" = expected, projected
+                 from each feed's own cadence; pink = expected but overdue.
   2. Loads     - every cmse_new..SourceLog row for the in-scope SourceIds,
                  SourceLogId desc, expandable to the per-file ImportStaging
                  breakdown (EntryName / DNDispositionCode / StagingStatus /
@@ -87,11 +89,9 @@ MSPI_RAW_OR_TRANSFORM = "Raw"
 ADO_BASE = "https://devops.ado.rawlingslou.prod/TFS2012/Rawlings"
 ADO_WEB = ADO_BASE + "/_workitems/edit/"
 
-TRACKER = (r"\\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule"
-           r"\2026\ClientTracker.2026.xlsx")
-TRACKER_SHEET = "MMSEA - 2026"
-TRACKER_YEAR = 2026
-LATE_FILL = "FFFFC7CE"          # pink "Late - Outreach Date" fill on the Excel tab
+# Calendar rows that must show even with no load in window: ClientId -> file
+# types.  GEHA (48) last loaded 2024-10 but is still on the MMSEA roster.
+EXTRA_CAL_CLIENTS = {48: ("MSP", "NMSP")}
 
 CACHE = os.path.join(HERE, "cmse_report_cache.json")
 
@@ -173,8 +173,11 @@ FILE_SPECS = [
     ("Aetna NMSP", 1879, 1877, "None",          "1515", "-"),
 ]
 
-# tracker client label -> cmse_new Client.ClientName
-TRACKER_ALIAS = {
+# ADO ticket client label (normalised, matched as a prefix, longest first) ->
+# cmse_new Client.ClientName.  Emblem's platform variants (HIP Facets, Emblem
+# HEW/MSP, "(CCI, GHI, HIP)"), BCBSFL's IN/TRU_IN and BCBS SC's mgaso/mgfi/
+# naaso/history splits all collapse into the one CMSE client row.
+ADO_CLIENT_ALIAS = {
     "aetna": "Aetna",
     "bcbsfl": "BCBSFL",
     "bcbsks": "BCBSKS",
@@ -196,6 +199,15 @@ TRACKER_ALIAS = {
     "oscar": "Oscar",
     "premera": "Premera Blue Cross",
     "tufts": "TUFTS",
+    "bcbsss": "BCBS SC",
+    "kaiserwa": "Kaiser_WA",
+    "hipfacets": "Emblem",
+    "ghifacets": "Emblem",
+    "ccifacets": "Emblem",
+    "bscafacets": "BSCA_FACETS",
+    "healthnewengland": "HealthNewEngland",
+    "centenehealthnet": "HealthNet",
+    "geha": "GEHA",
 }
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -566,8 +578,10 @@ def fetch_clients():
           FROM dbo.Client C (NOLOCK)
          WHERE C.ClientId IN (SELECT DISTINCT ClientId FROM dbo.SourceLog (NOLOCK)
                                WHERE SourceId IN (%s) AND ImportStartDate >= '%s')
+            OR C.ClientId IN (%s)
       ORDER BY C.ClientName
-    """ % (",".join(map(str, SOURCE_IDS)), WINDOW_START))
+    """ % (",".join(map(str, SOURCE_IDS)), WINDOW_START,
+           ",".join(map(str, EXTRA_CAL_CLIENTS)) or "0"))
     return [{"id": int(r[0]), "name": r[1], "codes": (r[2] if len(r) > 2 else "")}
             for r in rows if r[0].isdigit()]
 
@@ -880,71 +894,98 @@ def ado_details(ids):
 
 
 # --------------------------------------------------------------------------- #
-# Tracker (Excel)
+# ADO MMSEA file tickets (calendar)
 # --------------------------------------------------------------------------- #
+#
+# Every MMSEA file gets a work item titled some variant of
+#   "Medica - MMSEA Medica MSP File Review - 10.01.26"
+#   "HIP Facets MMSEA File - HEW File Review - 06.18.26"
+#   "BCBS FL MMSEA File - 2026.09.04 - MSP - Review File Layout"
+# i.e. <client> MMSEA ... <file type> ... <file date>.  Audit / reporting /
+# research tickets carry "MMSEA" too and are dropped by MMSEA_TICKET_SKIP.
+
+MMSEA_TICKET_SKIP = re.compile(
+    r"audit|watcher|report|research|identity|swap|sqla_|ssn review|missing ssn",
+    re.I)
+
 
 def _norm(s):
-    return re.sub(r"[^a-z0-9_]", "", (s or "").strip().lower())
+    return re.sub(r"[^a-z0-9]", "", (s or "").strip().lower())
 
 
-def read_tracker():
-    """-> ({(client, filetype): {"freq","hand","cells":{month:{"v","late"}}}}, note)."""
+_ALIAS_KEYS = sorted(((_norm(k), v) for k, v in ADO_CLIENT_ALIAS.items()),
+                     key=lambda kv: -len(kv[0]))
+
+
+def ticket_client(title):
+    head = re.split(r"\bMMSEA\b", title, maxsplit=1, flags=re.I)[0]
+    head = re.sub(r"^\s*(client outreach|prodsupp)\s*[:\-]?", "", head, flags=re.I)
+    n = _norm(head)
+    for k, v in _ALIAS_KEYS:
+        if n.startswith(k):
+            return v
+    return None
+
+
+def ticket_types(title):
+    t = re.sub(r"non[\s\-]?msp", "NMSP", title, flags=re.I)
+    out = [ft for ft, pat in (("HEW", r"\bHEW\b"), ("NMSP", r"NMSP"),
+                              ("MSP", r"(?<!N)MSP")) if re.search(pat, t, re.I)]
+    return out
+
+
+def ticket_month(title, created):
+    """YYYY-MM of the (last) file date in the title, else of the created date."""
+    pats = [r"(20\d\d)[./-](\d{1,2})[./-](\d{1,2})",            # 2026.09.04
+            r"(?<!\d)(20\d\d)(\d\d)(\d\d)(?!\d)",                # 20260702
+            r"(?<!\d)(\d{1,2})[./](\d{1,2})[./](\d{2,4})(?!\d)"]  # 10.01.26 / 6/13/2026
+    best = None
+    for k, pat in enumerate(pats):
+        for m in re.finditer(pat, title):
+            a, b, c = m.groups()
+            y, mo = (a, b) if k < 2 else (c, a)
+            y = int(y) + (2000 if len(y) == 2 else 0)
+            if 1 <= int(mo) <= 12 and 2020 <= y <= 2035:
+                best = (m.start(), "%04d-%02d" % (y, int(mo)))
+    return best[1] if best else (created or "")[:7]
+
+
+def fetch_mmsea_tickets():
+    """-> ([{wi, title, state, client, types, ym}], note)."""
+    q = ("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject]='Rawlings' "
+         "AND [System.Title] CONTAINS 'MMSEA' AND [System.CreatedDate] >= '%s'"
+         % WINDOW_START)
     try:
-        import openpyxl
-    except ImportError:
-        return {}, "openpyxl not installed - tracker overlay skipped"
-    try:
-        wb = openpyxl.load_workbook(TRACKER, data_only=True, read_only=False)
-        ws = wb[TRACKER_SHEET]
+        d = _curl([ADO_BASE + "/_apis/wit/wiql?api-version=5.0",
+                   "-H", "Content-Type: application/json",
+                   "-d", json.dumps({"query": q})])
+        ids = [w["id"] for w in d.get("workItems", [])]
     except Exception as e:
-        return {}, "tracker unavailable (%s)" % type(e).__name__
-
-    out = OrderedDict()
-    client = ftype = ""
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=17):
-        a = row[0].value
-        b = row[1].value
-        if a is not None and str(a).strip():
-            if str(a).strip().lower().startswith("e ="):   # legend row
-                break
-            client = str(a).strip()
-            ftype = ""
-        if b is not None and str(b).strip():
-            ftype = str(b).strip()
-        if not client:
-            continue
-        label = TRACKER_ALIAS.get(_norm(client), client)
-        key = (label, ftype or "—")
-        ent = out.setdefault(key, {"freq": "", "hand": "", "cells": {}})
-        if row[2].value and not ent["freq"]:
-            ent["freq"] = str(row[2].value).strip()
-        if row[3].value and not ent["hand"]:
-            ent["hand"] = str(row[3].value).strip()
-        for m in range(12):                       # cols F..Q -> idx 5..16
-            c = row[5 + m]
-            v = c.value
-            if v is None or str(v).strip() == "":
+        return [], "ADO ticket search failed (%s)" % type(e).__name__
+    out = []
+    for i in range(0, len(ids), 180):
+        chunk = ids[i:i + 180]
+        try:
+            d = _curl([ADO_BASE + "/_apis/wit/workitems?ids=" + ",".join(map(str, chunk)) +
+                       "&fields=System.Id,System.Title,System.State,System.CreatedDate"
+                       "&api-version=5.0&errorPolicy=omit"], timeout=300)
+        except Exception as e:
+            return out, "ADO ticket details failed (%s)" % type(e).__name__
+        for w in d.get("value", []) or []:
+            if not w:
                 continue
-            if isinstance(v, datetime):
-                txt = v.strftime("%m/%d/%Y")
-            elif isinstance(v, float) and v == int(v):
-                txt = str(int(v))
-            else:
-                txt = str(v).strip()
-            fill = c.fill
-            rgb = ""
-            try:
-                if fill is not None and fill.patternType:
-                    rgb = str(fill.fgColor.rgb or "")
-            except Exception:
-                rgb = ""
-            slot = ent["cells"].setdefault(m + 1, {"v": [], "late": False})
-            slot["v"].append(txt)
-            if rgb.upper() == LATE_FILL:
-                slot["late"] = True
-    for ent in out.values():
-        for slot in ent["cells"].values():
-            slot["v"] = " / ".join(slot["v"])
+            f = w.get("fields", {})
+            title = f.get("System.Title", "") or ""
+            state = f.get("System.State", "")
+            if state == "Removed" or MMSEA_TICKET_SKIP.search(title) \
+                    or not re.search(r"\bfiles?\b", title, re.I):
+                continue
+            client = ticket_client(title)
+            if not client:
+                continue
+            out.append({"wi": w["id"], "title": title, "state": state,
+                        "client": client, "types": ticket_types(title),
+                        "ym": ticket_month(title, f.get("System.CreatedDate", ""))})
     return out, ""
 
 
@@ -1178,41 +1219,89 @@ def build(full=False):
             v = live_row.get(col)
             l[col] = snap_row.get(col) if v is None else v
 
-    tracker, tracker_note = read_tracker()
-    if tracker_note:
-        print("[warn] %s" % tracker_note)
+    tickets, ticket_note = fetch_mmsea_tickets()
+    if ticket_note:
+        print("[warn] %s" % ticket_note)
+    print("[info] %d ADO MMSEA file tickets" % len(tickets))
 
-    # -- calendar rows: union of what CMSE has loaded and what the tracker lists
+    # -- calendar rows: CMSE loads + ADO MMSEA file tickets (+ EXTRA_CAL_CLIENTS).
+    #    ClientTracker.2026.xlsx is only the layout template - nothing is read
+    #    from it.
     cal = OrderedDict()
+    name_by_id = {c["id"]: c["name"] for c in clients}
+    id_by_name = {c["name"]: c["id"] for c in clients}
 
     def cal_row(client, ftype, cid):
         key = (client, ftype)
         if key not in cal:
-            t = tracker.get(key, {})
-            cal[key] = {"client": client, "cid": cid, "ft": ftype,
-                        "freq": t.get("freq", ""), "hand": t.get("hand", ""),
-                        "m": {}, "tr": {str(k): v for k, v in t.get("cells", {}).items()}}
+            cal[key] = {"client": client, "cid": cid, "ft": ftype, "freq": "",
+                        "hand": "", "m": {}, "t": {}, "e": {}, "_h": defaultdict(int)}
         elif cid and not cal[key]["cid"]:
             cal[key]["cid"] = cid
         return cal[key]
 
-    name_by_id = {c["id"]: c["name"] for c in clients}
     for l in loads:
         client = l["client"] or name_by_id.get(l["cid"], "(unknown %d)" % l["cid"])
         row = cal_row(client, l["ft"], l["cid"])
-        ym = l["start"][:7]
-        row["m"].setdefault(ym, []).append(
+        row["m"].setdefault(l["start"][:7], []).append(
             {"sl": l["sl"], "wi": l["wi"], "pcn": l["pcn"], "d": l["start"][8:10],
              "rec": l["rec"], "file": l["file"], "src": l["src"]})
-    for (client, ftype) in tracker:
-        cal_row(client, ftype, 0)
+        e = l["entry"].lower()
+        row["_h"]["Pad" if "pad" in e else "Unwrap" if "unwrap" in e else ""] += 1
+    for cid, fts in EXTRA_CAL_CLIENTS.items():
+        for ft in fts:
+            cal_row(name_by_id.get(cid, "Client %d" % cid), ft, cid)
 
-    id_by_name = {c["name"]: c["id"] for c in clients}
+    # A ticket already tied to a load (by PCN) is that load's green X; only the
+    # rest become grey "ticket, no CMSE load" marks.  A ticket title that names
+    # no file type applies to every file type the client has.
+    linked = {l["wi"] for l in loads if l.get("wi")}
+    types_by_client = defaultdict(list)
+    for (client, ft) in cal:
+        types_by_client[client].append(ft)
+    for t in tickets:
+        if t["wi"] in linked or not t["ym"]:
+            continue
+        for ft in (t["types"] or types_by_client.get(t["client"]) or ["MSP"]):
+            row = cal_row(t["client"], ft, id_by_name.get(t["client"], 0))
+            row["t"].setdefault(t["ym"], []).append(
+                {"wi": t["wi"], "title": t["title"], "state": t["state"]})
+
+    # Frequency / Handling / expected months, all derived from the feed itself:
+    # cadence from active months in the trailing year; "E" for each projected month
+    # from the last activity up to year end, pink (late) for projected months
+    # already gone by with nothing loaded or ticketed.
+    cur_ym = now.strftime("%Y-%m")
+
+    def ym_add(ym, k):
+        y, m = int(ym[:4]), int(ym[5:]) - 1 + k
+        return "%04d-%02d" % (y + m // 12, m % 12 + 1)
+
+    def ym_idx(ym):
+        return int(ym[:4]) * 12 + int(ym[5:]) - 1
+
     for row in cal.values():
         if not row["cid"]:
             row["cid"] = id_by_name.get(row["client"], 0)
+        h = row.pop("_h")
+        row["hand"] = max(h, key=h.get) if h and max(h, key=h.get) else ("-" if h else "")
+        active = sorted(set(row["m"]) | set(row["t"]))
+        if not active:
+            continue
+        # active months in the trailing 12 - robust to a re-sent file landing a
+        # month after the original, which a median-gap rule reads as monthly
+        n12 = sum(1 for ym in active if 0 <= ym_idx(cur_ym) - ym_idx(ym) < 12)
+        cad = 1 if n12 >= 9 else 3 if n12 >= 3 else 6 if n12 == 2 else 0
+        row["freq"] = {1: "Monthly", 3: "Quarterly", 6: "Semi-Annual"}.get(cad, "Ad hoc")
+        # stop projecting a feed that has gone quiet for a full year
+        if not cad or ym_idx(cur_ym) - ym_idx(active[-1]) > 12:
+            continue
+        ym, end = ym_add(active[-1], cad), "%s-12" % cur_ym[:4]
+        while ym <= end:
+            row["e"][ym] = "late" if ym < cur_ym else "E"
+            ym = ym_add(ym, cad)
 
-    years = sorted({l["start"][:4] for l in loads} | {str(TRACKER_YEAR)})
+    years = sorted({l["start"][:4] for l in loads} | {cur_ym[:4]})
     cal_rows = sorted(cal.values(), key=lambda r: (r["client"].lower(), r["ft"]))
 
     # StagingStatus inventory for the reference tab: every documented status,
@@ -1233,8 +1322,7 @@ def build(full=False):
         "mspiRawOrTransform": MSPI_RAW_OR_TRANSFORM,
         "windowStart": WINDOW_START,
         "years": years,
-        "trackerYear": str(TRACKER_YEAR),
-        "trackerNote": tracker_note,
+        "calNote": ticket_note,
         "cal": cal_rows,
         "loads": loads,
         "sources": sources,
@@ -1548,10 +1636,10 @@ __EXPORT_CSS__
     <div class="wrap"><table id="cal"><thead id="cal-head"></thead><tbody id="cal-body"></tbody></table></div>
     <div class="legend">
       <span><span class="sw" style="background:var(--ok)"></span><b>X</b> = loaded to CMSE</span>
-      <span><b style="color:var(--muted)">X</b> = tracker shows loaded, no CMSE load</span>
-      <span><span class="sw" style="background:var(--exp)"></span>E = expected</span>
-      <span><span class="sw" style="background:var(--late)"></span>Not loaded &ndash; late / outreach
-        <span style="opacity:.75">(hover for the tracker date)</span></span>
+      <span><b style="color:var(--muted)">X</b> = ADO MMSEA file ticket, no CMSE load</span>
+      <span><span class="sw" style="background:var(--exp)"></span>E = expected (from the feed's cadence)</span>
+      <span><span class="sw" style="background:var(--late)"></span>Expected, not loaded &ndash; overdue</span>
+      <span style="opacity:.75">Source: CMSE SourceLog + ADO MMSEA tickets</span>
       <span id="cal-note"></span>
     </div>
   </section>
@@ -1761,7 +1849,7 @@ __EXPORT_CSS__
     + D.loads.length.toLocaleString('en-US') + ' loads from ' + (D.years[0] || '')
     + ' forward \u00b7 MSPi: TRGINTP3 / MSP, '
     + (D.mspi || []).length.toLocaleString('en-US') + ' files';
-  $('cal-note').textContent = D.trackerNote ? ('\u26a0 ' + D.trackerNote) : '';
+  $('cal-note').textContent = D.calNote ? ('\u26a0 ' + D.calNote) : '';
 
   // ---- helpers ------------------------------------------------------------
   const hay = l => [l.client, l.file, l.entry, l.pcn, l.wi, l.wit, l.sl, SRC[l.src], l.ft]
@@ -1803,7 +1891,6 @@ __EXPORT_CSS__
     if (!rows.length) { $('cal-body').innerHTML =
       '<tr><td colspan="17" class="empty">No rows match.</td></tr>'; return; }
 
-    const isTrackerYear = S.year === D.trackerYear;
     const html = rows.map(r => {
       const cells = MN.map((_, i) => {
         const ym = S.year + '-' + String(i+1).padStart(2,'0');
@@ -1814,16 +1901,16 @@ __EXPORT_CSS__
                          .join('\n');
           return `<td class="mo has" title="${esc(t)}">X</td>`;
         }
-        const tr = isTrackerYear ? r.tr[String(i+1)] : null;
-        if (tr) {
-          // the tracker writes a bare ticket number to mean "loaded to CMSE"
-          if (!tr.late && /^\d+$/.test(tr.v))
-            return `<td class="mo trk" title="Tracker shows loaded (${esc(tr.v)}); no CMSE load this month">X</td>`;
-          // not loaded: a red cell keeps its colour but shows no date and no "E"
-          if (tr.late)
-            return `<td class="mo late" title="Not loaded &mdash; tracker outreach/late: ${esc(tr.v)}"></td>`;
-          return `<td class="mo exp">${esc(tr.v)}</td>`;
+        const tk = r.t[ym] || [];
+        if (tk.length) {
+          const t = 'ADO ticket, no CMSE load this month\n'
+                  + tk.map(x => `\u00b7 ${x.wi} (${x.state}) ${x.title}`).join('\n');
+          return `<td class="mo trk" title="${esc(t)}">X</td>`;
         }
+        const e = r.e[ym];
+        if (e === 'late')
+          return '<td class="mo late" title="Expected by this feed\'s cadence &mdash; no CMSE load or ADO ticket"></td>';
+        if (e) return '<td class="mo exp">E</td>';
         return '<td class="mo"></td>';
       }).join('');
       return `<tr><td class="cli">${esc(r.client)}</td><td class="mid">${r.cid||''}</td>` +
@@ -2717,7 +2804,6 @@ __EXPORT_CSS__
   function buildExport() {
     if (S.tab === 'cal') {
       const rows = filteredCal();
-      const isT = S.year === D.trackerYear;
       return {
         name: 'CMSE_Calendar_' + S.year,
         title: D.name + ' \u2014 MMSEA Calendar ' + S.year,
@@ -2727,11 +2813,10 @@ __EXPORT_CSS__
           ...MN.map((_, i) => {
             const ym = S.year + '-' + String(i+1).padStart(2,'0');
             if (r.m[ym]) return 'X';
-            const tr = isT ? r.tr[String(i+1)] : null;
-            if (!tr || tr.late) return '';
-            return /^\d+$/.test(tr.v) ? 'X' : tr.v;
+            if (r.t[ym]) return 'X (ticket)';
+            return r.e[ym] === 'E' ? 'E' : '';
           })]),
-        note: 'TRGRepSQL3 / CMSE_New \u00b7 X = loaded to CMSE, E = expected',
+        note: 'TRGRepSQL3 / CMSE_New + ADO MMSEA tickets \u00b7 X = loaded to CMSE, X (ticket) = ADO ticket only, E = expected',
         rowsPerSlide: 12, fontSz: 800,
       };
     }
