@@ -25,7 +25,6 @@ STATE_FILE = os.path.join(BASE, 'centene_wellcare_post_state.json')
 RAMP_SQL_SERVER = 'TRGUTIL10'
 RAMP_OK = ('Successful', 'Resolved')
 MAX_FILES = 25
-CUTOFF = datetime(2026, 10, 5)  # ignore runs started before this (user 2026-10-06)
 
 # key: (title, emoji, [(JobId, name), ...])
 GROUPS = {
@@ -109,12 +108,11 @@ def hrs(mins):
     return f"{mins / 60:.1f}h" if mins >= 60 else f"{int(mins)}m"
 
 
-def staged_files(jobid, since=None):
+def staged_files(jobid):
     """(files, expected) for the newest Queue run of this Stage job that logged
     files. expected = most common file count across its last 8 batches."""
     q = [r for r in ramp_sql(f"SELECT TOP 8 fl.QueueId, COUNT(*) FROM ramp.FileLog fl "
                              f"JOIN ramp.Queue q ON q.QueueId = fl.QueueId WHERE q.JobId = {int(jobid)} "
-                             + (f"AND q.EndDate >= '{since:%Y-%m-%d %H:%M:%S}' " if since else "") +
                              f"GROUP BY fl.QueueId ORDER BY fl.QueueId DESC")
          if len(r) == 2 and r[0].isdigit() and r[1].isdigit()]
     if not q:
@@ -167,10 +165,7 @@ def review_notes(names, jobs, queue):
     return notes
 
 
-def build(key, announced):
-    """Only runs started >= CUTOFF. In-flight jobs show every post; a finished run
-    shows once (tracked in announced {jid: StartDate}), then drops off until the
-    job runs again. Queued/never-started jobs are not shown. Files: Claims only."""
+def build(key):
     title, emoji, members = GROUPS[key]
     jobs = {j.get('JobId'): j for j in ramp_api('Job/List')}
     try:
@@ -178,30 +173,22 @@ def build(key, announced):
     except Exception:
         queue = []
     names = dict(members)
-    body, finished = [], {}
+    body = []
     for jid, nm in members:
-        lr = (jobs.get(jid) or {}).get('LatestJobRun') or {}
-        s, e = lr.get('StartDate'), lr.get('EndDate')
-        sd = to_dt(s)
-        if not sd or sd < CUTOFF:
-            continue
-        if e:
-            if announced.get(str(jid)) == s:
-                continue
-            finished[str(jid)] = s
         block = job_line(nm, jobs.get(jid))
-        if nm.endswith('Stage') and e:  # files only once this run's stage finished
-            files = [f for f in staged_files(jid, sd)[0] if 'CLAIM' in f.upper()]
+        if nm.endswith('Stage'):
+            files, expected = staged_files(jid)
             if files:
-                block += f"\n\nClaims files staged ({len(files)}):\n" + "\n".join(files[:MAX_FILES])
+                cnt = f"{expected} expected" if len(files) == expected else f"{len(files)} of {expected} expected"
+                block += f"\n\nFiles staged ({cnt}):\n" + "\n".join(files[:MAX_FILES])
                 if len(files) > MAX_FILES:
                     block += f"\n+{len(files) - MAX_FILES} more"
         body.append(block)
     msg = "\n\n".join(body)
     notes = review_notes(names, jobs, queue)
     if notes:
-        msg += ("\n\n" if msg else "") + "For review:\n" + "\n".join(notes)
-    return f"{title} load status - {datetime.now():%m/%d %I:%M%p}\n{msg}", msg, finished
+        msg += "\n\nFor review:\n" + "\n".join(notes)
+    return f"{title} load status - {datetime.now():%m/%d %I:%M%p}\n{msg}", msg
 
 
 def main():
@@ -210,18 +197,14 @@ def main():
         print("usage: centene_wellcare_webhook_post.py <" + "|".join(GROUPS) + "> [--dry]")
         return 2
     key = args[0]
+    text, content = build(key)
+    if '--dry' in sys.argv:
+        print(text)
+        return 0
     try:
         state = json.load(open(STATE_FILE))
     except Exception:
         state = {}
-    ann = state.setdefault('announced', {}).setdefault(key, {})
-    text, content, finished = build(key, ann)
-    if '--dry' in sys.argv:
-        print(text or '(nothing to post)')
-        return 0
-    if not content:
-        log(f"{key}: nothing new, not posted")
-        return 0
     h = hashlib.sha1(content.encode()).hexdigest()
     if state.get(key) == h:
         log(f"{key}: unchanged, not posted")
@@ -233,7 +216,6 @@ def main():
         with urllib.request.urlopen(req, timeout=30) as r:
             r.read()
         state[key] = h
-        ann.update(finished)
         json.dump(state, open(STATE_FILE, 'w'), indent=1)
         log(f"{key}: posted")
     except Exception as e:
