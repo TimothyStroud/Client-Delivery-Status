@@ -7035,12 +7035,12 @@ def build_dashboard_html(month_packs, today, current_month_name, s3_rows=None):
 
     # S3 Upload/Download tabs — one per month from S3_TAB_START through today.
     if s3_rows is not None:
-        tabs_html.append('<div class="tab-break"></div>')
         y, m = S3_TAB_START.year, S3_TAB_START.month
         while (y, m) <= (today.year, today.month):
             tab_id = f"tab-s3-{y}-{m:02d}"
             tabs_html.append(
-                f'<button class="tab s3-tab" data-target="{tab_id}">'
+                f'<button class="tab s3-tab" data-target="{tab_id}" '
+                f'style="grid-column:{m};grid-row:2">'
                 f'S3 {_cal_mod.month_abbr[m]} {y}</button>')
             panels_html.append(
                 f'<section class="month-panel" id="{tab_id}">'
@@ -7161,7 +7161,8 @@ td.s3-ok { color: #1E6B30; font-weight: 600; }
 td.s3-upload { color: #2C5F8A; font-weight: 600; }
 td.s3-download { color: #6B3FA0; font-weight: 600; }
 .week-label.s3-today { color: #f08c00; }
-.tab-break { flex-basis: 100%; height: 0; }
+/* Grid so each S3 tab sits directly under its delivery month (column = month). */
+nav.tabs { display: grid; grid-template-columns: repeat(12, max-content); }
 .s3-filter { margin: 4px 0 8px; font-size: 12px; font-weight: 600; color: #1F3D5C; }
 .s3-filter select { font-size: 12px; padding: 3px 6px; margin: 0 12px 0 4px; }
 .s3-count { font-weight: 400; color: #5b6776; font-size: 12px; }
