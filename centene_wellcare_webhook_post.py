@@ -134,7 +134,7 @@ def job_line(name, j):
     elif e and st == 'Failed':
         icon, det = ':x:', f"started {fmt(s)} | ended {fmt(e)} - please investigate"
     elif s and not e:
-        icon = ':bonesaw-is-ready:' if st == 'Ready' else ':loading:'
+        icon = ':bonesaw-is-ready:' if st == 'Ready' and not name.endswith('Load') else ':loading:'
         det = f"started {fmt(s)} | not yet complete"
     elif lr and not s:
         icon, det = ':hourglass_flowing_sand:', "queued, not yet started"
