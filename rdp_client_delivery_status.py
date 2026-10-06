@@ -6987,7 +6987,7 @@ def _render_s3_panel_html(year, month, s3_rows, today):
                    f" <span class='s3-count'>({len(runs)})</span></div>")
         out.append("<table class='grid s3'><colgroup>"
                    "<col style='width:190px'><col style='width:90px'>"
-                   "<col style='width:230px'><col style='width:90px'><col style='width:70px'><col style='width:70px'>"
+                   "<col style='width:230px'><col style='width:150px'><col style='width:70px'><col style='width:70px'>"
                    "</colgroup><tr><th>Client</th><th>Type</th>"
                    "<th>Job</th><th>Status</th><th>Finished</th><th>Run time</th></tr>")
         for r in runs:
@@ -6995,13 +6995,21 @@ def _render_s3_panel_html(year, month, s3_rows, today):
             if r["start"]:
                 mins = max(0, int((r["end"] - r["start"]).total_seconds() // 60))
                 dur = f"{mins // 60}h {mins % 60:02d}m" if mins >= 60 else f"{mins}m"
-            st_cls = "s3-ok" if r["status"] == "Successful" else "alert"
+            st = r["status"]
+            if st == "Successful":
+                st_html = "<span class='s3-ok'>Successful</span>"
+            elif st == "Resolved":   # failed run that was fixed
+                st_html = "<span class='s3-fail'>Failed</span> → <span class='s3-res'>Resolved</span>"
+            elif st in ("Failed", "Error"):
+                st_html = "<span class='s3-fail'>Failed</span>"
+            else:
+                st_html = _html_escape(st)
             out.append(
                 f"<tr class='s3-row' data-c='{_html_escape(r['client'])}'>"
                 f"<td class='name client-cell' data-client='{_html_escape(r['client'])}'>{_html_escape(r['client'])}</td>"
                 f"<td class='marker s3-{r['kind'].lower()}'>{'⬆ Upload' if r['kind'] == 'Upload' else '⬇ Download'}</td>"
                 f"<td>{_html_escape(r['job'])}</td>"
-                f"<td class='marker {st_cls}'>{_html_escape(r['status'])}</td>"
+                f"<td class='marker'>{st_html}</td>"
                 f"<td class='marker'>{r['end']:%I:%M %p}</td>"
                 f"<td class='marker'>{dur}</td></tr>")
         out.append("</table></div>")
@@ -7157,7 +7165,9 @@ nav.tabs button.tab.s3-tab { color: #6B3FA0; }
 nav.tabs button.tab.s3-tab.active { background: #6B3FA0; color: #fff; }
 table.grid.s3 td { white-space: nowrap; }
 table.grid.s3 tr:nth-child(odd) td { background: #F7F9FC; }
-td.s3-ok { color: #1E6B30; font-weight: 600; }
+.s3-ok { color: #1E6B30; font-weight: 600; }
+.s3-fail { color: #C00000; font-weight: 700; }
+.s3-res { color: #1F5FBF; font-weight: 700; }
 td.s3-upload { color: #2C5F8A; font-weight: 600; }
 td.s3-download { color: #6B3FA0; font-weight: 600; }
 .week-label.s3-today { color: #f08c00; }
