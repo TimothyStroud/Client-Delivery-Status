@@ -6971,16 +6971,25 @@ def _render_s3_panel_html(year, month, s3_rows, today):
     by_day = {}
     for r in rows:
         by_day.setdefault(r["end"].date(), []).append(r)
+    opts_c = "".join(f"<option>{_html_escape(c)}</option>"
+                     for c in sorted({r["client"] for r in rows}, key=str.lower))
+    opts_d = "".join(f"<option value='{d.isoformat()}'>{d:%a} {d.month}/{d.day}</option>"
+                     for d in sorted(by_day, reverse=True))
+    out.append("<div class='s3-filter'>Client <select class='s3-fc'>"
+               f"<option value=''>All clients</option>{opts_c}</select>"
+               " Date <select class='s3-fd'>"
+               f"<option value=''>All dates</option>{opts_d}</select></div>")
     for d in sorted(by_day, reverse=True):
         runs = sorted(by_day[d], key=lambda r: r["end"])
         cls = " s3-today" if d == today else ""
+        out.append(f"<div class='s3-day' data-date='{d.isoformat()}'>")
         out.append(f"<div class='week-label{cls}'>{d:%a} {d.month}/{d.day}"
                    f" <span class='s3-count'>({len(runs)})</span></div>")
-        out.append("<table class='grid s3'><colgroup><col style='width:70px'>"
+        out.append("<table class='grid s3'><colgroup>"
                    "<col style='width:190px'><col style='width:90px'>"
-                   "<col style='width:230px'><col style='width:90px'><col style='width:70px'>"
-                   "</colgroup><tr><th>Finished</th><th>Client</th><th>Type</th>"
-                   "<th>Job</th><th>Status</th><th>Run time</th></tr>")
+                   "<col style='width:230px'><col style='width:90px'><col style='width:70px'><col style='width:70px'>"
+                   "</colgroup><tr><th>Client</th><th>Type</th>"
+                   "<th>Job</th><th>Status</th><th>Finished</th><th>Run time</th></tr>")
         for r in runs:
             dur = ""
             if r["start"]:
@@ -6988,13 +6997,14 @@ def _render_s3_panel_html(year, month, s3_rows, today):
                 dur = f"{mins // 60}h {mins % 60:02d}m" if mins >= 60 else f"{mins}m"
             st_cls = "s3-ok" if r["status"] == "Successful" else "alert"
             out.append(
-                f"<tr><td class='marker'>{r['end']:%I:%M %p}</td>"
+                f"<tr class='s3-row' data-c='{_html_escape(r['client'])}'>"
                 f"<td class='name client-cell' data-client='{_html_escape(r['client'])}'>{_html_escape(r['client'])}</td>"
                 f"<td class='marker s3-{r['kind'].lower()}'>{'⬆ Upload' if r['kind'] == 'Upload' else '⬇ Download'}</td>"
                 f"<td>{_html_escape(r['job'])}</td>"
                 f"<td class='marker {st_cls}'>{_html_escape(r['status'])}</td>"
+                f"<td class='marker'>{r['end']:%I:%M %p}</td>"
                 f"<td class='marker'>{dur}</td></tr>")
-        out.append("</table>")
+        out.append("</table></div>")
     return "".join(out)
 
 
@@ -7025,6 +7035,7 @@ def build_dashboard_html(month_packs, today, current_month_name, s3_rows=None):
 
     # S3 Upload/Download tabs — one per month from S3_TAB_START through today.
     if s3_rows is not None:
+        tabs_html.append('<div class="tab-break"></div>')
         y, m = S3_TAB_START.year, S3_TAB_START.month
         while (y, m) <= (today.year, today.month):
             tab_id = f"tab-s3-{y}-{m:02d}"
@@ -7150,6 +7161,9 @@ td.s3-ok { color: #1E6B30; font-weight: 600; }
 td.s3-upload { color: #2C5F8A; font-weight: 600; }
 td.s3-download { color: #6B3FA0; font-weight: 600; }
 .week-label.s3-today { color: #f08c00; }
+.tab-break { flex-basis: 100%; height: 0; }
+.s3-filter { margin: 4px 0 8px; font-size: 12px; font-weight: 600; color: #1F3D5C; }
+.s3-filter select { font-size: 12px; padding: 3px 6px; margin: 0 12px 0 4px; }
 .s3-count { font-weight: 400; color: #5b6776; font-size: 12px; }
 body.search-active td.client-cell { opacity: 0.25; }
 body.search-active td.client-cell.match-cell { opacity: 1; background: #fffbe8; font-weight: 600; }
@@ -7182,6 +7196,24 @@ body.search-active td.client-cell.match-cell { opacity: 1; background: #fffbe8; 
     });
   }
   search.addEventListener('input', applySearch);
+  // S3 tabs: client + date filters (per panel)
+  document.querySelectorAll('.s3-filter').forEach(f => {
+    const panel = f.closest('.month-panel');
+    const fc = f.querySelector('.s3-fc'), fd = f.querySelector('.s3-fd');
+    function apply() {
+      panel.querySelectorAll('.s3-day').forEach(day => {
+        let any = false;
+        const dateOk = !fd.value || day.dataset.date === fd.value;
+        day.querySelectorAll('tr.s3-row').forEach(tr => {
+          const ok = dateOk && (!fc.value || tr.dataset.c === fc.value);
+          tr.style.display = ok ? '' : 'none';
+          if (ok) any = true;
+        });
+        day.style.display = any ? '' : 'none';
+      });
+    }
+    fc.addEventListener('change', apply); fd.addEventListener('change', apply);
+  });
   // Today jump. The today cell can live in a NON-active month panel — a
   // month-end week (e.g. 6/29-7/3) is rendered on the next month's tab, and a
   // hidden (display:none) panel can't be scrolled to. So switch to the panel
