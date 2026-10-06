@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>DHT Delivery Status Board</title>
+<style>
+  body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f6f8fa; color: #1f2328; }
+  header { background: #0b3d5c; color: #fff; padding: 14px 22px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 20px; margin: 0; flex: 1; }
+  header .gen { font-size: 12px; opacity: .85; }
+  .bar { display: flex; gap: 10px; padding: 14px 22px; flex-wrap: wrap; align-items: center; }
+  .tile { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 8px 14px; cursor: pointer; min-width: 110px; }
+  .tile b { display: block; font-size: 22px; }
+  .tile.on { outline: 2px solid #0b3d5c; }
+  .tile.overdue b { color: #cf222e; } .tile.in_review b { color: #bf8700; }
+  .tile.certified b { color: #1a7f37; } .tile.idle b { color: #57606a; }
+  input#q { padding: 7px 10px; border: 1px solid #d0d7de; border-radius: 6px; min-width: 220px; margin-left: auto; }
+  .wrap { padding: 0 22px 22px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; font-size: 13px; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #eaeef2; position: sticky; top: 0; cursor: pointer; }
+  .pill { border-radius: 10px; padding: 1px 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .p-overdue { background: #ffebe9; color: #cf222e; } .p-in_review { background: #fff8c5; color: #9a6700; }
+  .p-certified { background: #dafbe1; color: #1a7f37; } .p-idle { background: #eaeef2; color: #57606a; }
+  .note { font-size: 12px; color: #57606a; padding: 0 22px 10px; }
+  
+  .exp-wrap { position: relative; display: inline-block; }
+  .exp-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50;
+              min-width: 246px; background: #fff; border: 1px solid #d0d7de;
+              border-radius: 8px; box-shadow: 0 8px 24px rgba(27,31,36,.16);
+              padding: 6px; display: none; text-align: left; }
+  .exp-menu.open { display: block; }
+  .exp-menu button { display: block; width: 100%; text-align: left; background: none;
+                     border: 0; border-radius: 6px; padding: 7px 10px; cursor: pointer;
+                     font: inherit; font-size: 13px; color: #24292f; }
+  .exp-menu button:hover { background: #eef4fb; }
+  .exp-menu button b { display: block; font-weight: 600; }
+  .exp-menu button span { display: block; font-size: 11px; color: #656d76; margin-top: 1px; }
+  .exp-busy { opacity: .6; pointer-events: none; }
+
+</style></head><body>
+<header><h1>DHT Delivery Status Board</h1><span class="gen">Generated 2026-10-06 15:55</span><div class="exp-wrap">
+      <button class="export" id="btn-export" title="Download the current view">&#8681; Export &#9662;</button>
+      <div class="exp-menu" id="exp-menu">
+        <button data-fmt="csv"><b>Excel (CSV)</b><span>Every filtered row &middot; opens in Excel</span></button>
+        <button data-fmt="word"><b>Word (.docx)</b><span>Formatted landscape table</span></button>
+        <button data-fmt="ppt"><b>PowerPoint (.pptx)</b><span>Title slide + paged tables</span></button>
+      </div>
+    </div></header>
+<div class="bar" id="tiles"></div>
+<div class="note">CERTIFIED = latest delivery certified &middot; IN REVIEW = data arrived, awaiting certification (never overdue) &middot;
+OVERDUE = past cadence + grace with nothing new &middot; IDLE = nothing in 90 days. Source: DHTStats (TRGUTIL10) via the dht-delivery skill. Read-only.</div>
+<div class="wrap"><table id="grid"><thead><tr id="head"></tr></thead><tbody id="body"></tbody></table></div>
+<script>
+const DATA = {"as_of":"2026-10-06T15:55:42.813592","counts":{"overdue":1,"in_review":10,"certified":76},"clients":[{"client":"TuftsRx","status":"overdue","headline":"Overdue \u2014 weekly (mondays); last delivery 56 days ago.","cadence":"Weekly (Mondays)","latest_delivery":"2026-08-11T08:37:34.867000","last_certified":"2026-08-11T08:37:34.867000","last_delivery_ago":"56 days ago","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"AetnaHRP","status":"in_review","headline":"Data received today \u2014 in certification review.","cadence":"Daily","latest_delivery":"2026-10-06T15:36:15.530000","last_certified":"2026-09-29T12:19:33.397000","last_delivery_ago":"today","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"AetnaRx","status":"in_review","headline":"Data received today \u2014 in certification review.","cadence":"Daily","latest_delivery":"2026-10-06T12:06:51.497000","last_certified":"2026-10-03T18:05:36.500000","last_delivery_ago":"today","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"BCBSKSMedAdv","status":"in_review","headline":"Data received 3 days ago \u2014 in certification review.","cadence":"Weekly (Mondays)","latest_delivery":"2026-10-03T19:51:43.753000","last_certified":"2026-09-12T19:53:02.587000","last_delivery_ago":"3 days ago","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"ElevanceMMMRx","status":"in_review","headline":"Data received 90 days ago \u2014 in certification review.","cadence":"Daily","latest_delivery":"2026-07-08T19:13:57.450000","last_certified":null,"last_delivery_ago":"90 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"ElixirRx","status":"in_review","headline":"Data received 81 days ago \u2014 in certification review.","cadence":"Monthly (days 10\u201315)","latest_delivery":"2026-07-17T22:25:48.880000","last_certified":null,"last_delivery_ago":"81 days ago","next_expected":"2026-10-10","next_expected_rel":"in 4 days"},{"client":"HealthNetCA","status":"in_review","headline":"Data received today \u2014 in certification review.","cadence":"Weekly (Mondays)","latest_delivery":"2026-10-06T00:50:26.853000","last_certified":"2026-08-28T22:52:01.237000","last_delivery_ago":"today","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"Kaiser","status":"in_review","headline":"Data received today \u2014 in certification review.","cadence":"Weekly (Thursdays)","latest_delivery":"2026-10-06T12:42:47.430000","last_certified":"2026-09-30T01:20:50.587000","last_delivery_ago":"today","next_expected":"2026-10-08","next_expected_rel":"in 2 days"},{"client":"NCStateAetna","status":"in_review","headline":"Data received 2 days ago \u2014 in certification review.","cadence":"Daily","latest_delivery":"2026-10-04T18:17:23.290000","last_certified":"2026-10-03T02:03:30.670000","last_delivery_ago":"2 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"UnitedRx","status":"in_review","headline":"Data received 21 days ago \u2014 in certification review.","cadence":"Cadence not configured","latest_delivery":"2026-09-15T11:50:48.180000","last_certified":null,"last_delivery_ago":"21 days ago","next_expected":null,"next_expected_rel":null},{"client":"WellCareRx","status":"in_review","headline":"Data received yesterday \u2014 in certification review.","cadence":"Weekly (Fridays)","latest_delivery":"2026-10-05T05:41:46.370000","last_certified":"2026-09-30T13:22:59.957000","last_delivery_ago":"yesterday","next_expected":"2026-10-09","next_expected_rel":"in 3 days"},{"client":"AetnaQNXT","status":"certified","headline":"Delivered & certified 16 days ago.","cadence":"Monthly (days 10\u201315)","latest_delivery":"2026-09-20T09:16:53.297000","last_certified":"2026-09-20T09:16:53.297000","last_delivery_ago":"16 days ago","next_expected":"2026-10-10","next_expected_rel":"in 4 days"},{"client":"AetnaQNXTRx","status":"certified","headline":"Delivered & certified 20 days ago.","cadence":"Monthly (days 5\u201310)","latest_delivery":"2026-09-16T15:36:32.060000","last_certified":"2026-09-16T15:36:32.060000","last_delivery_ago":"20 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"BCBSAR","status":"certified","headline":"Delivered & certified 8 days ago.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-09-28T09:22:51.450000","last_certified":"2026-09-28T09:22:51.450000","last_delivery_ago":"8 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"BCBSARRx","status":"certified","headline":"Delivered & certified 8 days ago.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-09-28T09:33:01.450000","last_certified":"2026-09-28T09:33:01.450000","last_delivery_ago":"8 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"BCBSFL","status":"certified","headline":"Delivered & certified yesterday.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-10-05T16:42:06.840000","last_certified":"2026-10-05T16:42:06.840000","last_delivery_ago":"yesterday","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"BCBSKS","status":"certified","headline":"Delivered & certified 22 days ago.","cadence":"Monthly (day 15)","latest_delivery":"2026-09-14T12:23:24.327000","last_certified":"2026-09-14T12:23:24.327000","last_delivery_ago":"22 days ago","next_expected":"2026-10-15","next_expected_rel":"in 9 days"},{"client":"BCBSMNRx","status":"certified","headline":"Delivered & certified today.","cadence":"Cadence not configured","latest_delivery":"2026-10-06T11:42:46.570000","last_certified":"2026-10-06T11:42:46.570000","last_delivery_ago":"today","next_expected":null,"next_expected_rel":null},{"client":"BCBSNC","status":"certified","headline":"Delivered & certified 26 days ago.","cadence":"Monthly (days 10\u201315)","latest_delivery":"2026-09-10T11:34:42.573000","last_certified":"2026-09-10T11:34:42.573000","last_delivery_ago":"26 days ago","next_expected":"2026-10-10","next_expected_rel":"in 4 days"},{"client":"BCBSNC_RX","status":"certified","headline":"Delivered & certified 24 days ago.","cadence":"Monthly (day 15)","latest_delivery":"2026-09-12T05:53:11.983000","last_certified":"2026-09-12T05:53:11.983000","last_delivery_ago":"24 days ago","next_expected":"2026-10-15","next_expected_rel":"in 9 days"},{"client":"BCBSNorthCarolinaFEP","status":"certified","headline":"Delivered & certified 26 days ago.","cadence":"Monthly (days 10\u201315)","latest_delivery":"2026-09-10T09:57:20.830000","last_certified":"2026-09-10T09:57:20.830000","last_delivery_ago":"26 days ago","next_expected":"2026-10-10","next_expected_rel":"in 4 days"},{"client":"BCBSPuertoRico","status":"certified","headline":"Delivered & certified 25 days ago.","cadence":"Monthly (days 10\u201315)","latest_delivery":"2026-09-11T03:46:08.103000","last_certified":"2026-09-11T03:46:08.103000","last_delivery_ago":"25 days ago","next_expected":"2026-10-10","next_expected_rel":"in 4 days"},{"client":"BCBSSC","status":"certified","headline":"Delivered & certified 19 days ago.","cadence":"Monthly (days 15\u201320)","latest_delivery":"2026-09-17T23:26:22.100000","last_certified":"2026-09-17T23:26:22.100000","last_delivery_ago":"19 days ago","next_expected":"2026-10-15","next_expected_rel":"in 9 days"},{"client":"BCBSSCRx","status":"certified","headline":"Delivered & certified 12 days ago.","cadence":"Monthly (days 18\u201319)","latest_delivery":"2026-09-24T13:46:29.630000","last_certified":"2026-09-24T13:46:29.630000","last_delivery_ago":"12 days ago","next_expected":"2026-10-18","next_expected_rel":"in 12 days"},{"client":"BCBSVT","status":"certified","headline":"Delivered & certified today.","cadence":"Monthly (days 5\u201310)","latest_delivery":"2026-10-06T11:38:31.743000","last_certified":"2026-10-06T11:38:31.743000","last_delivery_ago":"today","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"BSCA_Facets","status":"certified","headline":"Delivered & certified 23 days ago.","cadence":"Monthly (days 5\u201310)","latest_delivery":"2026-09-13T08:56:12.387000","last_certified":"2026-09-13T08:56:12.387000","last_delivery_ago":"23 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"BSCA_Medicare","status":"certified","headline":"Delivered & certified 21 days ago.","cadence":"Monthly (days 5\u201310)","latest_delivery":"2026-09-15T06:32:40.887000","last_certified":"2026-09-15T06:32:40.887000","last_delivery_ago":"21 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"Cambia","status":"certified","headline":"Delivered & certified 2 days ago.","cadence":"Weekly (Mondays)","latest_delivery":"2026-10-04T01:04:51.500000","last_certified":"2026-10-04T01:04:51.500000","last_delivery_ago":"2 days ago","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"CareFirstDC","status":"certified","headline":"Delivered & certified 20 days ago.","cadence":"Monthly (days 15\u201319)","latest_delivery":"2026-09-16T10:48:36.947000","last_certified":"2026-09-16T10:48:36.947000","last_delivery_ago":"20 days ago","next_expected":"2026-10-15","next_expected_rel":"in 9 days"},{"client":"CareFirstFacets","status":"certified","headline":"Delivered & certified 20 days ago.","cadence":"Monthly (days 15\u201319)","latest_delivery":"2026-09-16T12:41:17.620000","last_certified":"2026-09-16T12:41:17.620000","last_delivery_ago":"20 days ago","next_expected":"2026-10-15","next_expected_rel":"in 9 days"},{"client":"CareFirstNasco","status":"certified","headline":"Delivered & certified 20 days ago.","cadence":"Monthly (days 15\u201319)","latest_delivery":"2026-09-16T11:18:52.170000","last_certified":"2026-09-16T11:18:52.170000","last_delivery_ago":"20 days ago","next_expected":"2026-10-15","next_expected_rel":"in 9 days"},{"client":"CareFirstRx","status":"certified","headline":"Delivered & certified 19 days ago.","cadence":"Monthly (days 15\u201319)","latest_delivery":"2026-09-17T02:20:04.447000","last_certified":"2026-09-17T02:20:04.447000","last_delivery_ago":"19 days ago","next_expected":"2026-10-15","next_expected_rel":"in 9 days"},{"client":"CareSource","status":"certified","headline":"Delivered & certified today.","cadence":"Weekly (Wednesdays)","latest_delivery":"2026-10-06T10:54:25.917000","last_certified":"2026-10-06T10:54:25.917000","last_delivery_ago":"today","next_expected":"2026-10-07","next_expected_rel":"tomorrow"},{"client":"CareSourceRx","status":"certified","headline":"Delivered & certified 6 days ago.","cadence":"Weekly (Thursdays)","latest_delivery":"2026-09-30T21:47:32.350000","last_certified":"2026-09-30T21:47:32.350000","last_delivery_ago":"6 days ago","next_expected":"2026-10-08","next_expected_rel":"in 2 days"},{"client":"Centene","status":"certified","headline":"Delivered & certified 2 days ago.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-10-04T13:12:42.863000","last_certified":"2026-10-04T13:12:42.863000","last_delivery_ago":"2 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"CenteneFidelis","status":"certified","headline":"Delivered & certified 7 days ago.","cadence":"Weekly (Wednesdays)","latest_delivery":"2026-09-29T19:38:26.897000","last_certified":"2026-09-29T19:38:26.897000","last_delivery_ago":"7 days ago","next_expected":"2026-10-07","next_expected_rel":"tomorrow"},{"client":"CenteneFidelisRx","status":"certified","headline":"Delivered & certified 5 days ago.","cadence":"Weekly (Wednesdays)","latest_delivery":"2026-10-01T22:51:42.117000","last_certified":"2026-10-01T22:51:42.117000","last_delivery_ago":"5 days ago","next_expected":"2026-10-07","next_expected_rel":"tomorrow"},{"client":"CenteneQualChoice","status":"certified","headline":"Delivered & certified today.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-10-06T05:17:30.327000","last_certified":"2026-10-06T05:17:30.327000","last_delivery_ago":"today","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"CenteneRx","status":"certified","headline":"Delivered & certified 5 days ago.","cadence":"Weekly (Fridays)","latest_delivery":"2026-10-01T02:46:39.997000","last_certified":"2026-10-01T02:46:39.997000","last_delivery_ago":"5 days ago","next_expected":"2026-10-09","next_expected_rel":"in 3 days"},{"client":"Chickering","status":"certified","headline":"Delivered & certified 5 days ago.","cadence":"Monthly (day 1)","latest_delivery":"2026-10-01T00:11:19.853000","last_certified":"2026-10-01T00:11:19.853000","last_delivery_ago":"5 days ago","next_expected":"2026-11-01","next_expected_rel":"in 26 days"},{"client":"Christus","status":"certified","headline":"Delivered & certified 5 days ago.","cadence":"Monthly (day 1)","latest_delivery":"2026-10-01T09:20:56.487000","last_certified":"2026-10-01T09:20:56.487000","last_delivery_ago":"5 days ago","next_expected":"2026-11-01","next_expected_rel":"in 26 days"},{"client":"CignaFacets","status":"certified","headline":"Delivered & certified yesterday.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-10-05T23:49:29.940000","last_certified":"2026-10-05T23:49:29.940000","last_delivery_ago":"yesterday","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"CignaPower","status":"certified","headline":"Delivered & certified 2 days ago.","cadence":"Weekly (Mondays)","latest_delivery":"2026-10-04T13:33:58.877000","last_certified":"2026-10-04T13:33:58.877000","last_delivery_ago":"2 days ago","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"CignaProClaims","status":"certified","headline":"Delivered & certified 2 days ago.","cadence":"Weekly (Mondays)","latest_delivery":"2026-10-04T05:17:37.710000","last_certified":"2026-10-04T05:17:37.710000","last_delivery_ago":"2 days ago","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"CignaRx","status":"certified","headline":"Delivered & certified 2 days ago.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-10-04T05:30:06.253000","last_certified":"2026-10-04T05:30:06.253000","last_delivery_ago":"2 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"EDW_C_FAC","status":"certified","headline":"Delivered & certified 16 days ago.","cadence":"Monthly (day 20)","latest_delivery":"2026-09-20T00:21:35.777000","last_certified":"2026-09-20T00:21:35.777000","last_delivery_ago":"16 days ago","next_expected":"2026-10-20","next_expected_rel":"in 14 days"},{"client":"EDW_C_NAS","status":"certified","headline":"Delivered & certified 16 days ago.","cadence":"Monthly (day 20)","latest_delivery":"2026-09-20T00:56:58.197000","last_certified":"2026-09-20T00:56:58.197000","last_delivery_ago":"16 days ago","next_expected":"2026-10-20","next_expected_rel":"in 14 days"},{"client":"EDW_EMPIRE","status":"certified","headline":"Delivered & certified 16 days ago.","cadence":"Monthly (day 20)","latest_delivery":"2026-09-20T01:21:07.373000","last_certified":"2026-09-20T01:21:07.373000","last_delivery_ago":"16 days ago","next_expected":"2026-10-20","next_expected_rel":"in 14 days"},{"client":"EDW_WGS","status":"certified","headline":"Delivered & certified 13 days ago.","cadence":"Monthly (day 20)","latest_delivery":"2026-09-23T13:08:04.623000","last_certified":"2026-09-23T13:08:04.623000","last_delivery_ago":"13 days ago","next_expected":"2026-10-20","next_expected_rel":"in 14 days"},{"client":"EmblemFacets","status":"certified","headline":"Delivered & certified 19 days ago.","cadence":"Monthly (days 15\u201320)","latest_delivery":"2026-09-17T20:56:47.737000","last_certified":"2026-09-17T20:56:47.737000","last_delivery_ago":"19 days ago","next_expected":"2026-10-15","next_expected_rel":"in 9 days"},{"client":"EmblemRx","status":"certified","headline":"Delivered & certified 7 days ago.","cadence":"Weekly (Wednesdays)","latest_delivery":"2026-09-29T22:31:51.883000","last_certified":"2026-09-29T22:31:51.883000","last_delivery_ago":"7 days ago","next_expected":"2026-10-07","next_expected_rel":"tomorrow"},{"client":"EverNorthRx","status":"certified","headline":"Delivered & certified 8 days ago.","cadence":"Weekly (Mondays)","latest_delivery":"2026-09-28T23:11:46.353000","last_certified":"2026-09-28T23:11:46.353000","last_delivery_ago":"8 days ago","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"ExcellusRx","status":"certified","headline":"Delivered & certified today.","cadence":"Weekly (Wednesdays)","latest_delivery":"2026-10-06T10:37:55.207000","last_certified":"2026-10-06T10:37:55.207000","last_delivery_ago":"today","next_expected":"2026-10-07","next_expected_rel":"tomorrow"},{"client":"GEHA","status":"certified","headline":"Delivered & certified 3 days ago.","cadence":"Weekly (Mondays)","latest_delivery":"2026-10-03T09:50:36.607000","last_certified":"2026-10-03T09:50:36.607000","last_delivery_ago":"3 days ago","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"HAP_Medical","status":"certified","headline":"Delivered & certified 28 days ago.","cadence":"Monthly (days 5\u201310)","latest_delivery":"2026-09-08T13:33:18.860000","last_certified":"2026-09-08T13:33:18.860000","last_delivery_ago":"28 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"HAPRx","status":"certified","headline":"Delivered & certified 28 days ago.","cadence":"Monthly (days 5\u201310)","latest_delivery":"2026-09-08T14:38:44.073000","last_certified":"2026-09-08T14:38:44.073000","last_delivery_ago":"28 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"HarvardPilgrim","status":"certified","headline":"Delivered & certified 6 days ago.","cadence":"Weekly (Wednesdays)","latest_delivery":"2026-09-30T07:40:51.540000","last_certified":"2026-09-30T07:40:51.540000","last_delivery_ago":"6 days ago","next_expected":"2026-10-07","next_expected_rel":"tomorrow"},{"client":"HealthNewEngland","status":"certified","headline":"Delivered & certified 5 days ago.","cadence":"Weekly (Thursdays)","latest_delivery":"2026-10-01T12:28:01.823000","last_certified":"2026-10-01T12:28:01.823000","last_delivery_ago":"5 days ago","next_expected":"2026-10-08","next_expected_rel":"in 2 days"},{"client":"HealthSpring_FWA","status":"certified","headline":"Delivered & certified 28 days ago.","cadence":"Monthly (days 5\u201310)","latest_delivery":"2026-09-08T15:59:01.480000","last_certified":"2026-09-08T15:59:01.480000","last_delivery_ago":"28 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"HMSA","status":"certified","headline":"Delivered & certified 7 days ago.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-09-29T11:08:31.817000","last_certified":"2026-09-29T11:08:31.817000","last_delivery_ago":"7 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"HMSA_RX","status":"certified","headline":"Delivered & certified 7 days ago.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-09-29T12:38:11.473000","last_certified":"2026-09-29T12:38:11.473000","last_delivery_ago":"7 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"JohnsHopkins","status":"certified","headline":"Delivered & certified yesterday.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-10-05T13:29:59.120000","last_certified":"2026-10-05T13:29:59.120000","last_delivery_ago":"yesterday","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"Kaiser_WA","status":"certified","headline":"Delivered & certified 19 days ago.","cadence":"Monthly (days 10\u201315)","latest_delivery":"2026-09-17T18:19:12.483000","last_certified":"2026-09-17T18:19:12.483000","last_delivery_ago":"19 days ago","next_expected":"2026-10-10","next_expected_rel":"in 4 days"},{"client":"Kaiser_WARx","status":"certified","headline":"Delivered & certified 19 days ago.","cadence":"Monthly (days 10\u201315)","latest_delivery":"2026-09-17T21:10:31.160000","last_certified":"2026-09-17T21:10:31.160000","last_delivery_ago":"19 days ago","next_expected":"2026-10-10","next_expected_rel":"in 4 days"},{"client":"KaiserPrePayCOB","status":"certified","headline":"Delivered & certified today.","cadence":"Cadence not configured","latest_delivery":"2026-10-06T11:57:08.997000","last_certified":"2026-10-06T11:57:08.997000","last_delivery_ago":"today","next_expected":null,"next_expected_rel":null},{"client":"Medica","status":"certified","headline":"Delivered & certified 6 days ago.","cadence":"Weekly (Wednesdays)","latest_delivery":"2026-09-30T20:00:28.890000","last_certified":"2026-09-30T20:00:28.890000","last_delivery_ago":"6 days ago","next_expected":"2026-10-07","next_expected_rel":"tomorrow"},{"client":"MedicaDean","status":"certified","headline":"Delivered & certified yesterday.","cadence":"Weekly (Mondays)","latest_delivery":"2026-10-05T07:40:58.140000","last_certified":"2026-10-05T07:40:58.140000","last_delivery_ago":"yesterday","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"MedicalMutualOH","status":"certified","headline":"Delivered & certified 3 days ago.","cadence":"Monthly (days 3\u20138)","latest_delivery":"2026-10-03T21:42:12.023000","last_certified":"2026-10-03T21:42:12.023000","last_delivery_ago":"3 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"MedStar","status":"certified","headline":"Delivered & certified yesterday.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-10-05T13:44:02.443000","last_certified":"2026-10-05T13:44:02.443000","last_delivery_ago":"yesterday","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"MMOHRx","status":"certified","headline":"Delivered & certified today.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-10-06T12:18:21.793000","last_certified":"2026-10-06T12:18:21.793000","last_delivery_ago":"today","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"ModaRx","status":"certified","headline":"Delivered & certified 4 days ago.","cadence":"Cadence not configured","latest_delivery":"2026-10-02T13:19:59.800000","last_certified":"2026-10-02T13:19:59.800000","last_delivery_ago":"4 days ago","next_expected":null,"next_expected_rel":null},{"client":"NCStateRx","status":"certified","headline":"Delivered & certified 5 days ago.","cadence":"Monthly (day 1)","latest_delivery":"2026-10-01T07:47:10.047000","last_certified":"2026-10-01T07:47:10.047000","last_delivery_ago":"5 days ago","next_expected":"2026-11-01","next_expected_rel":"in 26 days"},{"client":"NYSHIP_RX","status":"certified","headline":"Delivered & certified 4 days ago.","cadence":"Cadence not configured","latest_delivery":"2026-10-02T20:26:30.087000","last_certified":"2026-10-02T20:26:30.087000","last_delivery_ago":"4 days ago","next_expected":null,"next_expected_rel":null},{"client":"Oscar","status":"certified","headline":"Delivered & certified 5 days ago.","cadence":"Weekly (Wednesdays)","latest_delivery":"2026-10-01T05:55:43.500000","last_certified":"2026-10-01T05:55:43.500000","last_delivery_ago":"5 days ago","next_expected":"2026-10-07","next_expected_rel":"tomorrow"},{"client":"OscarRx","status":"certified","headline":"Delivered & certified 4 days ago.","cadence":"Weekly (Fridays)","latest_delivery":"2026-10-02T02:22:14.473000","last_certified":"2026-10-02T02:22:14.473000","last_delivery_ago":"4 days ago","next_expected":"2026-10-09","next_expected_rel":"in 3 days"},{"client":"Premera","status":"certified","headline":"Delivered & certified 6 days ago.","cadence":"Weekly (Thursdays)","latest_delivery":"2026-09-30T13:33:34.157000","last_certified":"2026-09-30T13:33:34.157000","last_delivery_ago":"6 days ago","next_expected":"2026-10-08","next_expected_rel":"in 2 days"},{"client":"PremeraMedAdvRx","status":"certified","headline":"Delivered & certified 26 days ago.","cadence":"Monthly (days 5\u201310)","latest_delivery":"2026-09-10T16:54:36.870000","last_certified":"2026-09-10T16:54:36.870000","last_delivery_ago":"26 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"PremeraMedAdvVIS","status":"certified","headline":"Delivered & certified 26 days ago.","cadence":"Monthly (days 5\u201310)","latest_delivery":"2026-09-10T16:18:34.237000","last_certified":"2026-09-10T16:18:34.237000","last_delivery_ago":"26 days ago","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"SamaritanHealth","status":"certified","headline":"Delivered & certified 28 days ago.","cadence":"Monthly (days 10\u201315)","latest_delivery":"2026-09-08T09:39:15.820000","last_certified":"2026-09-08T09:39:15.820000","last_delivery_ago":"28 days ago","next_expected":"2026-10-10","next_expected_rel":"in 4 days"},{"client":"Tufts_Audit_CIT","status":"certified","headline":"Delivered & certified yesterday.","cadence":"Weekly (Mondays)","latest_delivery":"2026-10-05T09:55:22.117000","last_certified":"2026-10-05T09:55:22.117000","last_delivery_ago":"yesterday","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"Tufts_PublicPlan","status":"certified","headline":"Delivered & certified 56 days ago.","cadence":"Monthly (days 10\u201315)","latest_delivery":"2026-08-11T10:50:34.210000","last_certified":"2026-08-11T10:50:34.210000","last_delivery_ago":"56 days ago","next_expected":"2026-10-10","next_expected_rel":"in 4 days"},{"client":"TuftsMedPref","status":"certified","headline":"Delivered & certified 2 days ago.","cadence":"Weekly (Mondays)","latest_delivery":"2026-10-04T08:12:35.770000","last_certified":"2026-10-04T08:12:35.770000","last_delivery_ago":"2 days ago","next_expected":"2026-10-12","next_expected_rel":"in 6 days"},{"client":"UPMC","status":"certified","headline":"Delivered & certified 5 days ago.","cadence":"Weekly (Thursdays)","latest_delivery":"2026-10-01T18:10:03.523000","last_certified":"2026-10-01T18:10:03.523000","last_delivery_ago":"5 days ago","next_expected":"2026-10-08","next_expected_rel":"in 2 days"},{"client":"WEBTPA","status":"certified","headline":"Delivered & certified 4 days ago.","cadence":"Weekly (Fridays)","latest_delivery":"2026-10-02T09:03:36.743000","last_certified":"2026-10-02T09:03:36.743000","last_delivery_ago":"4 days ago","next_expected":"2026-10-09","next_expected_rel":"in 3 days"},{"client":"WellCare","status":"certified","headline":"Delivered & certified yesterday.","cadence":"Weekly (Fridays)","latest_delivery":"2026-10-05T23:59:02.567000","last_certified":"2026-10-05T23:59:02.567000","last_delivery_ago":"yesterday","next_expected":"2026-10-09","next_expected_rel":"in 3 days"},{"client":"WellMark","status":"certified","headline":"Delivered & certified yesterday.","cadence":"Weekly (Tuesdays)","latest_delivery":"2026-10-05T06:11:19.240000","last_certified":"2026-10-05T06:11:19.240000","last_delivery_ago":"yesterday","next_expected":"2026-10-06","next_expected_rel":"today"},{"client":"WellpointEdwardRX","status":"certified","headline":"Delivered & certified 6 days ago.","cadence":"Weekly (Wednesdays)","latest_delivery":"2026-09-30T10:28:28.493000","last_certified":"2026-09-30T10:28:28.493000","last_delivery_ago":"6 days ago","next_expected":"2026-10-07","next_expected_rel":"tomorrow"}]};
+const ORDER = ["overdue", "in_review", "idle", "certified"];
+const LABEL = {overdue: "Overdue", in_review: "In Review", idle: "Idle", certified: "Certified"};
+const COLS = [["client","Client"],["status","Status"],["headline","Headline"],["cadence","Cadence"],
+  ["last_delivery_ago","Last Delivery"],["latest_delivery","Latest Delivery"],["last_certified","Last Certified"],
+  ["next_expected","Next Expected"],["next_expected_rel","Due"]];
+let filt = null, sortKey = "status", sortDir = 1;
+const fmt = (k, v) => v == null ? "" : (/^(latest_delivery|last_certified)$/.test(k) ? String(v).slice(0,16).replace("T"," ") : v);
+function rows() {
+  const q = document.getElementById("q").value.toLowerCase();
+  return DATA.clients.filter(r => (!filt || r.status === filt) && (!q || JSON.stringify(r).toLowerCase().includes(q)))
+    .sort((a, b) => {
+      const av = sortKey === "status" ? ORDER.indexOf(a.status) : (a[sortKey] || "");
+      const bv = sortKey === "status" ? ORDER.indexOf(b.status) : (b[sortKey] || "");
+      return (av > bv ? 1 : av < bv ? -1 : a.client.localeCompare(b.client)) * sortDir;
+    });
+}
+function render() {
+  const counts = {}; DATA.clients.forEach(r => counts[r.status] = (counts[r.status] || 0) + 1);
+  document.getElementById("tiles").innerHTML =
+    `<div class="tile ${filt ? "" : "on"}" data-s=""><b>${DATA.clients.length}</b>All clients</div>` +
+    ORDER.filter(s => counts[s]).map(s => `<div class="tile ${s} ${filt === s ? "on" : ""}" data-s="${s}"><b>${counts[s]}</b>${LABEL[s]}</div>`).join("") +
+    `<input id="q" placeholder="Search client / cadence..." value="${(document.getElementById("q") || {}).value || ""}">`;
+  document.querySelectorAll(".tile").forEach(t => t.onclick = () => { filt = t.dataset.s || null; render(); });
+  const qi = document.getElementById("q"); qi.oninput = draw; return draw();
+}
+function draw() {
+  document.getElementById("head").innerHTML = COLS.map(([k, h]) => `<th data-k="${k}">${h}${sortKey === k ? (sortDir > 0 ? " &#9650;" : " &#9660;") : ""}</th>`).join("");
+  document.querySelectorAll("#head th").forEach(th => th.onclick = () => { const k = th.dataset.k; sortDir = sortKey === k ? -sortDir : 1; sortKey = k; draw(); });
+  document.getElementById("body").innerHTML = rows().map(r => "<tr>" + COLS.map(([k]) =>
+    k === "status" ? `<td><span class="pill p-${r.status}">${LABEL[r.status] || r.status}</span></td>` : `<td>${fmt(k, r[k])}</td>`).join("") + "</tr>").join("");
+}
+
+// ---------------------------------------------------------------------------
+// RptExport - CSV / Word (.docx) / PowerPoint (.pptx) export, zero dependencies
+// ---------------------------------------------------------------------------
+var RptExport = (function () {
+  'use strict';
+
+  var ACCENT = '2C5F8A';        // header fill / title colour
+  var ACCENT_DK = '1F3D5C';
+  var LINE = 'D0D7DE';          // table gridlines
+  var BAND = 'F2F4F7';          // alternating row fill
+  var MUTED = '656D76';
+
+  var PPT_MAX_ROWS = 400;       // beyond this a deck stops being useful
+  var WORD_WARN_ROWS = 3000;    // Word copes, but it gets slow
+
+  // ---------- small helpers ----------
+  var ENC = new TextEncoder();
+
+  function xml(v) {
+    return (v == null ? '' : String(v))
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  }
+
+  function safeName(s) {
+    return String(s || 'report').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_');
+  }
+
+  function stamp() {
+    var d = new Date();
+    return d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2);
+  }
+
+  function nowText() {
+    var d = new Date();
+    var p = function (n) { return ('0' + n).slice(-2); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+           ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  function download(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+
+  // Column widths proportional to the widest text in each column.
+  function colWeights(headers, rows) {
+    var w = [], i, j, m, L;
+    for (i = 0; i < headers.length; i++) {
+      m = String(headers[i] == null ? '' : headers[i]).length;
+      for (j = 0; j < rows.length; j++) {
+        L = String(rows[j][i] == null ? '' : rows[j][i]).length;
+        if (L > m) m = L;
+      }
+      w.push(Math.max(4, Math.min(38, m)));
+    }
+    return w;
+  }
+
+  function distribute(total, weights) {
+    var sum = 0, i;
+    for (i = 0; i < weights.length; i++) sum += weights[i];
+    if (!sum) sum = 1;
+    var out = weights.map(function (x) { return Math.max(1, Math.floor(total * x / sum)); });
+    var used = 0;
+    for (i = 0; i < out.length; i++) used += out[i];
+    var diff = total - used;
+    if (diff !== 0) {
+      var wi = 0;
+      for (i = 1; i < weights.length; i++) if (weights[i] > weights[wi]) wi = i;
+      out[wi] = Math.max(1, out[wi] + diff);
+    }
+    return out;
+  }
+
+  // Right-align columns that look numeric all the way down.
+  function numericCols(headers, rows) {
+    var out = [], i, j, v, seen, ok;
+    for (i = 0; i < headers.length; i++) {
+      seen = 0; ok = true;
+      for (j = 0; j < rows.length && ok; j++) {
+        v = rows[j][i];
+        if (v == null || v === '') continue;
+        seen++;
+        if (!/^-?[\d,]+(\.\d+)?$/.test(String(v))) ok = false;
+      }
+      out.push(ok && seen > 0);
+    }
+    return out;
+  }
+
+  // ---------- ZIP writer (needed for both .docx and .pptx) ----------
+  var CRC_TABLE = null;
+  function crc32(buf) {
+    var i, k, c;
+    if (!CRC_TABLE) {
+      CRC_TABLE = new Int32Array(256);
+      for (i = 0; i < 256; i++) {
+        c = i;
+        for (k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        CRC_TABLE[i] = c;
+      }
+    }
+    var crc = -1;
+    for (i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ buf[i]) & 0xFF];
+    return (crc ^ -1) >>> 0;
+  }
+
+  function deflateRaw(bytes) {
+    if (typeof CompressionStream === 'undefined') return Promise.resolve(null);
+    try {
+      var s = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+      return new Response(s).arrayBuffer()
+        .then(function (b) { return new Uint8Array(b); })
+        .catch(function () { return null; });
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+  }
+
+  // files: [{ name, data (string | Uint8Array) }]
+  function zipBlob(files, mime) {
+    var d = new Date();
+    var dosTime = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xFFFF;
+    var dosDate = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xFFFF;
+
+    var parts = [], central = [], offset = 0;
+
+    function step(i) {
+      if (i >= files.length) return Promise.resolve();
+      var f = files[i];
+      var raw = (typeof f.data === 'string') ? ENC.encode(f.data) : f.data;
+      var nameBytes = ENC.encode(f.name);
+      var crc = crc32(raw);
+      return deflateRaw(raw).then(function (comp) {
+        var method = 8;
+        if (!comp || comp.length >= raw.length) { comp = raw; method = 0; }
+
+        var lh = new DataView(new ArrayBuffer(30));
+        lh.setUint32(0, 0x04034b50, true);
+        lh.setUint16(4, 20, true);
+        lh.setUint16(6, 0x0800, true);      // UTF-8 names
+        lh.setUint16(8, method, true);
+        lh.setUint16(10, dosTime, true);
+        lh.setUint16(12, dosDate, true);
+        lh.setUint32(14, crc, true);
+        lh.setUint32(18, comp.length, true);
+        lh.setUint32(22, raw.length, true);
+        lh.setUint16(26, nameBytes.length, true);
+        lh.setUint16(28, 0, true);
+        parts.push(new Uint8Array(lh.buffer), nameBytes, comp);
+
+        var cd = new DataView(new ArrayBuffer(46));
+        cd.setUint32(0, 0x02014b50, true);
+        cd.setUint16(4, 20, true);
+        cd.setUint16(6, 20, true);
+        cd.setUint16(8, 0x0800, true);
+        cd.setUint16(10, method, true);
+        cd.setUint16(12, dosTime, true);
+        cd.setUint16(14, dosDate, true);
+        cd.setUint32(16, crc, true);
+        cd.setUint32(20, comp.length, true);
+        cd.setUint32(24, raw.length, true);
+        cd.setUint16(28, nameBytes.length, true);
+        cd.setUint16(30, 0, true);
+        cd.setUint16(32, 0, true);
+        cd.setUint16(34, 0, true);
+        cd.setUint16(36, 0, true);
+        cd.setUint32(38, 0, true);
+        cd.setUint32(42, offset, true);
+        central.push(new Uint8Array(cd.buffer), nameBytes);
+
+        offset += 30 + nameBytes.length + comp.length;
+        return step(i + 1);
+      });
+    }
+
+    return step(0).then(function () {
+      var cdSize = 0, i;
+      for (i = 0; i < central.length; i++) cdSize += central[i].length;
+      var eo = new DataView(new ArrayBuffer(22));
+      eo.setUint32(0, 0x06054b50, true);
+      eo.setUint16(4, 0, true);
+      eo.setUint16(6, 0, true);
+      eo.setUint16(8, files.length, true);
+      eo.setUint16(10, files.length, true);
+      eo.setUint32(12, cdSize, true);
+      eo.setUint32(16, offset, true);
+      eo.setUint16(20, 0, true);
+      return new Blob(parts.concat(central, [new Uint8Array(eo.buffer)]), { type: mime });
+    });
+  }
+
+  var XMLDECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n';
+  var RELS_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
+  var OD_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+  // ---------- CSV ----------
+  function csvCell(v) {
+    var s = (v == null) ? '' : String(v);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function exportCsv(o) {
+    var matrix = [o.headers].concat(o.rows);
+    var csv = matrix.map(function (r) { return r.map(csvCell).join(','); }).join('\r\n');
+    // Leading BOM so Excel detects UTF-8 instead of the ANSI codepage.
+    var blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    download(blob, safeName(o.name) + '_' + stamp() + '.csv');
+    return Promise.resolve();
+  }
+
+  // ---------- Word (.docx) ----------
+  function wRun(text, o) {
+    o = o || {};
+    var rPr = '<w:rPr><w:rFonts w:ascii="Segoe UI" w:hAnsi="Segoe UI" w:cs="Segoe UI"/>'
+            + (o.bold ? '<w:b/>' : '')
+            + (o.color ? '<w:color w:val="' + o.color + '"/>' : '')
+            + '<w:sz w:val="' + (o.sz || 18) + '"/><w:szCs w:val="' + (o.sz || 18) + '"/></w:rPr>';
+    return '<w:r>' + rPr + '<w:t xml:space="preserve">' + xml(text) + '</w:t></w:r>';
+  }
+
+  function wPara(text, o) {
+    o = o || {};
+    var pPr = '<w:pPr>'
+            + '<w:spacing w:before="' + (o.before || 0) + '" w:after="' + (o.after == null ? 60 : o.after)
+            + '" w:line="240" w:lineRule="auto"/>'
+            + (o.align ? '<w:jc w:val="' + o.align + '"/>' : '')
+            + '</w:pPr>';
+    return '<w:p>' + pPr + wRun(text, o) + '</w:p>';
+  }
+
+  function wCell(text, width, o) {
+    o = o || {};
+    return '<w:tc><w:tcPr><w:tcW w:w="' + width + '" w:type="dxa"/>'
+         + (o.fill ? '<w:shd w:val="clear" w:color="auto" w:fill="' + o.fill + '"/>' : '')
+         + '<w:vAlign w:val="center"/></w:tcPr>'
+         + wPara(text, { bold: o.bold, color: o.color, sz: o.sz, align: o.align, after: 20, before: 20 })
+         + '</w:tc>';
+  }
+
+  function docxParts(o) {
+    var headers = o.headers, rows = o.rows;
+    var wide = headers.length > 8;
+    var sz = wide ? 15 : 17;                       // half-points (7.5pt / 8.5pt)
+    var cols = distribute(14400, colWeights(headers, rows));   // landscape letter text width
+    var num = numericCols(headers, rows);
+
+    var border = function (tag) {
+      return '<w:' + tag + ' w:val="single" w:sz="4" w:space="0" w:color="' + LINE + '"/>';
+    };
+
+    var body = ''
+      + wPara(o.title, { bold: true, sz: 36, color: ACCENT_DK, after: 40 })
+      + (o.subtitle ? wPara(o.subtitle, { sz: 18, color: MUTED, after: 20 }) : '')
+      + wPara('Generated ' + nowText() + '  ·  ' + rows.length.toLocaleString('en-US')
+              + ' row' + (rows.length === 1 ? '' : 's'), { sz: 16, color: MUTED, after: 160 })
+      + (o.note ? wPara(o.note, { sz: 16, color: MUTED, after: 160 }) : '');
+
+    var tbl = '<w:tbl><w:tblPr><w:tblW w:w="14400" w:type="dxa"/>'
+      + '<w:tblBorders>' + border('top') + border('left') + border('bottom')
+      + border('right') + border('insideH') + border('insideV') + '</w:tblBorders>'
+      + '<w:tblLayout w:type="fixed"/>'
+      + '<w:tblCellMar><w:top w:w="20" w:type="dxa"/><w:left w:w="70" w:type="dxa"/>'
+      + '<w:bottom w:w="20" w:type="dxa"/><w:right w:w="70" w:type="dxa"/></w:tblCellMar>'
+      + '</w:tblPr><w:tblGrid>';
+    cols.forEach(function (w) { tbl += '<w:gridCol w:w="' + w + '"/>'; });
+    tbl += '</w:tblGrid>';
+
+    // Header row, repeated at the top of every page.
+    tbl += '<w:tr><w:trPr><w:tblHeader/><w:cantSplit/></w:trPr>';
+    headers.forEach(function (h, i) {
+      tbl += wCell(h, cols[i], { bold: true, fill: ACCENT, color: 'FFFFFF', sz: sz,
+                                 align: num[i] ? 'right' : 'left' });
+    });
+    tbl += '</w:tr>';
+
+    rows.forEach(function (r, ri) {
+      tbl += '<w:tr><w:trPr><w:cantSplit/></w:trPr>';
+      headers.forEach(function (h, i) {
+        tbl += wCell(r[i] == null ? '' : r[i], cols[i],
+                     { sz: sz, fill: (ri % 2) ? BAND : null, align: num[i] ? 'right' : 'left' });
+      });
+      tbl += '</w:tr>';
+    });
+    tbl += '</w:tbl>';
+
+    var sect = '<w:sectPr><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/>'
+      + '<w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"'
+      + ' w:header="360" w:footer="360" w:gutter="0"/></w:sectPr>';
+
+    var doc = XMLDECL
+      + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:body>' + body + tbl + '<w:p><w:pPr><w:spacing w:after="0"/></w:pPr></w:p>'
+      + sect + '</w:body></w:document>';
+
+    var ct = XMLDECL
+      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '</Types>';
+
+    var rels = XMLDECL
+      + '<Relationships xmlns="' + RELS_NS + '">'
+      + '<Relationship Id="rId1" Type="' + OD_REL + '/officeDocument" Target="word/document.xml"/>'
+      + '</Relationships>';
+
+    return [
+      { name: '[Content_Types].xml', data: ct },
+      { name: '_rels/.rels', data: rels },
+      { name: 'word/document.xml', data: doc }
+    ];
+  }
+
+  function buildDocx(o) {
+    return zipBlob(docxParts(o),
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  }
+
+  function exportWord(o) {
+    if (o.rows.length > WORD_WARN_ROWS &&
+        !confirm(o.rows.length.toLocaleString('en-US') + ' rows is a very large Word table and may take '
+                 + 'a while to open.\n\nExport anyway? (Cancel, then narrow the filters or use the Excel '
+                 + 'export for a data set this size.)')) {
+      return Promise.resolve();
+    }
+    return buildDocx(o).then(function (blob) {
+      download(blob, safeName(o.name) + '_' + stamp() + '.docx');
+    });
+  }
+
+  // ---------- PowerPoint (.pptx) ----------
+  var SLIDE_W = 12192000, SLIDE_H = 6858000;      // 13.333in x 7.5in (16:9)
+  var MARGIN = 457200;                            // 0.5in
+  var TABLE_W = SLIDE_W - 2 * MARGIN;
+  var TABLE_Y = 1230000;
+  var ROW_H = 219456;                             // 0.24in
+  var PPT_ROWS_PER_SLIDE = 18;
+
+  function aRun(text, o) {
+    o = o || {};
+    return '<a:r><a:rPr lang="en-US" sz="' + (o.sz || 1000) + '"' + (o.bold ? ' b="1"' : '') + '>'
+         + '<a:solidFill><a:srgbClr val="' + (o.color || '24292F') + '"/></a:solidFill>'
+         + '<a:latin typeface="Segoe UI"/></a:rPr>'
+         + '<a:t>' + xml(text) + '</a:t></a:r>';
+  }
+
+  function aPara(text, o) {
+    o = o || {};
+    return '<a:p><a:pPr algn="' + (o.align || 'l') + '"/>' + aRun(text, o) + '</a:p>';
+  }
+
+  function textBox(id, name, x, y, cx, cy, paras) {
+    return '<p:sp><p:nvSpPr><p:cNvPr id="' + id + '" name="' + xml(name) + '"/>'
+         + '<p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+         + '<p:spPr><a:xfrm><a:off x="' + x + '" y="' + y + '"/>'
+         + '<a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm>'
+         + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
+         + '<p:txBody><a:bodyPr wrap="square" rtlCol="0" anchor="t"/><a:lstStyle/>'
+         + paras + '</p:txBody></p:sp>';
+  }
+
+  function tblCell(text, o) {
+    o = o || {};
+    var ln = function (tag) {
+      return '<a:' + tag + ' w="6350" cap="flat" cmpd="sng" algn="ctr">'
+           + '<a:solidFill><a:srgbClr val="' + LINE + '"/></a:solidFill>'
+           + '<a:prstDash val="solid"/></a:' + tag + '>';
+    };
+    return '<a:tc><a:txBody><a:bodyPr/><a:lstStyle/>'
+         + aPara(text, { sz: o.sz, bold: o.bold, color: o.color, align: o.align })
+         + '</a:txBody>'
+         + '<a:tcPr marL="45720" marR="45720" marT="18288" marB="18288" anchor="ctr">'
+         + ln('lnL') + ln('lnR') + ln('lnT') + ln('lnB')
+         + '<a:solidFill><a:srgbClr val="' + (o.fill || 'FFFFFF') + '"/></a:solidFill>'
+         + '</a:tcPr></a:tc>';
+  }
+
+  function tableFrame(id, headers, rows, cols, sz, startBand) {
+    var s = '<p:graphicFrame><p:nvGraphicFramePr>'
+      + '<p:cNvPr id="' + id + '" name="Table"/>'
+      + '<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>'
+      + '<p:nvPr/></p:nvGraphicFramePr>'
+      + '<p:xfrm><a:off x="' + MARGIN + '" y="' + TABLE_Y + '"/>'
+      + '<a:ext cx="' + TABLE_W + '" cy="' + (ROW_H * (rows.length + 1)) + '"/></p:xfrm>'
+      + '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
+      + '<a:tbl><a:tblPr firstRow="1"/><a:tblGrid>';
+    cols.forEach(function (w) { s += '<a:gridCol w="' + w + '"/>'; });
+    s += '</a:tblGrid>';
+
+    var num = numericCols(headers, rows);
+
+    s += '<a:tr h="' + ROW_H + '">';
+    headers.forEach(function (h, i) {
+      s += tblCell(h, { bold: true, fill: ACCENT, color: 'FFFFFF', sz: sz,
+                        align: num[i] ? 'r' : 'l' });
+    });
+    s += '</a:tr>';
+
+    rows.forEach(function (r, ri) {
+      s += '<a:tr h="' + ROW_H + '">';
+      headers.forEach(function (h, i) {
+        s += tblCell(r[i] == null ? '' : r[i],
+                     { sz: sz, fill: ((ri + startBand) % 2) ? BAND : 'FFFFFF',
+                       align: num[i] ? 'r' : 'l' });
+      });
+      s += '</a:tr>';
+    });
+
+    return s + '</a:tbl></a:graphicData></a:graphic></p:graphicFrame>';
+  }
+
+  function slideXml(shapes) {
+    return XMLDECL
+      + '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+      + ' xmlns:r="' + OD_REL + '"'
+      + ' xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+      + '<p:cSld><p:spTree>'
+      + '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+      + '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/>'
+      + '<a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>'
+      + shapes
+      + '</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>';
+  }
+
+  function emptyTree() {
+    return '<p:spTree>'
+      + '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+      + '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/>'
+      + '<a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>'
+      + '</p:spTree>';
+  }
+
+  function themeXml() {
+    var accents = ['4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47'];
+    var clr = '';
+    accents.forEach(function (hex, i) {
+      clr += '<a:accent' + (i + 1) + '><a:srgbClr val="' + hex + '"/></a:accent' + (i + 1) + '>';
+    });
+    var solid = '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>';
+    var line = '<a:ln w="6350" cap="flat" cmpd="sng" algn="ctr">' + solid
+             + '<a:prstDash val="solid"/></a:ln>';
+    var eff = '<a:effectStyle><a:effectLst/></a:effectStyle>';
+    return XMLDECL
+      + '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office">'
+      + '<a:themeElements>'
+      + '<a:clrScheme name="Office">'
+      + '<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>'
+      + '<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>'
+      + '<a:dk2><a:srgbClr val="44546A"/></a:dk2>'
+      + '<a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>'
+      + clr
+      + '<a:hlink><a:srgbClr val="0563C1"/></a:hlink>'
+      + '<a:folHlink><a:srgbClr val="954F72"/></a:folHlink>'
+      + '</a:clrScheme>'
+      + '<a:fontScheme name="Office">'
+      + '<a:majorFont><a:latin typeface="Segoe UI"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>'
+      + '<a:minorFont><a:latin typeface="Segoe UI"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>'
+      + '</a:fontScheme>'
+      + '<a:fmtScheme name="Office">'
+      + '<a:fillStyleLst>' + solid + solid + solid + '</a:fillStyleLst>'
+      + '<a:lnStyleLst>' + line + line + line + '</a:lnStyleLst>'
+      + '<a:effectStyleLst>' + eff + eff + eff + '</a:effectStyleLst>'
+      + '<a:bgFillStyleLst>' + solid + solid + solid + '</a:bgFillStyleLst>'
+      + '</a:fmtScheme>'
+      + '</a:themeElements></a:theme>';
+  }
+
+  function pptxParts(o) {
+    var headers = o.headers;
+    var all = o.rows;
+    var truncated = all.length > PPT_MAX_ROWS;
+    var rows = truncated ? all.slice(0, PPT_MAX_ROWS) : all;
+    var sz = o.fontSz || (headers.length > 10 ? 800 : (headers.length > 7 ? 900 : 1000));
+    var perSlide = o.rowsPerSlide || PPT_ROWS_PER_SLIDE;
+    var cols = distribute(TABLE_W, colWeights(headers, rows));
+
+    // --- title slide ---
+    var titleShapes =
+        textBox(2, 'Title', MARGIN, 2057400, TABLE_W, 900000,
+                aPara(o.title, { sz: 3200, bold: true, color: ACCENT_DK }))
+      + textBox(3, 'Subtitle', MARGIN, 3000000, TABLE_W, 1500000,
+                (o.subtitle ? aPara(o.subtitle, { sz: 1600, color: ACCENT }) : '')
+                + aPara('Generated ' + nowText(), { sz: 1200, color: MUTED })
+                + aPara(all.length.toLocaleString('en-US') + ' row'
+                        + (all.length === 1 ? '' : 's')
+                        + (truncated ? '  ·  showing the first '
+                           + PPT_MAX_ROWS.toLocaleString('en-US')
+                           + ' in this deck (use the Excel export for the full set)' : ''),
+                        { sz: 1200, color: truncated ? 'B54708' : MUTED })
+                + (o.note ? aPara(o.note, { sz: 1200, color: MUTED }) : ''));
+
+    var slides = [slideXml(titleShapes)];
+
+    var pages = Math.max(1, Math.ceil(rows.length / perSlide));
+    for (var p = 0; p < pages; p++) {
+      var chunk = rows.slice(p * perSlide, (p + 1) * perSlide);
+      var heading = o.title + (pages > 1 ? '  (' + (p + 1) + ' of ' + pages + ')' : '');
+      var shapes =
+          textBox(2, 'Heading', MARGIN, 320000, TABLE_W, 500000,
+                  aPara(heading, { sz: 1800, bold: true, color: ACCENT_DK }))
+        + textBox(3, 'Sub', MARGIN, 780000, TABLE_W, 340000,
+                  aPara((o.subtitle || '') +
+                        (chunk.length ? '   ·   rows ' + (p * perSlide + 1)
+                         + '–' + (p * perSlide + chunk.length) : ''),
+                        { sz: 1000, color: MUTED }))
+        + tableFrame(4, headers, chunk, cols, sz, p * perSlide);
+      slides.push(slideXml(shapes));
+    }
+
+    // --- package ---
+    var n = slides.length;
+    var ct = XMLDECL
+      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>'
+      + '<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>'
+      + '<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>'
+      + '<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>';
+    for (var i = 1; i <= n; i++) {
+      ct += '<Override PartName="/ppt/slides/slide' + i + '.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>';
+    }
+    ct += '</Types>';
+
+    var rootRels = XMLDECL + '<Relationships xmlns="' + RELS_NS + '">'
+      + '<Relationship Id="rId1" Type="' + OD_REL + '/officeDocument" Target="ppt/presentation.xml"/>'
+      + '</Relationships>';
+
+    var presRels = XMLDECL + '<Relationships xmlns="' + RELS_NS + '">'
+      + '<Relationship Id="rId1" Type="' + OD_REL + '/slideMaster" Target="slideMasters/slideMaster1.xml"/>';
+    for (var j = 1; j <= n; j++) {
+      presRels += '<Relationship Id="rId' + (j + 1) + '" Type="' + OD_REL
+        + '/slide" Target="slides/slide' + j + '.xml"/>';
+    }
+    presRels += '<Relationship Id="rId' + (n + 2) + '" Type="' + OD_REL
+      + '/theme" Target="theme/theme1.xml"/></Relationships>';
+
+    var sldIds = '';
+    for (var k = 1; k <= n; k++) {
+      sldIds += '<p:sldId id="' + (255 + k) + '" r:id="rId' + (k + 1) + '"/>';
+    }
+    var pres = XMLDECL
+      + '<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+      + ' xmlns:r="' + OD_REL + '"'
+      + ' xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+      + '<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>'
+      + '<p:sldIdLst>' + sldIds + '</p:sldIdLst>'
+      + '<p:sldSz cx="' + SLIDE_W + '" cy="' + SLIDE_H + '"/>'
+      + '<p:notesSz cx="6858000" cy="9144000"/>'
+      + '</p:presentation>';
+
+    var master = XMLDECL
+      + '<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+      + ' xmlns:r="' + OD_REL + '"'
+      + ' xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+      + '<p:cSld>' + emptyTree() + '</p:cSld>'
+      + '<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2"'
+      + ' accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6"'
+      + ' hlink="hlink" folHlink="folHlink"/>'
+      + '<p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>'
+      + '</p:sldMaster>';
+
+    var masterRels = XMLDECL + '<Relationships xmlns="' + RELS_NS + '">'
+      + '<Relationship Id="rId1" Type="' + OD_REL + '/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>'
+      + '<Relationship Id="rId2" Type="' + OD_REL + '/theme" Target="../theme/theme1.xml"/>'
+      + '</Relationships>';
+
+    var layout = XMLDECL
+      + '<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+      + ' xmlns:r="' + OD_REL + '"'
+      + ' xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
+      + ' type="blank" preserve="1">'
+      + '<p:cSld name="Blank">' + emptyTree() + '</p:cSld>'
+      + '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>';
+
+    var layoutRels = XMLDECL + '<Relationships xmlns="' + RELS_NS + '">'
+      + '<Relationship Id="rId1" Type="' + OD_REL + '/slideMaster" Target="../slideMasters/slideMaster1.xml"/>'
+      + '</Relationships>';
+
+    var slideRels = XMLDECL + '<Relationships xmlns="' + RELS_NS + '">'
+      + '<Relationship Id="rId1" Type="' + OD_REL + '/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>'
+      + '</Relationships>';
+
+    var files = [
+      { name: '[Content_Types].xml', data: ct },
+      { name: '_rels/.rels', data: rootRels },
+      { name: 'ppt/presentation.xml', data: pres },
+      { name: 'ppt/_rels/presentation.xml.rels', data: presRels },
+      { name: 'ppt/slideMasters/slideMaster1.xml', data: master },
+      { name: 'ppt/slideMasters/_rels/slideMaster1.xml.rels', data: masterRels },
+      { name: 'ppt/slideLayouts/slideLayout1.xml', data: layout },
+      { name: 'ppt/slideLayouts/_rels/slideLayout1.xml.rels', data: layoutRels },
+      { name: 'ppt/theme/theme1.xml', data: themeXml() }
+    ];
+    slides.forEach(function (s, i) {
+      files.push({ name: 'ppt/slides/slide' + (i + 1) + '.xml', data: s });
+      files.push({ name: 'ppt/slides/_rels/slide' + (i + 1) + '.xml.rels', data: slideRels });
+    });
+    return files;
+  }
+
+  function buildPptx(o) {
+    return zipBlob(pptxParts(o),
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  }
+
+  function exportPpt(o) {
+    if (o.rows.length > PPT_MAX_ROWS &&
+        !confirm(o.rows.length.toLocaleString('en-US') + ' rows would make an unreadable deck.\n\n'
+                 + 'Continue with the first ' + PPT_MAX_ROWS.toLocaleString('en-US')
+                 + ' rows? (Cancel, then narrow the filters, or use the Excel export for '
+                 + 'the whole data set.)')) {
+      return Promise.resolve();
+    }
+    return buildPptx(o).then(function (blob) {
+      download(blob, safeName(o.name) + '_' + stamp() + '.pptx');
+    });
+  }
+
+  var HANDLERS = { csv: exportCsv, word: exportWord, ppt: exportPpt };
+
+  function run(fmt, o) {
+    var fn = HANDLERS[fmt];
+    if (!fn) return Promise.resolve();
+    if (!o || !o.headers) return Promise.resolve();
+    o.rows = o.rows || [];
+    if (!o.rows.length && fmt !== 'csv') {
+      alert('Nothing to export - no rows match the current filters.');
+      return Promise.resolve();
+    }
+    return fn(o);
+  }
+
+  // Wire the split button + dropdown. getExport(fmt) supplies the current view;
+  // it receives the chosen format so a report can tune headers per format.
+  function wire(btnId, menuId, getExport) {
+    var btn = document.getElementById(btnId);
+    var menu = document.getElementById(menuId);
+    if (!btn || !menu) return;
+
+    var close = function () { menu.classList.remove('open'); };
+    // The menu hangs off the button's right edge by default, but the button can
+    // wrap to the left of a flex row - flip alignment if that clips it.
+    var open = function () {
+      menu.style.left = '';
+      menu.style.right = '';
+      menu.classList.add('open');
+      var r = menu.getBoundingClientRect();
+      if (r.left < 8) { menu.style.left = '0'; menu.style.right = 'auto'; }
+      else if (r.right > window.innerWidth - 8) { menu.style.right = '0'; menu.style.left = 'auto'; }
+    };
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (menu.classList.contains('open')) close(); else open();
+    });
+    document.addEventListener('click', close);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+
+    menu.addEventListener('click', function (e) {
+      var t = e.target.closest ? e.target.closest('button[data-fmt]') : null;
+      if (!t) return;
+      e.stopPropagation();
+      close();
+      var fmt = t.dataset.fmt;
+      btn.classList.add('exp-busy');
+      var label = btn.innerHTML;
+      btn.innerHTML = 'Building…';
+      Promise.resolve()
+        .then(function () { return run(fmt, getExport(fmt)); })
+        .catch(function (err) {
+          console.error(err);
+          alert('Export failed: ' + (err && err.message ? err.message : err));
+        })
+        .then(function () {
+          btn.classList.remove('exp-busy');
+          btn.innerHTML = label;
+        });
+    });
+  }
+
+  return { wire: wire, run: run, buildDocx: buildDocx, buildPptx: buildPptx,
+           _docxParts: docxParts, _pptxParts: pptxParts };
+})();
+
+RptExport.wire('btn-export', 'exp-menu', fmt_ => ({
+  name: "DHTDeliveryStatus", title: "DHT Delivery Status Board",
+  subtitle: (filt ? LABEL[filt] : "All clients") + " - as of " + DATA.as_of.slice(0,16).replace("T"," "),
+  headers: COLS.map(c => c[1]),
+  rows: rows().map(r => COLS.map(([k]) => k === "status" ? (LABEL[r.status] || r.status) : String(fmt(k, r[k])))),
+  note: "Source: DHTStats (TRGUTIL10) via dht-delivery skill"
+}));
+render();
+</script></body></html>
