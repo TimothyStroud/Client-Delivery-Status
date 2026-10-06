@@ -1,8 +1,8 @@
 {
  "qualchoice": "b16fce02badb9178f4715c65523669b198ea92ed",
  "centenerx": "0eff7b9a9f9b16d156892d530cea1557c5bf6838",
- "fidelisrx": "3386962d54451f99902f87421e0228c93093ac2a",
- "centenemed": "4db46055ad9df3ebc72ef7dd9fb5f0b8784a8cf8",
+ "fidelisrx": "7f4bfb970b20868914805e1534d61ef2fa7650e1",
+ "centenemed": "a1916d455a107f4dafd774d4ae6bbf5e4d183e09",
  "fidelismed": "f9ddaa96a05816549467c4e54e4710633f842b66",
  "healthnet": "833318b536205a14598b9d9305355fb972c8ae7d",
  "wellcarerx": "4ab312f359acfa5290bb517714458449aaf4fc76",
@@ -11,6 +11,13 @@
   "qualchoice": {
    "10741": "2026-10-06T04:44:41.05",
    "10742": "2026-10-06T04:49:41"
+  },
+  "fidelisrx": {
+   "10272": "2026-10-05T15:42:28.94",
+   "10273": "2026-10-05T16:54:29.713"
+  },
+  "centenemed": {
+   "11369": "2026-10-05T00:18:13.877"
   }
  }
 }
