@@ -2960,48 +2960,6 @@ def fetch_ramp_queue(since=None):
     return rows
 
 
-S3_TAB_START = date(2026, 9, 1)   # S3 job tabs start September 2026 (per user 2026-10-06)
-
-
-def fetch_s3_jobs(since=S3_TAB_START):
-    """Finished RAMP S3Upload / S3Download job runs (by EndDate) for the S3 tabs."""
-    q = (
-        "SET NOCOUNT ON; "
-        "SELECT j.JobName, q.Status, "
-        "       CONVERT(varchar(19), q.StartDate, 120), "
-        "       CONVERT(varchar(19), q.EndDate, 120) "
-        "FROM [RAMP].[ramp].[Queue] q JOIN [RAMP].[config].[Job] j ON j.JobId = q.JobId "
-        "WHERE (j.JobName LIKE '%[_]S3Upload' OR j.JobName LIKE '%[_]S3Download') "
-        f"  AND q.EndDate >= '{since.isoformat()}' "
-        "ORDER BY q.EndDate"
-    )
-    SEP = ""
-    r = subprocess.run(
-        ["sqlcmd", "-S", SQL_SERVER, "-d", "RAMP", "-E", "-Q", q,
-         "-W", "-s", SEP, "-h", "-1"],
-        capture_output=True, text=True, check=False,
-    )
-    rows = []
-    for line in r.stdout.splitlines():
-        parts = line.split(SEP)
-        if len(parts) != 4:
-            continue
-        name, status, start, end = (x.strip() for x in parts)
-        try:
-            end_dt = datetime.strptime(end, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            continue
-        try:
-            start_dt = datetime.strptime(start, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            start_dt = None
-        kind = "Download" if name.endswith("_S3Download") else "Upload"
-        client = name.rsplit("_S3", 1)[0]
-        rows.append({"job": name, "client": client, "kind": kind,
-                     "status": status, "start": start_dt, "end": end_dt})
-    return rows
-
-
 def fetch_ramp_snaps(since=None):
     """Snap completions from the RAMP SnapQueueStatus endpoint (full payload),
     trimmed by End date. `since` (a date) sets the cutoff so the report can
@@ -6959,46 +6917,7 @@ def _render_week_card_html(wk, week_no, sections, today, holidays):
     )
 
 
-def _render_s3_panel_html(year, month, s3_rows, today):
-    """One month of S3 jobs: a block per finish day, one row per run."""
-    import calendar as _cal_mod
-    rows = [r for r in s3_rows if r["end"].year == year and r["end"].month == month]
-    if not rows:
-        return "<p class='key'>No S3 jobs finished this month yet.</p>"
-    n_up = sum(1 for r in rows if r["kind"] == "Upload")
-    out = [f"<p class='key'>{len(rows)} S3 job runs finished — "
-           f"{n_up} upload, {len(rows) - n_up} download. Source: RAMP queue (by finish time).</p>"]
-    by_day = {}
-    for r in rows:
-        by_day.setdefault(r["end"].date(), []).append(r)
-    for d in sorted(by_day, reverse=True):
-        runs = sorted(by_day[d], key=lambda r: r["end"])
-        cls = " s3-today" if d == today else ""
-        out.append(f"<div class='week-label{cls}'>{d:%a} {d.month}/{d.day}"
-                   f" <span class='s3-count'>({len(runs)})</span></div>")
-        out.append("<table class='grid s3'><colgroup><col style='width:70px'>"
-                   "<col style='width:190px'><col style='width:90px'>"
-                   "<col style='width:230px'><col style='width:90px'><col style='width:70px'>"
-                   "</colgroup><tr><th>Finished</th><th>Client</th><th>Type</th>"
-                   "<th>Job</th><th>Status</th><th>Run time</th></tr>")
-        for r in runs:
-            dur = ""
-            if r["start"]:
-                mins = max(0, int((r["end"] - r["start"]).total_seconds() // 60))
-                dur = f"{mins // 60}h {mins % 60:02d}m" if mins >= 60 else f"{mins}m"
-            st_cls = "s3-ok" if r["status"] == "Successful" else "alert"
-            out.append(
-                f"<tr><td class='marker'>{r['end']:%I:%M %p}</td>"
-                f"<td class='name client-cell' data-client='{_html_escape(r['client'])}'>{_html_escape(r['client'])}</td>"
-                f"<td class='marker s3-{r['kind'].lower()}'>{'⬆ Upload' if r['kind'] == 'Upload' else '⬇ Download'}</td>"
-                f"<td>{_html_escape(r['job'])}</td>"
-                f"<td class='marker {st_cls}'>{_html_escape(r['status'])}</td>"
-                f"<td class='marker'>{dur}</td></tr>")
-        out.append("</table>")
-    return "".join(out)
-
-
-def build_dashboard_html(month_packs, today, current_month_name, s3_rows=None):
+def build_dashboard_html(month_packs, today, current_month_name):
     """Render the dashboard HTML.
     month_packs: list of dicts {name, year, month, sections, weeks, holidays}
     """
@@ -7022,20 +6941,6 @@ def build_dashboard_html(month_packs, today, current_month_name, s3_rows=None):
             f'<section class="month-panel{active}" id="{tab_id}">'
             f'  {"".join(week_blocks)}'
             f'</section>')
-
-    # S3 Upload/Download tabs — one per month from S3_TAB_START through today.
-    if s3_rows is not None:
-        y, m = S3_TAB_START.year, S3_TAB_START.month
-        while (y, m) <= (today.year, today.month):
-            tab_id = f"tab-s3-{y}-{m:02d}"
-            tabs_html.append(
-                f'<button class="tab s3-tab" data-target="{tab_id}">'
-                f'S3 {_cal_mod.month_abbr[m]} {y}</button>')
-            panels_html.append(
-                f'<section class="month-panel" id="{tab_id}">'
-                f'<div class="week-label">S3 Jobs — {_cal_mod.month_name[m]} {y}</div>'
-                f'{_render_s3_panel_html(y, m, s3_rows, today)}</section>')
-            y, m = (y + 1, 1) if m == 12 else (y, m + 1)
 
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
     title = "Client Delivery Status"
@@ -7142,15 +7047,6 @@ td.marker.link a { color: var(--alert-dark); font-weight: 700; text-decoration: 
 /* Search: dim all client-name cells, then re-emphasize the matched ones
    only. Per user 2026-06-03: highlight just the client name, not the
    whole row. */
-nav.tabs button.tab.s3-tab { color: #6B3FA0; }
-nav.tabs button.tab.s3-tab.active { background: #6B3FA0; color: #fff; }
-table.grid.s3 td { white-space: nowrap; }
-table.grid.s3 tr:nth-child(odd) td { background: #F7F9FC; }
-td.s3-ok { color: #1E6B30; font-weight: 600; }
-td.s3-upload { color: #2C5F8A; font-weight: 600; }
-td.s3-download { color: #6B3FA0; font-weight: 600; }
-.week-label.s3-today { color: #f08c00; }
-.s3-count { font-weight: 400; color: #5b6776; font-size: 12px; }
 body.search-active td.client-cell { opacity: 0.25; }
 body.search-active td.client-cell.match-cell { opacity: 1; background: #fffbe8; font-weight: 600; }
 """
@@ -7504,14 +7400,7 @@ def main():
     # sticky toolbar/tabs. Same color codes and weekly-stacked layout as the
     # .xlsx, just rendered in the browser. Sits alongside the .xlsx.
     try:
-        try:
-            s3_rows = fetch_s3_jobs()
-            print(f"[info] S3 job runs since {S3_TAB_START}: {len(s3_rows)}")
-        except Exception as e:
-            print(f"[warn] S3 job fetch failed: {e}")
-            s3_rows = None
-        html_str = build_dashboard_html(month_packs, today, current_tab_name,
-                                        s3_rows=s3_rows)
+        html_str = build_dashboard_html(month_packs, today, current_tab_name)
         html_paths = [
             os.path.join(OUTPUT_DIR, "ClientDeliveryStatus.html"),
             os.path.join(LOCAL_COPY_DIR, "ClientDeliveryStatus.html"),
