@@ -16,7 +16,7 @@ Webhook URL lives OFF the git repo: H:\\slack_wf_centene_wellcare_updates.txt.
 POST body key "Text"; Workflow Builder renders :emoji: only (no bold/code).
 """
 import sys, os, re, json, hashlib, subprocess, urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 BASE = r'C:\Users\tls2\.claude\projects\H--'
 URL_FILE = r'H:\slack_wf_centene_wellcare_updates.txt'
@@ -144,6 +144,121 @@ def job_line(name, j):
     return f"{icon} {name} - {st}\n{det}"
 
 
+# ---- SQL Agent step + ETA (Job Activity Monitor), modeled on ramp_aetnahrp_status_digest
+# The RAMP queue's JobXML names the Agent job each task drives:
+#   <task taskname="SqlAgentMonitor" status=...><jobname server="ETL4">ETL WellCare MasterLoad</jobname>
+STALE_ACTIVITY_DAYS = 4
+STEP_PCT = 80   # step overruns are one-sided, so p80 (not median), as in the Aetna digests
+
+
+def agent_sql(server, query):
+    try:
+        out = subprocess.run(['sqlcmd', '-S', server, '-d', 'msdb', '-E', '-W', '-h', '-1',
+                              '-s', '|', '-Q', 'SET NOCOUNT ON; ' + query],
+                             capture_output=True, text=True, timeout=120)
+    except Exception:
+        return []
+    return [[c.strip() for c in l.split('|')] for l in out.stdout.splitlines()
+            if l.strip() and not set(l.strip()) <= set('-|')]
+
+
+def agent_targets(jobid):
+    """[(server, agent_job)] from the newest queue entry's SqlAgentMonitor tasks,
+    not-yet-complete tasks first (the one the RAMP job is waiting on now)."""
+    try:  # -y 0: untruncated nvarchar(max) (default display width cuts the XML at 256)
+        xml = subprocess.run(['sqlcmd', '-S', RAMP_SQL_SERVER, '-d', 'RAMP', '-E', '-y', '0', '-Q',
+                              f"SET NOCOUNT ON; SELECT TOP 1 CAST(JobXML AS nvarchar(max)) FROM ramp.Queue "
+                              f"WHERE JobId = {int(jobid)} ORDER BY QueueId DESC"],
+                             capture_output=True, text=True, timeout=120).stdout
+    except Exception:
+        xml = ''
+    todo, done = [], []
+    for st, srv, nm in re.findall(r'<task[^>]*taskname="SqlAgentMonitor"[^>]*status="([^"]*)"[^>]*>'
+                                  r'.*?<jobname server="([^"]+)"[^>]*>([^<]+)</jobname>', xml):
+        srv = srv.upper() if srv.upper().startswith('TRG') else 'TRG' + srv.upper()
+        (done if st == 'complete' else todo).append((srv, nm.replace('&amp;', '&')))
+    return todo + done
+
+
+def _jid(name):
+    return f"DECLARE @jid uniqueidentifier=(SELECT job_id FROM msdb.dbo.sysjobs WHERE name=N'{name}'); "
+
+
+def live_step(server, name):
+    """(run_start, step_id, step_start) of the executing run, or None (sysjobactivity,
+    recency-guarded against orphaned rows left by Agent restarts)."""
+    r = agent_sql(server, _jid(name) +
+                  "SELECT TOP 1 CONVERT(varchar(19), ja.start_execution_date, 120), "
+                  "ISNULL(ja.last_executed_step_id, 0), CONVERT(varchar(19), ja.last_executed_step_date, 120) "
+                  "FROM msdb.dbo.sysjobactivity ja WITH (NOLOCK) WHERE ja.job_id=@jid "
+                  "AND ja.start_execution_date IS NOT NULL AND ja.stop_execution_date IS NULL "
+                  f"AND ja.start_execution_date > DATEADD(day,-{STALE_ACTIVITY_DAYS},GETDATE()) "
+                  "ORDER BY ja.session_id DESC, ja.start_execution_date DESC;")
+    for p in r:
+        if len(p) >= 3 and to_dt(p[0]):
+            # Agent stamps last_executed_step_id/_date when a step STARTS (verified 10/06 on
+            # ETL CenteneFidelisRx MasterLoad: step 5 @ 05:59:55); both stay NULL during step 1
+            sid = int(p[1]) if p[1].isdigit() and int(p[1]) else 1
+            return to_dt(p[0]), sid, (to_dt(p[2]) if sid > 1 else None) or to_dt(p[0])
+    return None
+
+
+def step_names(server, name):
+    return {int(p[0]): p[1] for p in agent_sql(server, _jid(name) +
+            "SELECT step_id, step_name FROM msdb.dbo.sysjobsteps WHERE job_id=@jid ORDER BY step_id;")
+            if len(p) >= 2 and p[0].isdigit()}
+
+
+def remaining_from_step(server, name, sid, days=120):
+    """Ascending seconds from the START of step sid to the END of the job over recent
+    successful runs (each step row bucketed to the next step_id=0 outcome row)."""
+    r = agent_sql(server, _jid(name) + f"DECLARE @sid int={int(sid)}; "
+                  "WITH h AS (SELECT instance_id, step_id, run_status, "
+                  "  (run_duration/10000)*3600+((run_duration/100)%100)*60+(run_duration%100) AS secs "
+                  "  FROM msdb.dbo.sysjobhistory WITH (NOLOCK) WHERE job_id=@jid "
+                  f"  AND run_date>=CONVERT(int,CONVERT(varchar(8),DATEADD(day,-{int(days)},GETDATE()),112))), "
+                  "o AS (SELECT instance_id, run_status FROM h WHERE step_id=0), "
+                  "t AS (SELECT h.step_id, h.secs, h.run_status, "
+                  "  (SELECT MIN(o.instance_id) FROM o WHERE o.instance_id>h.instance_id) AS rk "
+                  "  FROM h WHERE h.step_id>=@sid) "
+                  "SELECT SUM(t.secs) FROM t JOIN o ON o.instance_id=t.rk AND o.run_status=1 GROUP BY t.rk "
+                  "HAVING MIN(t.run_status)=1 AND MAX(CASE WHEN t.step_id=@sid THEN 1 ELSE 0 END)=1 ORDER BY 1;")
+    return sorted(int(p[0]) for p in r if p and p[0].isdigit())
+
+
+def _pct(vals, p):
+    import math
+    return vals[max(1, math.ceil(p / 100.0 * len(vals))) - 1] if vals else None
+
+
+def _eta_stamp(dt):
+    return dt.strftime('%I:%M%p' if dt.date() == datetime.now().date() else '%m/%d %I:%M%p').lower().lstrip('0')
+
+
+def agent_status(jobid):
+    """'SQL TRGETL4 ETL WellCare MasterLoad - Step 3/9 (name)\nETA ~4:10pm' for the
+    Agent job this RAMP job is driving, or '' when none of its Agent jobs is executing."""
+    for server, name in agent_targets(jobid):
+        live = live_step(server, name)
+        if not live:
+            continue
+        start, sid, sstart = live
+        names = step_names(server, name)
+        head = f"SQL {server} {name} - Step {sid}" + (f"/{max(names)}" if names else "")
+        if names.get(sid):
+            head += f" ({names[sid]})"
+        now = datetime.now()
+        if names and sid >= max(names):
+            return head + "\nfinal step - wrapping up"
+        in_step = (now - (sstart or start)).total_seconds()
+        possible = [d for d in remaining_from_step(server, name, sid) if d >= in_step]
+        if possible:
+            eta = (sstart or start) + timedelta(seconds=_pct(possible, STEP_PCT))
+            return head + ("\nETA ~" + _eta_stamp(eta) if eta > now else "\nwrapping up")
+        return head + f"\nrunning {hrs((now - start).total_seconds() / 60)} - longer than usual, still processing"
+    return ''
+
+
 def review_notes(names, jobs, queue):
     """Dashboard (Queue/List) entries for these jobs that are open but not moving."""
     now, notes = datetime.now(), []
@@ -190,6 +305,10 @@ def build(key, announced):
                 continue
             finished[str(jid)] = s
         block = job_line(nm, jobs.get(jid))
+        if not e:
+            ag = agent_status(jid)
+            if ag:
+                block += '\n' + ag
         if nm.endswith('Stage') and e:  # files only once this run's stage finished
             files = [f for f in staged_files(jid, sd)[0] if 'CLAIM' in f.upper()]
             if files:
