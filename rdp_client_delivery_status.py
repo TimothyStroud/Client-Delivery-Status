@@ -581,6 +581,10 @@ LOAD_NAME_REQUIRED = {
     # "Load Failure" (nor L) for the claims cycle. Per user: the failure is COBC,
     # not claims.
     "BCBSARRx":          ("masterload 0110 load",),
+    # BCBSAR (Medical): delivery = 'BCBSAR Medical 0110 Load'. Per user
+    # 2026-10-07: a completed 'BCBSAR Medical 0100 Stage' (10/6) painted L —
+    # only the Load job starting counts.
+    "BCBSAR":            ("medical 0110 load",),
     # OscarRx: main load is 'Oscar RX 0110 Load' (no "claim"/"masterload"
     # in the name). Added "rx 0110 load" 2026-05-20 per user:
     # "Oscar Rx 0110 Load is running and was not picked up."
