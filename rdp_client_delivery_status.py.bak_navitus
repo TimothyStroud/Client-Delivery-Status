@@ -386,6 +386,10 @@ WEEKLY_CLIENTS = {
     "Kaiser_NW":             ["Thursday"],
     "KaiserNCPareo":         ["Thursday"],
     "KaiserSCPareo":         ["Thursday"],
+    # NavitusPBMRx — new weekly implementation per user 2026-10-01: "Add ...
+    # as 'NavitusPBMRx' to the dashboard ... Add to the Weekly Section on
+    # Thursday's for now." Nothing before 10/1/26 renders (see BLANK_BEFORE).
+    "NavitusPBMRx":          ["Thursday"],
     "Premera":               ["Thursday"],
     "PrimePBMRx":            ["Thursday"],
     "UPMC":                  ["Thursday"],   # moved from Tuesday per user 2026-07-02
@@ -1885,9 +1889,6 @@ MONTHLY_STARTS_FROM = {
 # off 'United 0130 RX Post Snap' (JobId 10218).
 ADHOC_MONTHLY_SNAP_CLIENTS = {
     "UnitedRx(p)": "United 0130 RX Post Snap",
-    # NavitusPBMRx moved from Weekly (Thu) to Monthly AdHoc per user 2026-10-08:
-    # one row per month, dated to when its Load job finishes; never flagged missing.
-    "NavitusPBMRx": "NavitusPBMRx MasterLoad Eligibility 0110 Load",
 }
 
 # --- HealthNetCA claims backfill ---------------------------------------------
@@ -2199,6 +2200,11 @@ BLANK_BEFORE = {
     # BCBSMNRx — per user 2026-09-04: add the weekly client to Wednesdays
     # starting 9/9/26 forward; nothing before that date renders.
     "BCBSMNRx": date(2026, 9, 9),
+    # NavitusPBMRx — per user 2026-10-01: added "for now" on Thursdays. Its RAMP
+    # jobs (11496/11497) were only created in late September, so suppress every
+    # Thursday cell before 10/1/26 rather than pink-flagging weeks the client
+    # did not exist for.
+    "NavitusPBMRx": date(2026, 10, 1),
 }
 
 # Clients whose cells ON/AFTER a given date render empty (the standing row is
@@ -2237,6 +2243,7 @@ SNAP_ONLY_CLIENTS = {
     "MedImpactPBMRx", "PrimePBMRx",
     "AetnaSubro", "HumanaRx",
     "WPRxDMGCOBMining",
+    "NavitusPBMRx",              # weekly; ✓ on load completion (no cert yet)
     "BCBSKSMedAdv", "TuftsRx",   # snap weekly, cert monthly
     "NCState",                   # blocked from DHT cert by Chimera; track via snap
 }
@@ -2281,6 +2288,12 @@ SNAP_KIND_ONLY_CLIENTS = {
 LOAD_AS_DELIVERY_CLIENTS = {
     "OptumPBMRx", "HumanaRx", "BCBSKSMedAdv",
     "AetnaRCE", "AetnaRx", "NCStateAetna",
+    # NavitusPBMRx per user 2026-10-01: "Mark as 'L' for loading and then a
+    # checkmark once the Load job finishes." Unlike the other PBMRx feeds it is
+    # deliberately NOT in SNAP_KIND_ONLY_CLIENTS — there is no snap step yet, so
+    # the '0110 Load' completion IS the delivery. Membership here also makes
+    # is_loading_today load-only, so the quick '0100 Stage' never shows "L".
+    "NavitusPBMRx",
 }
 
 # Clients whose LOAD step uses a non-standard verb ("Pull" instead of "Load")
@@ -5906,17 +5919,13 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             status = (lr.get("Status") or "").strip().lower()
             if status.startswith("success") or status == "resolved":
                 fin = parse_dt(lr.get("EndDate")) or parse_dt(lr.get("StartDate"))
-                if fin:
+                if fin and fin.year == year and fin.month == month:
                     disp = fin.date()
                     if disp.weekday() == 5:
                         disp -= timedelta(days=1)
                     elif disp.weekday() == 6:
                         disp += timedelta(days=1)
-                    # Place on whichever tab actually renders the day (a boundary
-                    # week like Thu 10/1/26 lives on the SEPTEMBER tab) — same
-                    # rule as the CignaRx EOM/SOM anchor below.
-                    if disp in all_days:
-                        monthly[disp].append((label, fin.date(), False, None, None))
+                    monthly[disp].append((label, fin.date(), False, None, None))
             elif status in ("ready", "running"):
                 monthly[today].append((label, "L", False, None, None))
             break
