@@ -186,6 +186,7 @@ CLIENT_ALIASES = {
     # CenteneFidelis / CenteneFidelisRx job prefixes
     "CenteneFidelis":       ["centenefidelis", "centenefidelismedical"],
     "CenteneFidelisRx":     ["centenefidelisrx", "centenefidelisrxmasterload"],
+    "HighmarkWCRx":         ["highmarkwcrx", "highmarkwcrxmasterload"],
     # WellCare / WellCareRx job prefixes
     # 'wellcare' as a substring also lives inside 'wellcarerx', so we use
     # CLIENT_PRIMARY_KEY_OVERRIDE to swap the auto-derived primary key for
@@ -1191,6 +1192,10 @@ MANUAL_OVERRIDES = {
     # "Missing" to "L" above).
     ("CenteneFidelis", date(2026, 9, 16)): date(2026, 9, 23),
     ("CenteneFidelis", date(2026, 9, 23)): "L",
+    # 2026-10-12 per user: "CenteneFidelis that is Snapping, and will be
+    # certified, is for 10/7/26 and not 10/14/26." Hold 10/7 at "L" (swap in the
+    # cert date once it lands); CELL_ACTIVITY_AFTER keeps this run off 10/14.
+    ("CenteneFidelis", date(2026, 10, 7)): "L",
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
@@ -1242,6 +1247,9 @@ CERT_CELL_REMAP = {
 # 8/24 week). Without the cutoff the 8/28 cell shows 08/25/26 from cert_in_week,
 # or an "L" from the weekly cert-client "activity this week" fallback.
 CELL_ACTIVITY_AFTER = {
+    # 2026-10-12: the CenteneFidelis load/snap now running is the 10/7 delivery
+    # (MANUAL_OVERRIDES pin) — the 10/14 cell ignores activity through 10/13.
+    ("CenteneFidelis", date(2026, 10, 14)): date(2026, 10, 13),
     ("WebTPA", date(2026, 8, 28)): date(2026, 8, 25),
     # 2026-09-28 per user: "WellcareRx from 8/28 to 9/25 were certified on
     # 9/28/26. Loading for 10/2/26 has not started yet." The catch-up cert's
@@ -1684,6 +1692,13 @@ ADDITIONAL_ENTRIES = [
     # yellow to flag the implementation phase.
     ("weekly", date(2026, 9, 4), "BCBSMNRx (Implementation)",
      date(2026, 9, 4), False, "yellow"),
+    # 2026-10-12 per user: add 'HighmarkWCRx(p) (Implementation)' to the Monthly
+    # section after today's certification. The standing monthly row starts
+    # November 2026 on the 5th (MONTHLY_STARTS_FROM / MONTHLY_EXPECTED_DAY_RANGE);
+    # it was previously auto-discovered as a weekly Monday MasterLoad client —
+    # now in MONTHLY_CLIENTS, so those weekly rows are gone.
+    ("monthly", date(2026, 10, 12), "HighmarkWCRx(p) (Implementation)",
+     date(2026, 10, 12), False, "yellow"),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
@@ -1793,6 +1808,8 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     # ("add Molina once the certification processes"): the DHT cert is the
     # delivery signal, so a Snap-and-Mine completion alone must not surface a ✓.
     "Molina",
+    # HighmarkWCRx — Rx post-snap (p) client, cert is the delivery signal.
+    "HighmarkWCRx",
     "NCStateRx",
     "PremeraMedAdvVIS",
     "SamaritanHealth",
@@ -1837,7 +1854,7 @@ MONTHLY_CLIENTS = {
     "EDW_ASE", "EDW_C_FAC", "EDW_C_NAS", "EDW_Empire", "EDW_WGS",
     "ElixirRx",
     "EmblemFacets",
-    "HAP_Medical", "HAPRx", "HealthSpring_FWA", "HumanaRx",
+    "HAP_Medical", "HAPRx", "HealthSpring_FWA", "HighmarkWCRx", "HumanaRx",
     "JHHCPassfile",
     "Kaiser_AmbCO", "Kaiser_AmbGA", "Kaiser_AmbHI", "Kaiser_AmbM", "Kaiser_AmbN",
     "Kaiser_AmbNW", "Kaiser_AmbS",
@@ -1875,6 +1892,8 @@ MONTHLY_RETIRED_FROM = {
 # 2026-08-31 — see MONTHLY_EXPECTED_DAY_RANGE["ModaRx"].
 MONTHLY_STARTS_FROM = {
     "ModaRx": (2026, 9),
+    # HighmarkWCRx: monthly on the 5th from November 2026 (user 2026-10-12).
+    "HighmarkWCRx": (2026, 11),
 }
 
 # Ad-hoc MONTHLY snap-driven clients (per user 2026-06-25): appear ONCE per
@@ -2011,6 +2030,7 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     # 9/28-10/2 week), plan_calendar snaps the row to the nearest day its own
     # tab actually renders — Mon 10/5 for October 2026.
     "ModaRx":                 (1, 1),
+    "HighmarkWCRx":           (5, 5),
     "MedImpactPBMRx":         (5, 10),
     "AetnaQNXTRx":            (5, 10),
     "BCBSVT":                 (5, 10),
@@ -2424,6 +2444,7 @@ CLIENT_SUFFIXES = {
     "CareSourceRx":          "(n)",
     "CenteneFidelisRx":      "(p)",
     "CenteneRx":             "(p)",
+    "HighmarkWCRx":          "(p)",
     "CignaRx":               "(p)",
     "EmblemRx":              "(p)",
     "EverNorthRx":           "(p)",
@@ -4375,7 +4396,7 @@ def auto_inactive_from_ramp(jobs):
 # HealthNetCA added 2026-08-14: reactivated per user (3/20-3/27 backfill loaded,
 # certified today). Its 0100 Stage / 0110 Load jobs may still be disabled in RAMP,
 # so keep it out of the sweep and let the cert/load activity win.
-AUTO_INACTIVE_EXCLUDE = {"CareFirstRx", "Tufts_PublicPlan", "TuftsRx",
+AUTO_INACTIVE_EXCLUDE = {"HighmarkWCRx", "CareFirstRx", "Tufts_PublicPlan", "TuftsRx",
                         "ESIPBMRx", "Tufts_Audit_CIT", "HealthNetCA",
                         # Oscar reactivated 2026-09-09 (loading all missed
                         # weeks) — keep the auto-sweep from re-flagging it while
