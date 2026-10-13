@@ -1907,6 +1907,9 @@ ADHOC_MONTHLY_SNAP_CLIENTS = {
     # NavitusPBMRx moved from Weekly (Thu) to Monthly AdHoc per user 2026-10-08:
     # one row per month, dated to when its Load job finishes; never flagged missing.
     "NavitusPBMRx": "NavitusPBMRx MasterLoad Eligibility 0110 Load",
+    # SmithRX removed from the Weekly calendar per user 2026-10-13 until it is
+    # implemented — kept on alert as AdHoc only (row appears when its Load runs).
+    "SmithRX": "SmithRX MasterLoad 0110 Load",
 }
 
 # --- HealthNetCA claims backfill ---------------------------------------------
@@ -3052,12 +3055,25 @@ def compute_evernorth_claims_pending(queue, jobs, since):
     this returns False. `[_]` escapes the literal underscores (T-SQL LIKE treats
     _ as a single-char wildcard).
     """
+    # 2026-10-13 per user: read the claims files the 'EvernorthRx Masterload 0100
+    # Stage' job staged (FileLog -> Queue.JobId), and match ESI_PAID_CLAIMS
+    # anywhere in the name — files now arrive prefixed
+    # 'esi_rawlingscompan1__mdr0001o.153449.ESI_PAID_CLAIMS_...', which the old
+    # prefix-only LIKE missed. RESP_ response files are excluded.
+    stage_ids = [j.get("JobId") for j in jobs
+                 if (j.get("JobName") or "").strip().lower()
+                 == "evernorthrx masterload 0100 stage" and j.get("JobId")]
+    if not stage_ids:
+        return False
     q = (
         "SET NOCOUNT ON; "
-        "SELECT CONVERT(varchar(19), MAX(LogDate), 121) "
-        "FROM [RAMP].[ramp].[FileLog] "
-        "WHERE FileName LIKE 'ESI[_]PAID[_]CLAIMS%' AND Status = 'Staged' "
-        f"AND LogDate >= '{since:%Y-%m-%d}'"
+        "SELECT CONVERT(varchar(19), MAX(f.LogDate), 121) "
+        "FROM [RAMP].[ramp].[FileLog] f "
+        "JOIN [RAMP].[ramp].[Queue] q ON q.QueueId = f.QueueId "
+        f"WHERE q.JobId IN ({','.join(str(int(i)) for i in stage_ids)}) "
+        "AND f.FileName LIKE '%ESI[_]PAID[_]CLAIMS%' "
+        "AND f.FileName NOT LIKE 'RESP[_]%' AND f.Status = 'Staged' "
+        f"AND f.LogDate >= '{since:%Y-%m-%d}'"
     )
     r = subprocess.run(
         ["sqlcmd", "-S", SQL_SERVER, "-d", "RAMP", "-E", "-Q", q, "-W", "-h", "-1"],
@@ -4299,7 +4315,8 @@ def find_unconfigured_masterload_clients(jobs):
     out = []
     seen = set()
     known = (set(DAILY_CLIENTS) | set(WEEKLY_CLIENTS.keys())
-             | set(MONTHLY_CLIENTS) | {KAISER_PREPAY_CLIENT})
+             | set(MONTHLY_CLIENTS) | {KAISER_PREPAY_CLIENT}
+             | set(ADHOC_MONTHLY_SNAP_CLIENTS))
     known_keys = set()
     for c in known:
         for k in _keys_for_client(c):
