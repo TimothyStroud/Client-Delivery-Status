@@ -31,7 +31,7 @@ DONE_STATUSES = ('Successful', 'Failed', 'Resolved')
 
 def jobruns():
     out = subprocess.run(
-        ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
+        ['curl', '-s', '--negotiate', '-u', ':', '-H', 'Host: ramp', 'http://trgvwebprod6.trgllc.rawlingslou.com/api/Ramp/Job/List'],
         capture_output=True, text=True, timeout=180)
     data = json.loads(out.stdout)
     d = data['Data']

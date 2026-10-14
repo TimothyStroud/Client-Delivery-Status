@@ -149,7 +149,7 @@ def _all_jobs():
     if _JOBS_CACHE is not None:
         return _JOBS_CACHE
     out = subprocess.run(['curl', '-s', '--negotiate', '-u', ':',
-                          'http://ramp/api/Ramp/Job/List'],
+                          '-H', 'Host: ramp', 'http://trgvwebprod6.trgllc.rawlingslou.com/api/Ramp/Job/List'],
                          capture_output=True, text=True, timeout=180)
     try:
         d = json.loads(out.stdout)['Data']
