@@ -682,6 +682,10 @@ LOAD_NAME_REQUIRED = {
 # 06:18). 'Aetna RCE 300 ETL Stage' finished 08:38 but the 310 ETL Load has not
 # begun, so the cells would otherwise be blank.
 SOFT_OVERRIDES = {
+    # 2026-10-14 per user: BCBSAR (weekly Tue) was re-queued in RAMP today —
+    # 'BCBSAR Medical 0110 Load' is Enabled=0 from the earlier failure but its
+    # latest run (queue 1470775) is active, so it rendered "Load Failure".
+    ("BCBSAR",       date(2026, 10, 13)): "L",
     ("AetnaRCE",     date(2026, 8, 13)): "Delayed",
     ("NCStateAetna", date(2026, 8, 13)): "Delayed",
     # 2026-08-19 per user: CenteneFidelis Medical's Wednesday cell is not
@@ -5524,9 +5528,12 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # has happened yet, and is treated as manual so the sticky-cert cache
         # can't restore a stale ✓ over it. Real activity ("L" / "✓" / cert date)
         # always wins. Per user 2026-08-13 (AetnaRCE / NCStateAetna delayed).
-        if not from_manual and marker in ("", "No Data"):
+        # A soft "L" also replaces a stale "Load Failure" (job re-queued after
+        # a failure auto-disabled it) and still yields to the cert / ✓.
+        if not from_manual:
             soft = SOFT_OVERRIDES.get((client, day))
-            if soft is not None:
+            if soft is not None and (marker in ("", "No Data")
+                                     or (soft == "L" and marker == "Load Failure")):
                 marker = soft
                 from_manual = True
         # A manual override of "!" means "flag this cell as a miss": render an
