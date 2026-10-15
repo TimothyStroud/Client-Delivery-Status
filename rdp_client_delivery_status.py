@@ -1553,9 +1553,6 @@ MONTHLY_ONLY_WHEN_ACTIVE = {"HumanaRx", "Molina"}
 # date(...) which renders as a pinned cert date (MM/DD/YY, no pink) — used to
 # stamp a same-day catch-up cert onto months the auto lookup can't attribute.
 MONTHLY_MONTH_MARKER_OVERRIDES = {
-    # 2026-10-14 per user: 'Kaiser GE 0120 Snap' failed. Hard pin — replace
-    # with the cert date (or delete) once the snap is re-run and certified.
-    ("Kaiser_GE", 2026, 10): "Snap Failure",
     # 2026-07-16: ElixirRx data for May, June, and July has loaded and will be
     # certified tomorrow (per user). Show "L" (loaded, awaiting cert) on each
     # month's expected day until the DHT cert lands — the cert auto-wins once it
@@ -2163,9 +2160,6 @@ MONTHLY_PLACEMENT_DAY_OVERRIDES = {
     ("Kaiser_AmbN",  2026, 9): date(2026, 9, 24),
     ("Kaiser_AmbNW", 2026, 9): date(2026, 9, 24),
     ("Kaiser_AmbS",  2026, 9): date(2026, 9, 24),
-    # 2026-10-14: KaiserGE's Snap Failure stays on its 10/14 snap day (the
-    # marker override would otherwise drop it back to the 20th anchor).
-    ("Kaiser_GE",    2026, 10): date(2026, 10, 14),
     # 2026-10-14 per user: "Move Kaiser Amb Feeds to 10/22" (anchor was Thu 10/15).
     ("Kaiser_AmbCO", 2026, 10): date(2026, 10, 22),
     ("Kaiser_AmbGA", 2026, 10): date(2026, 10, 22),
