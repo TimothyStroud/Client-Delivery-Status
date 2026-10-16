@@ -43,3 +43,9 @@ Only two daily toggles exist (10/14, 10/15), so nothing to prune.
 
 10/15/26 - 94 Records Unconfigured; inserted after the 10/14 toggle, and no toggle was pruned because only two days are on the page.
 ==== Fri 10/16/2026  8:00:03.33 ==== 
+Permission allow rule (.claude\settings.local.json): Bash(grep -o 'http://ramp/api/Ramp/[^"'\\''`]*' /tmp/ramp_main.js) has a wildcard before the rest of the command, so it also matches any options inserted at that position and approves them without a prompt. Replace that * with the exact value you mean, or only use * after the subcommand.
+Permission allow rule (.claude\settings.local.json): Bash(grep -o 'Xn=function\(e,t,n,i,o\){[^}]*}' /tmp/ramp_main.js) has a wildcard before the rest of the command, so it also matches any options inserted at that position and approves them without a prompt. Replace that * with the exact value you mean, or only use * after the subcommand.
+Permission allow rule (.claude\settings.local.json): Bash(grep -oE 'data-client="\(Centene|BCBSFL[^"]*|OptumPBMRx \\\(RAW 5/6\\\)[^"]*\)"[^<]*</td><td class="marker[^"]*">[^<]*' C:/Users/tls2/.claude/projects/H--/fb067fbc-9ddd-4160-b287-aa3841806e68/tool-results/toolu_016xjyhUf148o5MW2xGbRe5p.txt) has a wildcard before the rest of the command, so it also matches any options inserted at that position and approves them without a prompt. Replace that * with the exact value you mean, or only use * after the subcommand.
+Only two daily toggles exist (10/15, 10/16), so no pruning is needed.
+
+10/16/26 – 93 Records Unconfigured toggle inserted after the 10/15 toggle; no toggles pruned (only 2 present).
