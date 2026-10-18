@@ -486,3 +486,23 @@ Response files found: 5/5
   [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-10-15 09:38
 Now:                 2026-10-16 14:00:02.266467  (before deadline)
 Completion report already sent for this cycle. Use --force to resend.
+Load start (anchor): 2026-10-15 09:26:11.797000
+SLA deadline:        2026-10-18 09:26:11.797000
+Response files found: 5/5
+  [OK ] RESP_RWGS_CEE_FF_*  2026-10-15 17:26
+  [OK ] RESP_EH_RAWLINGS_GPPO_MEMELIG_FA_FM01_PROD_*  2026-10-15 16:00
+  [OK ] RESP_CCI_RAWLINGS_MULTI_MEMELIG_FA_FM01_PROD_*  2026-10-15 13:34
+  [OK ] RESP_CCI_RAWLINGS_CCOMM_EMPGRP_FA_FM01_PROD_*  2026-10-15 09:38
+  [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-10-15 09:38
+Now:                 2026-10-17 09:00:02.467767  (before deadline)
+Completion report already sent for this cycle. Use --force to resend.
+Load start (anchor): 2026-10-15 09:26:11.797000
+SLA deadline:        2026-10-18 09:26:11.797000
+Response files found: 5/5
+  [OK ] RESP_RWGS_CEE_FF_*  2026-10-15 17:26
+  [OK ] RESP_EH_RAWLINGS_GPPO_MEMELIG_FA_FM01_PROD_*  2026-10-15 16:00
+  [OK ] RESP_CCI_RAWLINGS_MULTI_MEMELIG_FA_FM01_PROD_*  2026-10-15 13:34
+  [OK ] RESP_CCI_RAWLINGS_CCOMM_EMPGRP_FA_FM01_PROD_*  2026-10-15 09:38
+  [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-10-15 09:38
+Now:                 2026-10-17 14:00:02.094495  (before deadline)
+Completion report already sent for this cycle. Use --force to resend.
