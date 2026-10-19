@@ -2447,6 +2447,10 @@ NYSHIP_OVERRIDES = {
     # cert_in_week auto-detection can't attribute it — the cell was showing "!".
     # Pin the 7/28 cert date. (Same out-of-window situation the 1st/8th needed.)
     (2026, 7, 24): date(2026, 7, 28),
+    # 2026-10-19: today's NYSHIP_RX cert (1322054) is for LAST week's delivery
+    # (the 10/16 16th cell), per user. Its cert week is 10/19, so auto-detection
+    # would miss it — pin the 10/19 cert date on the 10/16 cell.
+    (2026, 10, 16): date(2026, 10, 19),
 }
 
 # Suffix conventions per the All Clients tab key:
