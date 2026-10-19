@@ -327,6 +327,25 @@ DAILY_ORDER = [
 ]
 
 
+# Date-effective weekday changes: {client: [(effective_monday, [weekday names])]}.
+# On/after the effective date the new weekday list replaces WEEKLY_CLIENTS;
+# earlier weeks keep the original day so past history doesn't move.
+WEEKLY_SCHEDULE_CHANGES = {
+    # Per user 2026-10-19: WellpointEdwardRx moves Wednesday -> Friday starting
+    # the week of 10/19/26, going forward.
+    "WellpointEdwardRx": [(date(2026, 10, 19), ["Friday"])],
+}
+
+
+def weekly_days_for(client, d):
+    """Weekday names `client` delivers on for the week containing date `d`."""
+    days = WEEKLY_CLIENTS.get(client, [])
+    for eff, new_days in sorted(WEEKLY_SCHEDULE_CHANGES.get(client, [])):
+        if d >= eff - timedelta(days=eff.weekday()):
+            days = new_days
+    return days
+
+
 def _daily_order_key(label):
     """Sort key mapping a daily row label to its fixed-order index."""
     for idx, name in enumerate(DAILY_ORDER):
@@ -3629,7 +3648,7 @@ def _next_scheduled_weekday(client, d):
     """The client's next scheduled delivery weekday ON/AFTER date `d` (0-day
     offset if `d` already lands on a scheduled weekday). Reproduces CVSPBMRx
     (Sat 6/27 → Mon 6/29) and TuftsRx (Mon 7/13 → Mon 7/13)."""
-    wanted = {WEEKDAY_NAME_NUM[n] for n in WEEKLY_CLIENTS.get(client, [])}
+    wanted = {WEEKDAY_NAME_NUM[n] for n in weekly_days_for(client, d)}
     if not wanted:
         return d
     for delta in range(7):
@@ -5700,7 +5719,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         blank_before = BLANK_BEFORE.get(c)
         blank_from = BLANK_FROM.get(c)
         for d in all_days:
-            if d.strftime("%A") not in days:
+            if d.strftime("%A") not in weekly_days_for(c, d):
                 continue
             # Blank-before clients: render empty (skip the cell) for any day
             # before the cutoff — no marker, no pink "!".
