@@ -1226,6 +1226,9 @@ MANUAL_OVERRIDES = {
     # certified, is for 10/7/26 and not 10/14/26." Hold 10/7 at "L" (swap in the
     # cert date once it lands); CELL_ACTIVITY_AFTER keeps this run off 10/14.
     ("CenteneFidelis", date(2026, 10, 7)): "L",
+    # 2026-10-20 per user: "CignaProClaims could not be certified, but was
+    # delivered today" — Monday 10/19 cycle shows delivered ✓ with no cert.
+    ("CignaProClaims", date(2026, 10, 19)): "✓",
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
@@ -1583,6 +1586,11 @@ MONTHLY_ONLY_WHEN_ACTIVE = {"HumanaRx", "Molina"}
 # date(...) which renders as a pinned cert date (MM/DD/YY, no pink) — used to
 # stamp a same-day catch-up cert onto months the auto lookup can't attribute.
 MONTHLY_MONTH_MARKER_OVERRIDES = {
+    # 2026-10-20 per user: "EDW_C_FAC & NAS were loaded today" — cert-only
+    # monthly feeds; show "L" (loaded, awaiting cert) for October.
+    # The DHT cert auto-wins once it lands.
+    ("EDW_C_FAC", 2026, 10): "L",
+    ("EDW_C_NAS", 2026, 10): "L",
     # 2026-07-16: ElixirRx data for May, June, and July has loaded and will be
     # certified tomorrow (per user). Show "L" (loaded, awaiting cert) on each
     # month's expected day until the DHT cert lands — the cert auto-wins once it
