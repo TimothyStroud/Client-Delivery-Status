@@ -705,6 +705,13 @@ SOFT_OVERRIDES = {
     # 'BCBSAR Medical 0110 Load' is Enabled=0 from the earlier failure but its
     # latest run (queue 1470775) is active, so it rendered "Load Failure".
     ("BCBSAR",       date(2026, 10, 13)): "L",
+    # 2026-10-20 per user: "The Elig file that is currently loading will kick off
+    # the claims for this week." LOAD_NAME_REQUIRED limits CenteneFidelisRx to
+    # the Claims Load, so the running Elig load can't paint L on its own.
+    ("CenteneFidelisRx", date(2026, 10, 21)): "L",
+    # Same day: last week's load certifies today (CERT_CELL_REMAP) — hold 10/14
+    # at "L" instead of the missed-delivery "!" until the cert lands.
+    ("CenteneFidelisRx", date(2026, 10, 14)): "L",
     ("AetnaRCE",     date(2026, 8, 13)): "Delayed",
     ("NCStateAetna", date(2026, 8, 13)): "Delayed",
     # 2026-08-19 per user: CenteneFidelis Medical's Wednesday cell is not
@@ -1249,6 +1256,10 @@ CERT_CELL_REMAP = {
     # it onto 10/1; this also keeps it off the 9/24 cell, which already carries
     # its own 9/24 09:46 cert.
     ("Premera",      date(2026, 9, 30)): date(2026, 10, 1),
+    # 2026-10-20 per user: "CenteneFidelisRx that will be certified today is for
+    # last weeks load." Pin today's cert onto the Wed 10/14 cell and keep it off
+    # the 10/21 week (that week's Elig load is running now — see SOFT_OVERRIDES).
+    ("CenteneFidelisRx", date(2026, 10, 20)): date(2026, 10, 14),
 }
 
 # --- Per-cell "ignore earlier activity" gate --------------------------------
