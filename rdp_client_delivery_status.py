@@ -4356,6 +4356,14 @@ def scan_kaiser_submission(queue, jobs, today, since):
     return done_days, running_today
 
 
+# MasterLoad clients the auto-discovery must NOT add to the report. Matched as a
+# normalized substring, so it also drops sibling jobs like '<Client> COBC …'.
+# 2026-10-20 per user: "Remove EmblemPrimeRx & its COBC from dashboard. We
+# don't track COBC loads on this and the rest isn't implemented yet." User will
+# supply the Implementation details later — configure it explicitly then.
+AUTO_DISCOVER_SKIP = {"EmblemPrimeRx"}
+
+
 def find_unconfigured_masterload_clients(jobs):
     """Scan RAMP jobs for `<Client> MasterLoad 0110 Load` entries whose
     derived client name isn't recognised by any existing config dict.
@@ -4387,6 +4395,8 @@ def find_unconfigured_masterload_clients(jobs):
         client_raw = m.group(1).strip()
         norm = normalize(client_raw)
         if not norm or norm in seen:
+            continue
+        if any(normalize(x) in norm for x in AUTO_DISCOVER_SKIP):
             continue
         # Match against known client keys with substring (matches aliases too).
         matched = any(norm == k or norm in k or k in norm for k in known_keys)
