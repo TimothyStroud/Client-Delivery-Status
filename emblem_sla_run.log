@@ -556,3 +556,4 @@ Response files found: 5/5
   [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-10-15 09:38
 Now:                 2026-10-20 14:00:03.534932  (PAST deadline)
 Completion report already sent for this cycle. Use --force to resend.
+Outside monthly check window (15th-20th); today is the 21. Skipping.
