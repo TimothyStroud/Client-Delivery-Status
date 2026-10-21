@@ -943,6 +943,8 @@ MANUAL_OVERRIDES = {
     # the 7/28 Tuesday cell "Empty" with NO pink — alert_state returns False for
     # "Empty". Remove next week.
     ("HMSA_Rx",       date(2026, 7, 28)): "Empty",
+    # 2026-10-21: HMSA_Rx 10/20 Tuesday file was EMPTY (per user).
+    ("HMSA_Rx",       date(2026, 10, 20)): "Empty",
     # 2026-07-31: AetnaRCE & NCStateAetna (both DAILY, driven by the shared
     # 'Aetna RCE 310 ETL Load'). The 7/28 re-send SUCCEEDED (RAMP QueueId 1411504,
     # 7/28 13:38 -> Successful 16:33) → keep "✓" on 7/28 (both clients).
