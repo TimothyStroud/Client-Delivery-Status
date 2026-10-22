@@ -584,6 +584,12 @@ LOAD_NAME_REQUIRED = {
     # the sibling 'BCBSSC RX 0110 Load' (BCBSSCRx is a separate client that the
     # "bcbssc" substring key otherwise matches).
     "BCBSSC":            ("bcbssc 0110 load",),
+    # CareFirstRx (monthly, cert-only): delivery = 'CareFirstRx 0110  Load'
+    # (double space in RAMP) → '0120 Snap'. The nightly 'CareFirstRx COBC 0110
+    # Load / 0120 MINE Snap' runs were painting October "L" while only
+    # '0100 Stage' was Ready. Per user 2026-10-22: "CareFirstRx 0100 Stage is
+    # in Ramp, not the Load." Prefixes exclude the COBC + MSPI jobs.
+    "CareFirstRx":       ("carefirstrx 0110", "carefirstrx 0120 snap"),
     # BCBSNorthCarolinaFEP (monthly, ~10th): delivery = 'BCBSNC FEP CareFirst
     # 0110 Load' (5/10, 6/10, 7/10 → certs 5/11, 6/10, 7/10). The
     # 'BCBSNC FEP Daily 0100 Stage/0110 Load' pair is a separate DAILY feed that
