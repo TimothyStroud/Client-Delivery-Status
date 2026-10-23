@@ -84,3 +84,9 @@ Permission allow rule (.claude\settings.local.json): Bash(grep -oE 'data-client=
 
 The cheap anchor didn't match, so I inserted before the "### Weekly Team Wins (Thursday)" heading instead. I didn't re-fetch the page afterward to check the result.
 ==== Fri 10/23/2026  8:00:04.31 ==== 
+Permission allow rule (.claude\settings.local.json): Bash(grep -o 'http://ramp/api/Ramp/[^"'\\''`]*' /tmp/ramp_main.js) has a wildcard before the rest of the command, so it also matches any options inserted at that position and approves them without a prompt. Replace that * with the exact value you mean, or only use * after the subcommand.
+Permission allow rule (.claude\settings.local.json): Bash(grep -o 'Xn=function\(e,t,n,i,o\){[^}]*}' /tmp/ramp_main.js) has a wildcard before the rest of the command, so it also matches any options inserted at that position and approves them without a prompt. Replace that * with the exact value you mean, or only use * after the subcommand.
+Permission allow rule (.claude\settings.local.json): Bash(grep -oE 'data-client="\(Centene|BCBSFL[^"]*|OptumPBMRx \\\(RAW 5/6\\\)[^"]*\)"[^<]*</td><td class="marker[^"]*">[^<]*' C:/Users/tls2/.claude/projects/H--/fb067fbc-9ddd-4160-b287-aa3841806e68/tool-results/toolu_016xjyhUf148o5MW2xGbRe5p.txt) has a wildcard before the rest of the command, so it also matches any options inserted at that position and approves them without a prompt. Replace that * with the exact value you mean, or only use * after the subcommand.
+10/23/26 - 123 Records Unconfigured; I added today's toggle and pruned the 10/16/26 toggle, so 10/17–10/23 remain. I didn't re-fetch the page after the prune.
+
+I made one correction along the way. My first insert attempt failed because the anchor wasn't found. The retry anchored on the last toggle's closing tags plus the `### Weekly Team Wins (Thursday)` heading.
