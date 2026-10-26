@@ -45,6 +45,13 @@ today = date.today()
 start = date(YEAR, 1, 1)
 _missing_cutoff = today - timedelta(days=MISSING_DELAY_DAYS)
 
+# Known feed-wide outages, COBC only (TRR unaffected) - excluded from missing.
+KNOWN_OUTAGES_COBC = {}
+_d = date(2026, 3, 19)
+while _d <= date(2026, 4, 2):
+    KNOWN_OUTAGES_COBC[_d] = "Annual Refresh"
+    _d += timedelta(days=1)
+
 
 # ---------- Federal holidays ----------
 def us_federal_holidays(year):
@@ -220,6 +227,7 @@ def build_section(kind, label, source_note, extra=""):
 
     # daily rows
     rows, day_missing = [], {}
+    assessed = defaultdict(list)      # contract -> days it was expected and assessed
     prev_month, month_files, month_days = None, 0, 0
     for dd in all_days:
         if prev_month is not None and dd.month != prev_month:
@@ -240,7 +248,11 @@ def build_section(kind, label, source_note, extra=""):
         holiday_name = HOLIDAYS.get(dd)
         is_pending = dd > _missing_cutoff
         is_holiday = holiday_name is not None
-        excluded = is_pending or is_holiday or nexp == 0
+        outage_name = KNOWN_OUTAGES_COBC.get(dd) if kind == "COBC" else None
+        excluded = is_pending or is_holiday or outage_name is not None or nexp == 0
+        if not excluded:
+            for c in expected:
+                assessed[c].append(dd)
         missing = [] if excluded else [c for c in expected if c not in received]
         day_missing[dd] = missing
 
@@ -262,6 +274,8 @@ def build_section(kind, label, source_note, extra=""):
             cells.append("<td class='pending'>no contracts onboarded yet</td>")
         elif is_holiday:
             cells.append("<td class='holidaycell'>Federal holiday &mdash; excluded from missing</td>")
+        elif outage_name:
+            cells.append(f"<td class='holidaycell'>{outage_name} &mdash; known outage, excluded</td>")
         elif is_pending:
             cells.append("<td class='pending'>within 1-week delay &mdash; not yet assessed</td>")
         elif not received:
@@ -348,7 +362,9 @@ Excluded: federal holidays and the last {MISSING_DELAY_DAYS} days.</p>
 <h3>{label} &mdash; daily delivery calendar</h3>
 <table><thead><tr><th>Date</th><th>Day</th><th>Total Files</th>
 <th>Received (of expected)</th><th>Missing Contracts</th></tr></thead>
-<tbody>{''.join(rows)}</tbody></table>""", day_missing, contract_misses
+<tbody>{''.join(rows)}</tbody></table>""", day_missing, contract_misses, {
+        "first_seen": first_seen, "last_seen": last_seen, "offboarded": offboarded,
+        "feed_last": feed_last, "assessed": assessed}
 
 
 _bf_total = sum(sum(v.values()) for v in backfill.values())
@@ -367,18 +383,74 @@ _bf_note = ("" if not _bf_total else
               "first-seen roster &mdash; otherwise they would make H8854/S0375 look onboarded in "
               "mid-March and flag ~5 weeks of false misses.</div>")
 
-cobc_html, cobc_dm, cobc_cm = build_section(
+cobc_html, cobc_dm, cobc_cm, cobc_g = build_section(
     "COBC", "COBC (MARXCOB)",
     "Source: <code>TRGINTP3.CareFirstRx.etl.tape</code> JOIN <code>config.Table</code>, "
     "<b>TableID 5000 (DTL) only</b> &mdash; one physical COBC file is split into DTL/PRM/SUP "
     "layouts, each with its own TapeID, so counting all three over-counts 3&times;. "
     "Production <code>P.R&lt;contract&gt;.MARXCOB.D&lt;YYMMDD&gt;</code> files only "
     "(<code>T.</code> test and legacy <code>EFTO.</code> excluded).", extra=_bf_note)
-trr_html, trr_dm, trr_cm = build_section(
+trr_html, trr_dm, trr_cm, trr_g = build_section(
     "TRR", "TRR (DTRRD)",
     "Source: <code>TRGINTP3.CareFirstRx.etl.tape</code> JOIN <code>config.Table</code>, "
     "<b>TableID 5400 (TRR)</b>. Production "
     "<code>P.R&lt;contract&gt;.DTRRD.D&lt;YYMMDD&gt;</code> files only.")
+
+def _fmt_d(x):
+    return f"{_cal.month_abbr[x.month]} {x.day}"
+
+
+def missing_ranges(missed, assessed_days):
+    """Collapse missed dates into runs over the contract's assessed-day sequence,
+    so Sundays / holidays / outages inside a gap don't split it."""
+    idx = {d: i for i, d in enumerate(assessed_days)}
+    runs = []
+    for d in sorted(missed):
+        if runs and idx[d] == idx[runs[-1][1]] + 1:
+            runs[-1][1] = d
+        else:
+            runs.append([d, d])
+    out = []
+    for a, b in runs:
+        n = idx[b] - idx[a] + 1
+        out.append(_fmt_d(a) if a == b else f"{_fmt_d(a)} &ndash; {_fmt_d(b)} <span style='color:#777'>({n} days)</span>")
+    return out
+
+
+def glance_table(label, cm, g):
+    rows = []
+    for c in sorted(g["first_seen"]):
+        missed = cm.get(c, [])
+        last = g["last_seen"][c]
+        if c in g["offboarded"]:
+            status = "<span style='color:#777'>Stopped / offboarded</span>"
+        elif g["feed_last"] and (today - g["feed_last"]).days > MISSING_DELAY_DAYS:
+            status = "<b style='color:#a40000'>Feed stalled</b>"
+        elif missed:
+            status = "<b style='color:#c47f00'>Active &ndash; gaps</b>"
+        else:
+            status = "<b style='color:#1a7a1a'>Active &ndash; complete</b>"
+        rng = missing_ranges(missed, g["assessed"][c])
+        rng_html = ("<br>".join(rng) if rng else "<span style='color:#1a7a1a'>none</span>")
+        rows.append(f"<tr><td><b>{c}</b></td><td>{status}</td><td>{last:%Y-%m-%d}</td>"
+                    f"<td class='num{' missing' if missed else ' ok'}'>{len(missed)}</td>"
+                    f"<td style='font-size:12px'>{rng_html}</td></tr>")
+    return (f"<h3 style='margin-bottom:4px'>{label}</h3>"
+            "<table><thead><tr><th>Contract</th><th>Status</th><th>Last file received</th>"
+            "<th># Missing days</th><th>Missing dates</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>")
+
+
+glance_html = f"""<div style='border:2px solid #305f9c;padding:10px 14px;margin:10px 0 20px 0;max-width:1100px'>
+<h2 style='margin-top:0'>Missing files at a glance</h2>
+<p style='font-size:11px;color:#556;margin-top:0'>Mon&ndash;Sat days a contract was expected but no production file arrived,
+{start:%b %d} &rarr; {_missing_cutoff:%b %d, %Y}. Not counted: Sundays, federal holidays, COBC Annual Refresh
+(Mar 19 &ndash; Apr 2), and the last {MISSING_DELAY_DAYS} days (1-week delay). A contract is only expected
+after its first {YEAR} file and until it is treated as offboarded.</p>
+{glance_table("COBC (MARXCOB)", cobc_cm, cobc_g)}
+{glance_table("TRR (DTRRD)", trr_cm, trr_g)}
+<p style='font-size:11px;color:#556'>Full detail (rosters, per-month lists, daily calendar) follows below.</p>
+</div>"""
 
 html = f"""<html><head><style>
 body {{ font-family: 'Segoe UI', sans-serif; font-size: 12px; }}
@@ -406,6 +478,7 @@ h2 {{ color: #305f9c; }}
 a contract is expected from its first production delivery forward, and stops being expected only if it
 falls &gt; {OFFBOARD_DAYS} days behind the feed's newest delivery (i.e. it individually offboarded).
 Modeled on the CenteneRx TRR / COBC SUP checks.</p>
+{glance_html}
 {cobc_html}
 {trr_html}
 </body></html>
