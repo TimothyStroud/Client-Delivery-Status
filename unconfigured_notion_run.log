@@ -95,3 +95,6 @@ I made one correction along the way. My first insert attempt failed because the 
 
 The cheap-path anchor didn't match, so I fetched the page and anchored on the last toggle's closing tags instead. I didn't re-fetch the page after the update, so I haven't confirmed the final layout.
 ==== Mon 10/26/2026  8:00:02.94 ==== 
+10/26/26 - 131 Records Unconfigured. I inserted that toggle and pruned the 10/18/26 toggle, so seven days remain (10/19–10/26).
+
+The cheap anchor failed, so I inserted before the "Weekly Team Wins (Thursday)" heading instead. I didn't re-fetch the page after the prune. Notion accepted the delete, but I haven't looked at the result.
