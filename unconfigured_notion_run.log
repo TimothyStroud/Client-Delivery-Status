@@ -99,3 +99,6 @@ The cheap-path anchor didn't match, so I fetched the page and anchored on the la
 
 The cheap anchor failed, so I inserted before the "Weekly Team Wins (Thursday)" heading instead. I didn't re-fetch the page after the prune. Notion accepted the delete, but I haven't looked at the result.
 ==== Tue 10/27/2026  8:00:02.55 ==== 
+10/27/26 - 187 Records Unconfigured: I inserted the 10/27 toggle and pruned the 10/19 toggle, so the page now has seven daily toggles (10/20 through 10/27).
+
+The cheap anchor failed because the page stores toggles as `<toggle>` tags, not `<details>`. I anchored on the last toggle's closing tag instead.
