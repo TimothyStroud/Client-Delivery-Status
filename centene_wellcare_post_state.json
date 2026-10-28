@@ -1,11 +1,11 @@
 {
  "qualchoice": "95af9005089d8d029b62472f56eb4d7645f24022",
- "centenerx": "e4c908b069e76921a21922d46f0a4857cf785509",
+ "centenerx": "eb53b31a2c2f5ef664fa8915c22076680a441648",
  "fidelisrx": "5aba766a8ce16d6937b735abb8e970a1b3baa47b",
  "centenemed": "3b5338e7a5fadd21415542ec50fdc8bd9ffff18d",
- "fidelismed": "2f35351957168a3c155371900776137448b1753d",
+ "fidelismed": "26108668fa1d6249b6d57e735712761e7ebf77b3",
  "healthnet": "38b2ca9a88e98bbb26611e5d4d4bc4d010a4bba1",
- "wellcarerx": "cd8fe1a00ae5bf74e53831ff99071c05a3ec07bf",
+ "wellcarerx": "710af5edd1c2e94af15c25e7f8016bf5520de442",
  "wellcaremed": "0c7e0667f01d2176de6f8b02701e32528a1d5655",
  "announced": {
   "qualchoice": {
@@ -43,8 +43,8 @@
   },
   "wellcarerx": {
    "10553": "2026-10-26T18:35:41.697",
-   "10554": "2026-10-22T10:09:11.647",
-   "10589": "2026-10-23T07:30:22.01",
+   "10554": "2026-10-26T18:45:50.707",
+   "10589": "2026-10-28T00:06:10.1",
    "10590": "2026-10-23T07:55:22.487",
    "10633": "2026-10-23T10:44:25.12"
   },
