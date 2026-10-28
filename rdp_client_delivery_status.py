@@ -718,6 +718,9 @@ SOFT_OVERRIDES = {
     # Same day: last week's load certifies today (CERT_CELL_REMAP) — hold 10/14
     # at "L" instead of the missed-delivery "!" until the cert lands.
     ("CenteneFidelisRx", date(2026, 10, 14)): "L",
+    # 2026-10-28 per user: "Oscar Medical is currently loading". Self-clearing
+    # once real activity/cert shows.
+    ("Oscar",        date(2026, 10, 28)): "L",
     ("AetnaRCE",     date(2026, 8, 13)): "Delayed",
     ("NCStateAetna", date(2026, 8, 13)): "Delayed",
     # 2026-08-19 per user: CenteneFidelis Medical's Wednesday cell is not
@@ -1237,6 +1240,11 @@ MANUAL_OVERRIDES = {
     # 2026-10-20 per user: "CignaProClaims could not be certified, but was
     # delivered today" — Monday 10/19 cycle shows delivered ✓ with no cert.
     ("CignaProClaims", date(2026, 10, 19)): "✓",
+    # 2026-10-28 per user: "Medica is on Hold for bad data" (HRCATE migration,
+    # ADO 988252) and "CignaRx finished Loading, but is being held up by a Post
+    # Snap failure". Remove both once the hold clears / the snap is fixed.
+    ("Medica",        date(2026, 10, 28)): "Hold",
+    ("CignaRx",       date(2026, 10, 27)): "Snap Failure",
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
@@ -1594,6 +1602,9 @@ MONTHLY_ONLY_WHEN_ACTIVE = {"HumanaRx", "Molina"}
 # date(...) which renders as a pinned cert date (MM/DD/YY, no pink) — used to
 # stamp a same-day catch-up cert onto months the auto lookup can't attribute.
 MONTHLY_MONTH_MARKER_OVERRIDES = {
+    # 2026-10-28 per user: "BCBSFL Elig is still loading, not done" — the row
+    # was showing a premature ✓. Remove once the Elig load + snap complete.
+    ("BCBSFLEligibilityLoad", 2026, 10): "L",
     # 2026-10-20 per user: "EDW_C_FAC & NAS were loaded today" — cert-only
     # monthly feeds; show "L" (loaded, awaiting cert) for October.
     # The DHT cert auto-wins once it lands.
@@ -4969,7 +4980,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # "Discontinued" = the client has permanently stopped delivering (added
         # 2026-08-26 for NCState's final 8/26 cell) — shaded like "Inactive".
         if marker in ("Load Failure", "Snap Failure", "Inactive", "Failed", "Deployment", "Snap",
-                      "Missing", "Discontinued"):
+                      "Missing", "Discontinued", "Hold"):
             return True
         # "Empty" = a delivered-but-empty file (happens occasionally). Per user
         # 2026-07-08 it is NOT a problem state -> show the label, never pink.
