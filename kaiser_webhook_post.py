@@ -10,6 +10,8 @@ H:\slack_wf_support.txt.
 import sys, os, re, json, subprocess, urllib.request
 from datetime import datetime
 
+import truststore; truststore.inject_into_ssl()  # corporate proxy CA fails Py3.13 strict X.509
+
 BASE = r'C:\Users\tls2\.claude\projects\H--'
 PY = sys.executable
 KAISER = r'H:\kaiser_claims_slack.py'
