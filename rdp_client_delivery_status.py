@@ -1242,9 +1242,11 @@ MANUAL_OVERRIDES = {
     ("CignaProClaims", date(2026, 10, 19)): "✓",
     # 2026-10-28 per user: "Medica is on Hold for bad data" (HRCATE migration,
     # ADO 988252) and "CignaRx finished Loading, but is being held up by a Post
-    # Snap failure". Remove both once the hold clears / the snap is fixed.
+    # Snap failure". Remove the Medica pin once the hold clears.
     ("Medica",        date(2026, 10, 28)): "Hold",
-    ("CignaRx",       date(2026, 10, 27)): "Snap Failure",
+    # 2026-10-29 per user: "CignaRx Snap fixed and delivered" — cert 1333156
+    # (mining.RxClaim) landed 10/29 12:43 for the Tue 10/27 cycle.
+    ("CignaRx",       date(2026, 10, 27)): date(2026, 10, 29),
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
