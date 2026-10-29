@@ -105,3 +105,6 @@ The cheap anchor failed because the page stores toggles as `<toggle>` tags, not 
 ==== Wed 10/28/2026  8:00:02.76 ==== 
 10/28/26 - 192 Records Unconfigured. I inserted the 10/28 toggle and pruned the 10/20 toggle, which leaves seven days (10/21–10/28). I didn't re-fetch the page to confirm the final state.
 ==== Thu 10/29/2026  8:00:03.08 ==== 
+10/29/26 - 196 Records Unconfigured. I added it as a new toggle and pruned the 10/21/26 toggle, so seven daily toggles remain.
+
+The cheap-path anchor failed because the page stores toggles as `<toggle>`, not `</details>`. I anchored on the last toggle's closing tag instead, and Notion converted the inserted block automatically. I didn't re-fetch the page afterward to confirm the final layout.
