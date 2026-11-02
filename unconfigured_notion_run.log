@@ -117,3 +117,6 @@ The Notion page uses `<toggle>` tags, so the cheap-path anchor never matched. I 
 
 I didn't re-fetch the page after the edits, so I haven't confirmed the final layout. The `<details>` anchor from your instructions found no match, so I anchored on the page's `<toggle>` closing tag instead.
 ==== Mon 11/02/2026  7:00:03.29 ==== 
+Both Notion edits are done. I didn't re-fetch the page afterwards to confirm the final state.
+
+11/2/26 - 207 Records Unconfigured: I added that day's toggle and pruned the 10/24/26 toggle, so seven days remain. The cheap anchor failed because the page stores toggles in `<toggle>` format, not `<details>`, so I fetched the page and anchored on the last toggle's closing tags instead.
