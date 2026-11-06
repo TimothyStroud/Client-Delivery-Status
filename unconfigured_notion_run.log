@@ -133,3 +133,6 @@ The cheap anchor failed on the first try. The page has a blank line between the 
 
 The cheap-path anchor failed because the page markup uses `<toggle>` and `<code>` tags, not `<details>` and backticks. I converted the block to that format and anchored on the end of the 11/4 toggle instead. The text and order are the script's own. I didn't re-fetch the page to check how it rendered.
 ==== Fri 11/06/2026  7:00:03.35 ==== 
+11/6/26 - 220 Records Unconfigured is inserted before the "Weekly Team Wins (Thursday)" heading. The page now has six daily toggles, so nothing was pruned.
+
+Notion auto-converted the `<details>` tags to `<toggle>` and returned only that formatting warning.
