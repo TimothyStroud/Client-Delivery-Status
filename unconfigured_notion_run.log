@@ -137,3 +137,7 @@ The cheap-path anchor failed because the page markup uses `<toggle>` and `<code>
 
 Notion auto-converted the `<details>` tags to `<toggle>` and returned only that formatting warning.
 ==== Sat 11/07/2026  7:00:02.75 ==== 
+11/7/26 - 210 Records Unconfigured. I inserted it as the 7th daily toggle (the page now has 10/31, 11/2, 11/3, 11/4, 11/5, 11/6 and 11/7), so I pruned nothing.
+
+The cheap-path anchor didn't match because the page uses `<toggle>` tags rather than `<details>`. I fetched the page and anchored on the last toggle's closing tag instead. Notion returned auto-convert warnings for the `<details>` tags, so the nested toggle formatting may be off. I didn't fetch the page again to check.
+==== Sun 11/08/2026  7:00:03.24 ==== 
