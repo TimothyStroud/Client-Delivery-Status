@@ -141,3 +141,8 @@ Notion auto-converted the `<details>` tags to `<toggle>` and returned only that 
 
 The cheap-path anchor didn't match because the page uses `<toggle>` tags rather than `<details>`. I fetched the page and anchored on the last toggle's closing tag instead. Notion returned auto-convert warnings for the `<details>` tags, so the nested toggle formatting may be off. I didn't fetch the page again to check.
 ==== Sun 11/08/2026  7:00:03.24 ==== 
+11/8/26 - 212 Records Unconfigured. I inserted the new toggle and pruned the 10/31/26 toggle, so seven days remain. I didn't re-fetch the page to check the final state.
+
+- **Anchor:** The page uses `<toggle>` tags, so the cheap-path anchor failed. I anchored on the last toggle's closing tag instead.
+- **Format:** I inserted the block as `<details>`, and Notion converted it to `<toggle>` automatically.
+==== Mon 11/09/2026  7:00:03.41 ==== 
