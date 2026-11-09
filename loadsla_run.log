@@ -1133,3 +1133,12 @@ State saved.
    this completion already reported -- skip
 [optum_pbm] LoadQ=1488687 LoadEnd=None SnapEnd=2026-10-31T05:17:06.343 tag=11062026 RAW={'RAW1': False, 'RAW2': True, 'RAW3': False}
    load/snap not both complete -- skip
+[caresource] (weekly) QueueId=1487570 Status=Resolved End=2026-11-04T16:02:01.507 period=2026-W46
+   send -> Sent. | SLA Update - Caresource 0200 Load - SUCCESS
+[wellmark] (weekly) QueueId=1490528 Status=Successful End=2026-11-09T05:23:14.663 period=2026-W46
+   send -> Sent. | SLA Update - Wellmark 0210 Claims Load - SUCCESS
+[healthspring_fwa] (monthly) QueueId=1481683 Status=Successful End=2026-10-28T18:56:40.73 period=2026-11
+   this completion already reported -- skip
+[optum_pbm] LoadQ=1489869 LoadEnd=2026-11-08T17:31:55.79 SnapEnd=2026-11-08T17:56:43.56 tag=11062026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   send -> Sent. | SLA Update - Optum 0110 PBM Load (November 2026) - SUCCESS
+State saved.
