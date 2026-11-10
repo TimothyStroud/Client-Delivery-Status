@@ -2,11 +2,11 @@
  "qualchoice": "0334d8eb3115ad5eecd3bb2deec87714281bdb39",
  "centenerx": "cac3380d5fbc087cf8d5d45311ca6b66b87353bf",
  "fidelisrx": "8d2833d28c42a04c11a318ee876dd620e5232120",
- "centenemed": "8a3eb27ac3d554d0f03d44a40695ccd8d05924db",
- "fidelismed": "4e7a517ab55c6ca4dc7bc713a2c6fc3c3545b896",
+ "centenemed": "c40f146402bb40b5ca9b8b657fd7e257a4f7dbe0",
+ "fidelismed": "17694f676b2afa516aea40973374066e38892859",
  "healthnet": "5f126a4127628a8865da27dc71fa768f9472e0c9",
  "wellcarerx": "e3ca995bf308cd83aa09c0ca5aaed5905f7b0042",
- "wellcaremed": "aed81c25305a7726a41cf9d61302c4c103bab0c3",
+ "wellcaremed": "085e806014c9dc35709ebdb23b49236282aa6441",
  "announced": {
   "qualchoice": {
    "10741": "2026-11-03T05:45:42.913",
@@ -49,8 +49,8 @@
    "10633": "2026-11-04T17:00:58.027"
   },
   "wellcaremed": {
-   "10179": "2026-11-02T12:58:36.087",
-   "10180": "2026-11-02T16:01:37.21"
+   "10179": "2026-11-09T12:52:49.11",
+   "10180": "2026-11-09T13:55:49.573"
   },
   "centenerx": {
    "1955": "2026-11-08T12:36:38.587",
