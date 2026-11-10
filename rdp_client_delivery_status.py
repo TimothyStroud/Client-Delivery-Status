@@ -721,6 +721,12 @@ SOFT_OVERRIDES = {
     # 2026-10-28 per user: "Oscar Medical is currently loading". Self-clearing
     # once real activity/cert shows.
     ("Oscar",        date(2026, 10, 28)): "L",
+    # 2026-11-10 per user: "AetnaRCE/NCStateAetna were loaded today." The
+    # overnight Aetna RCE 300 Stage (11/9 23:49) -> 310 ETL Load (done 11/10 06:16)
+    # -> 400 Snap (06:16) ran, but the crossed-midnight rule credits it to 11/9,
+    # leaving Tue 11/10 blank. Soft so a cert date still replaces it.
+    ("AetnaRCE",     date(2026, 11, 10)): "✓",
+    ("NCStateAetna", date(2026, 11, 10)): "✓",
     ("AetnaRCE",     date(2026, 8, 13)): "Delayed",
     ("NCStateAetna", date(2026, 8, 13)): "Delayed",
     # 2026-08-19 per user: CenteneFidelis Medical's Wednesday cell is not
