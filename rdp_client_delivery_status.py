@@ -2227,6 +2227,14 @@ MONTHLY_PLACEMENT_DAY_OVERRIDES = {
     ("Kaiser_AmbN",  2026, 10): date(2026, 10, 22),
     ("Kaiser_AmbNW", 2026, 10): date(2026, 10, 22),
     ("Kaiser_AmbS",  2026, 10): date(2026, 10, 22),
+    # 2026-11-10 per user: "Move Kaiser Amb feeds to 11/19/26" (anchor was Thu 11/12).
+    ("Kaiser_AmbCO", 2026, 11): date(2026, 11, 19),
+    ("Kaiser_AmbGA", 2026, 11): date(2026, 11, 19),
+    ("Kaiser_AmbHI", 2026, 11): date(2026, 11, 19),
+    ("Kaiser_AmbM",  2026, 11): date(2026, 11, 19),
+    ("Kaiser_AmbN",  2026, 11): date(2026, 11, 19),
+    ("Kaiser_AmbNW", 2026, 11): date(2026, 11, 19),
+    ("Kaiser_AmbS",  2026, 11): date(2026, 11, 19),
 }
 
 # Spread monthly clients across the Mon-Fri week of their anchor day.
