@@ -1142,3 +1142,12 @@ State saved.
 [optum_pbm] LoadQ=1489869 LoadEnd=2026-11-08T17:31:55.79 SnapEnd=2026-11-08T17:56:43.56 tag=11062026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
    send -> Sent. | SLA Update - Optum 0110 PBM Load (November 2026) - SUCCESS
 State saved.
+[caresource] (weekly) QueueId=1491088 Status=Ready End=None period=2026-W46
+   already reported this period -- dormant until restart
+[wellmark] (weekly) QueueId=1490528 Status=Successful End=2026-11-09T05:23:14.663 period=2026-W46
+   already reported this period -- dormant until restart
+[healthspring_fwa] (monthly) QueueId=1491094 Status=Successful End=2026-11-09T20:47:24.06 period=2026-11
+   send -> Sent. | SLA Update - HealthSpring_FWA 0110 Claims Load - SUCCESS
+[optum_pbm] LoadQ=1489869 LoadEnd=2026-11-08T17:31:55.79 SnapEnd=2026-11-08T17:56:43.56 tag=11062026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   cycle 11062026 already reported -- dormant until next cycle
+State saved.
