@@ -1,1 +1,1 @@
-{"last_emit": "2026-11-11T06:17:08.038794", "last_msg": "AETNA HRP - STATUS UPDATE\n\nETL AetnaHRP Masterload\n:white_check_mark: Successful 11/11/2026 02:11 AM\n\nClaim Files - last Aetna 0100 HRP Stage   (staged 11/10/2026, loaded (snap pending))\n- VENDOR.CB-CLAIMS-EXTRACT.261109220045.csv  (11/09/2026)"}
+{"last_emit": "2026-11-11T08:17:15.036397", "last_msg": "AETNA HRP - STATUS UPDATE\n\nETL AetnaHRP Masterload - Idle\n\nClaim Files - last Aetna 0100 HRP Stage   (staged 11/11/2026, loading)\n- VENDOR.CB-CLAIMS-EXTRACT.261110220728.csv  (11/10/2026)"}
