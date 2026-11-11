@@ -155,3 +155,6 @@ The 11/10/26 toggle (219 records) is inserted on the Notion page, but I did not 
 - **Insert:** The suggested "cheap path" anchor failed twice. I inserted by anchoring on the `### Weekly Team Wins (Thursday)` heading instead, so the block sits right after the 11/9 toggle. Notion auto-converted `<details>` to `<toggle>` and gave only deprecated-tag warnings.
 - **Prune:** The oldest two are 11/2/26 (207 records) and 11/3/26 (210 records), and both still need deleting. Each deletion means pasting the whole toggle, about 17K characters, as an exact `old_str`. Notion's saved format differs from what fetch shows: the file names appear as `<code>` tags, and the indentation isn't shown. I couldn't confirm a match without trying, so I stopped instead of risking a failed edit or a partial deletion.
 ==== Wed 11/11/2026  7:00:03.44 ==== 
+11/11/26 - 231 Records Unconfigured. I added that toggle and pruned the 11/2, 11/3 and 11/4 toggles, which leaves seven days (11/5–11/11).
+
+The cheap-path anchor (`</details>\n### Weekly Team Wins (Thursday)`) failed, so I anchored on the `### Weekly Team Wins (Thursday)` heading instead. I didn't re-fetch the page to confirm the final state; each update call returned success.
