@@ -411,6 +411,9 @@ WEEKLY_CLIENTS = {
     "UPMC":                  ["Thursday"],   # moved from Tuesday per user 2026-07-02
     # === FRIDAY ===
     "CenteneRx":             ["Friday"],
+    # EmblemPrimeRx — per user 2026-11-13: weekly Friday from 11/20/26 forward
+    # (BLANK_BEFORE); the 11/13 Implementation cert is pinned in ADDITIONAL_ENTRIES.
+    "EmblemPrimeRx":         ["Friday"],
     "OscarRx":               ["Friday"],
     "WebTPA":                ["Friday"],
     "WellCare":              ["Friday"],
@@ -522,6 +525,9 @@ SNAP_DISABLED_CLIENTS = set()
 # loading. Per user 2026-05-18: "A WellCareRx COBC job ran, but that is not
 # the indicator for Loading. We only want to look for MasterLoad or Claims Load."
 LOAD_NAME_REQUIRED = {
+    # EmblemPrimeRx (2026-11-13): main MasterLoad chain only — excludes the
+    # 'EmblemPrimeRx COBC MasterLoad ...' jobs (COBC isn't tracked here).
+    "EmblemPrimeRx": ("emblemprimerx masterload",),
     # AetnaRx: only the main "Claim 0110 Split Load" / "Claim 0120 Load" /
     # "Claim 0130 Start Snap" / "MasterLoad" steps count. Ancillary
     # "Claim 0150 RTA Load", "0132 ETL4 O20 Load", "IHP", "COBC" etc.
@@ -1777,7 +1783,7 @@ ADDITIONAL_ENTRIES = [
     # 2026-11-13 per user: Implementation runs. SmithRx snapped 11/12 (ADO
     # 991595; certs not yet created in DHT). EmblemPrimeRx backload certified
     # 11/13 (755 certs, ADO 991608). Same yellow treatment as prior implementations.
-    ("weekly", date(2026, 11, 12), "SmithRx (Implementation)",
+    ("monthly", date(2026, 11, 12), "SmithRx (Implementation)",
      date(2026, 11, 12), False, "yellow"),
     ("weekly", date(2026, 11, 13), "EmblemPrimeRx (Implementation)",
      date(2026, 11, 13), False, "yellow"),
@@ -1892,6 +1898,8 @@ MONTHLY_CERT_ONLY_CLIENTS = {
     "Molina",
     # HighmarkWCRx — Rx post-snap (p) client, cert is the delivery signal.
     "HighmarkWCRx",
+    # SmithRx — new Rx implementation (2026-11-13); DHT cert is the delivery signal.
+    "SmithRx",
     "NCStateRx",
     "PremeraMedAdvVIS",
     "SamaritanHealth",
@@ -1945,6 +1953,7 @@ MONTHLY_CLIENTS = {
     "MedicalMutualMHS", "MedicalMutualOH", "MedImpactPBMRx",
     "MMOH", "MMOHRxMonthly",
     "ModaRx",                           # new implementation — see MONTHLY_STARTS_FROM
+    "SmithRx",                          # new implementation (2026-11-13) — 9th, Dec forward
     "Molina",                           # new implementation (see below)
     "NCState", "NCStateRx",
     "WellpointRxElig",                  # monthly load->snap (L on load, ✓ on snap)
@@ -1976,6 +1985,8 @@ MONTHLY_STARTS_FROM = {
     "ModaRx": (2026, 9),
     # HighmarkWCRx: monthly on the 5th from November 2026 (user 2026-10-12).
     "HighmarkWCRx": (2026, 11),
+    # SmithRx: monthly on the 9th from December 2026 (user 2026-11-13, "for now").
+    "SmithRx": (2026, 12),
 }
 
 # Ad-hoc MONTHLY snap-driven clients (per user 2026-06-25): appear ONCE per
@@ -2116,6 +2127,7 @@ MONTHLY_EXPECTED_DAY_RANGE = {
     # tab actually renders — Mon 10/5 for October 2026.
     "ModaRx":                 (1, 1),
     "HighmarkWCRx":           (5, 5),
+    "SmithRx":                (9, 9),
     "MedImpactPBMRx":         (5, 10),
     "AetnaQNXTRx":            (5, 10),
     "BCBSVT":                 (5, 10),
@@ -2320,6 +2332,8 @@ BLANK_BEFORE = {
     # BCBSMNRx — per user 2026-09-04: add the weekly client to Wednesdays
     # starting 9/9/26 forward; nothing before that date renders.
     "BCBSMNRx": date(2026, 9, 9),
+    # EmblemPrimeRx — per user 2026-11-13: Fridays starting 11/20/26.
+    "EmblemPrimeRx": date(2026, 11, 20),
 }
 
 # Clients whose cells ON/AFTER a given date render empty (the standing row is
@@ -4542,7 +4556,9 @@ AUTO_INACTIVE_EXCLUDE = {"HighmarkWCRx", "CareFirstRx", "Tufts_PublicPlan", "Tuf
                         "EverNorthRx",
                         # TuftsMedPref reactivated 2026-09-24 (7/20 - 9/21
                         # catch-up certified 9/24/26; 9/28 forward is live).
-                        "TuftsMedPref"}
+                        "TuftsMedPref",
+                        # New implementations 2026-11-13 — 0100/0110 still Enabled=0.
+                        "SmithRx", "EmblemPrimeRx"}
 
 
 def has_inactive_jobs(client, jobs, cert_idx, snap_idx, today):
