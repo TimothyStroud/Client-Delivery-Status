@@ -1610,6 +1610,12 @@ MONTHLY_ONLY_WHEN_ACTIVE = {"HumanaRx", "Molina"}
 # date(...) which renders as a pinned cert date (MM/DD/YY, no pink) — used to
 # stamp a same-day catch-up cert onto months the auto lookup can't attribute.
 MONTHLY_MONTH_MARKER_OVERRIDES = {
+    # 2026-11-13 per user: BSCA_Facets backed out (PCN 1130178, ADO 991698) —
+    # Eligibility_202611.csv had a column shift; awaiting a corrected elig file.
+    # Mark BSCA_Facets and BSCA_Medicare with a pink "Elig". Remove once the
+    # corrected elig reloads (a November cert auto-wins anyway).
+    ("BSCA_Facets", 2026, 11): "Elig",
+    ("BSCA_Medicare", 2026, 11): "Elig",
     # 2026-10-28 per user: "BCBSFL Elig is still loading, not done" — the row
     # was showing a premature ✓. Remove once the Elig load + snap complete.
     ("BCBSFLEligibilityLoad", 2026, 10): "L",
@@ -1768,6 +1774,13 @@ ADDITIONAL_ENTRIES = [
     # now in MONTHLY_CLIENTS, so those weekly rows are gone.
     ("monthly", date(2026, 10, 12), "HighmarkWCRx(p) (Implementation)",
      date(2026, 10, 12), False, "yellow"),
+    # 2026-11-13 per user: Implementation runs. SmithRx snapped 11/12 (ADO
+    # 991595; certs not yet created in DHT). EmblemPrimeRx backload certified
+    # 11/13 (755 certs, ADO 991608). Same yellow treatment as prior implementations.
+    ("weekly", date(2026, 11, 12), "SmithRx (Implementation)",
+     date(2026, 11, 12), False, "yellow"),
+    ("weekly", date(2026, 11, 13), "EmblemPrimeRx (Implementation)",
+     date(2026, 11, 13), False, "yellow"),
 ]
 
 # CignaRx EOM/SOM cycle — at the start of each month a second CignaRx cycle
@@ -4996,7 +5009,7 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
         # "Discontinued" = the client has permanently stopped delivering (added
         # 2026-08-26 for NCState's final 8/26 cell) — shaded like "Inactive".
         if marker in ("Load Failure", "Snap Failure", "Inactive", "Failed", "Deployment", "Snap",
-                      "Missing", "Discontinued", "Hold"):
+                      "Missing", "Discontinued", "Hold", "Elig"):
             return True
         # "Empty" = a delivered-but-empty file (happens occasionally). Per user
         # 2026-07-08 it is NOT a problem state -> show the label, never pink.
