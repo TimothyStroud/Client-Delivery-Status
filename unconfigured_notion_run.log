@@ -165,3 +165,6 @@ The cheap-path anchor (`</details>\n### Weekly Team Wins (Thursday)`) failed, so
 
 The `</details>` + `### Weekly Team Wins` anchor didn't match, because the page stores toggles as `<toggle>`. I fetched the page and anchored on `</toggle>` instead. Notion auto-converted the new block's `<details>` tags to `<toggle>` and warned about it. I didn't re-fetch the page after the insert or the prune to check the saved result.
 ==== Sat 11/14/2026  7:00:02.59 ==== 
+11/14/26 - 164 Records Unconfigured. I added that day's toggle after 11/13 and pruned the 11/7 toggle, so the page should now show 11/8 through 11/14. Both Notion updates returned without errors, but I didn't re-fetch the page to confirm the result.
+
+The cheap anchor failed because the page stores its toggles in a different format from the `<details>` tags in your instructions. I anchored on the `### Weekly Team Wins (Thursday)` heading instead.
