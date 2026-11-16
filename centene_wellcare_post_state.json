@@ -4,7 +4,7 @@
  "fidelisrx": "9e59fe5deee10bf8328ce4879fe8277f180c5e00",
  "centenemed": "f3591ade07efeed13b02eb56394adebf2035e560",
  "fidelismed": "3a88ef99ffddc94d1e657ea24cb9226ecb4af859",
- "healthnet": "a02ebda5d42746b3d37d4508e11bd55a7db4c71c",
+ "healthnet": "2b5212f5bf396e7639879effc1136e14fb1c136b",
  "wellcarerx": "a2df3fb0d0dde7b699598604b076e7451ffacda3",
  "wellcaremed": "085e806014c9dc35709ebdb23b49236282aa6441",
  "announced": {
@@ -36,8 +36,8 @@
    "10018": "2026-11-09T08:27:47.077"
   },
   "healthnet": {
-   "1812": "2026-11-07T15:10:29.297",
-   "1811": "2026-11-07T15:08:29.337",
+   "1812": "2026-11-14T15:09:44.703",
+   "1811": "2026-11-14T15:02:44.583",
    "1809": "2026-10-19T17:31:00.853",
    "1810": "2026-10-19T17:33:00.933"
   },
