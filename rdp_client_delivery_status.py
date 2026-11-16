@@ -2705,12 +2705,23 @@ CLIENT_OWNERS = {
 # ============================================================
 #                          helpers
 # ============================================================
+# System32 curl lacks NTLM; Git curl supports it (fallback when negotiate 401s)
+CURL_AUTH_ATTEMPTS = [("curl", "--negotiate"),
+                      ("C:/Program Files/Git/ucrt64/bin/curl.exe", "--ntlm")]
+
+
 def curl_json(url):
-    r = subprocess.run(
-        ["curl", "-s", "--negotiate", "-u", ":", url],
-        capture_output=True, text=True, check=False,
-    )
-    return json.loads(r.stdout)
+    # --negotiate first; fall back to --ntlm (RAMP began 401-ing negotiate 2026-11-16)
+    for exe, auth in CURL_AUTH_ATTEMPTS:
+        r = subprocess.run(
+            [exe, "-s", auth, "-u", ":", url],
+            capture_output=True, text=True, check=False,
+        )
+        try:
+            return json.loads(r.stdout)
+        except json.JSONDecodeError:
+            if auth == "--ntlm":
+                raise
 
 
 def curl_post_json(url, body):
@@ -2718,13 +2729,18 @@ def curl_post_json(url, body):
         json.dump(body, f)
         path = f.name
     try:
-        r = subprocess.run(
-            ["curl", "-s", "--negotiate", "-u", ":",
-             "-H", "Content-Type: application/json",
-             "--data-binary", f"@{path}", url],
-            capture_output=True, text=True, check=False,
-        )
-        return json.loads(r.stdout)
+        for exe, auth in CURL_AUTH_ATTEMPTS:
+            r = subprocess.run(
+                [exe, "-s", auth, "-u", ":",
+                 "-H", "Content-Type: application/json",
+                 "--data-binary", f"@{path}", url],
+                capture_output=True, text=True, check=False,
+            )
+            try:
+                return json.loads(r.stdout)
+            except json.JSONDecodeError:
+                if auth == "--ntlm":
+                    raise
     finally:
         os.unlink(path)
 
