@@ -172,3 +172,4 @@ The cheap anchor failed because the page stores its toggles in a different forma
 11/16/26 - 170 Records Unconfigured. I inserted that day's toggle and pruned the 11/8/26 toggle (212 records), leaving seven days.
 
 I didn't re-fetch the page to confirm. The delete call returned without warnings. The cheap anchor failed because the page stores the toggles as `<toggle>`, not `<details>`, so the insert used the closing tags of the last toggle as its anchor.
+==== Tue 11/17/2026  7:00:04.04 ==== 
