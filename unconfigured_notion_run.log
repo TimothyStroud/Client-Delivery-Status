@@ -173,3 +173,8 @@ The cheap anchor failed because the page stores its toggles in a different forma
 
 I didn't re-fetch the page to confirm. The delete call returned without warnings. The cheap anchor failed because the page stores the toggles as `<toggle>`, not `<details>`, so the insert used the closing tags of the last toggle as its anchor.
 ==== Tue 11/17/2026  7:00:04.04 ==== 
+Both Notion updates went through, so I'm done editing. I did not re-fetch the page afterward to confirm the result.
+
+11/17/26 - 169 Records Unconfigured. I inserted the 11/17 toggle and pruned the 11/9 toggle, leaving seven days (11/10–11/17).
+
+The prune call returned no errors or warnings. The insert returned only warnings about the legacy `<details>` tag, which Notion converted to `<toggle>` automatically.
