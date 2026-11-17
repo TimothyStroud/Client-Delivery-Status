@@ -733,6 +733,9 @@ SOFT_OVERRIDES = {
     # leaving Tue 11/10 blank. Soft so a cert date still replaces it.
     ("AetnaRCE",     date(2026, 11, 10)): "✓",
     ("NCStateAetna", date(2026, 11, 10)): "✓",
+    # 2026-11-17 per user: "Aetna NMSP is queued to load, but waiting on the
+    # MSP file to start." Applied in the NMSP block (key "AetnaMMSEA").
+    ("AetnaMMSEA",   date(2026, 11, 16)): "Queued - waiting on MSP file",
     ("AetnaRCE",     date(2026, 8, 13)): "Delayed",
     ("NCStateAetna", date(2026, 8, 13)): "Delayed",
     # 2026-08-19 per user: CenteneFidelis Medical's Wednesday cell is not
@@ -1259,6 +1262,18 @@ MANUAL_OVERRIDES = {
     # 2026-10-29 per user: "CignaRx Snap fixed and delivered" — cert 1333156
     # (mining.RxClaim) landed 10/29 12:43 for the Tue 10/27 cycle.
     ("CignaRx",       date(2026, 10, 27)): date(2026, 10, 29),
+    # 2026-11-17 per user: "'MMOHRx Weekly Claim 0100 Stage' is inactive, but
+    # the file we are trying to load covers two weeks -
+    # RX_OUTPUT_20261027_THRU_20261109.txt". Hard pins so the auto "Inactive"
+    # doesn't win; swap both to the cert date once it lands.
+    ("MMOHRx",        date(2026, 11, 3)):  "L",
+    ("MMOHRx",        date(2026, 11, 10)): "L",
+    # JHHC 11/17 cert belongs to 11/10 (CERT_CELL_REMAP); the week-window
+    # still painted it on Tue 11/17 too, so blank 11/17 until this week loads.
+    ("JohnsHopkins",  date(2026, 11, 17)): "",
+    # EmblemRx (weekly Wed): per user 2026-11-17, check 'EmblemRx Claims 0100
+    # Stage' each week to tell a Claims week from an Elig-only week. Wk of
+    # 11/18: Claims Stage succeeded 11/16 14:28, Claims Load Ready = Claims week.
 }
 
 # --- Cert-to-cell reattribution ---------------------------------------------
@@ -1293,6 +1308,10 @@ CERT_CELL_REMAP = {
     # last weeks load." Pin today's cert onto the Wed 10/14 cell and keep it off
     # the 10/21 week (that week's Elig load is running now — see SOFT_OVERRIDES).
     ("CenteneFidelisRx", date(2026, 10, 20)): date(2026, 10, 14),
+    # 2026-11-17 per user: "JHHC loaded and certify last weeks data." 'JHHC
+    # Medical 0100 Stage' + '0110 Load' ran 11/16; the 11/17 cert covers the
+    # Tue 11/10 delivery, not this week's (20261117 set not received yet).
+    ("JohnsHopkins", date(2026, 11, 17)): date(2026, 11, 10),
 }
 
 # --- Per-cell "ignore earlier activity" gate --------------------------------
@@ -6037,6 +6056,9 @@ def plan_calendar(year, month, cert_idx, snap_idx, latest_tickets, monthly_place
             placement = nmsp_day
             marker = "No Data"
             alert = alert_state("AetnaMMSEA", nmsp_day, marker)
+            soft = SOFT_OVERRIDES.get(("AetnaMMSEA", nmsp_day))
+            if soft is not None:
+                marker, alert = soft, False
         monthly[placement].append(("Aetna NMSP - MMSEA", marker, alert, "bold"))
 
     # (Removed) loading-today extras pass — L is now surfaced on each client's
