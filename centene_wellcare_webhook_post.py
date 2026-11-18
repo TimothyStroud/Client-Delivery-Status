@@ -76,7 +76,7 @@ def log(msg):
 
 
 def ramp_api(path):
-    out = subprocess.run(['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/' + path],
+    out = subprocess.run(['curl', '-s', '--negotiate', '-u', ':', '-H', 'Host: ramp', 'http://trgvwebprod6.trgllc.rawlingslou.com/api/Ramp/' + path],
                          capture_output=True, text=True, timeout=300)
     d = json.loads(out.stdout)['Data']
     return d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else (d or [])
