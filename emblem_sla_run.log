@@ -661,3 +661,13 @@ Response files found: 2/5
   [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-11-16 16:00
 Now:                 2026-11-18 08:00:05.435100  (before deadline)
 Not all 5 uploaded yet, still within SLA -- no email (waiting).
+Load start (anchor): 2026-11-16 15:29:39.733000
+SLA deadline:        2026-11-19 15:29:39.733000
+Response files found: 2/5
+  [-- ] RESP_RWGS_CEE_FF_*  
+  [-- ] RESP_EH_RAWLINGS_GPPO_MEMELIG_FA_FM01_PROD_*  
+  [-- ] RESP_CCI_RAWLINGS_MULTI_MEMELIG_FA_FM01_PROD_*  
+  [OK ] RESP_CCI_RAWLINGS_CCOMM_EMPGRP_FA_FM01_PROD_*  2026-11-16 15:54
+  [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-11-16 16:00
+Now:                 2026-11-18 13:00:04.323165  (before deadline)
+Not all 5 uploaded yet, still within SLA -- no email (waiting).
