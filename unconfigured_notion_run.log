@@ -183,3 +183,6 @@ The prune call returned no errors or warnings. The insert returned only warnings
 
 The cheap anchor failed because the page text uses `<toggle>` tags, not `<details>`, so I fetched the page and anchored on that format. Notion converted the inserted `<details>` block to `<toggle>` on its own.
 ==== Thu 11/19/2026  7:00:04.95 ==== 
+11/19/26 – 187 Records Unconfigured. I added the toggle after the 11/18 one and pruned the 11/11 toggle, so seven days remain (11/12–11/19). I didn't re-fetch the page to check the final layout.
+
+The cheap anchor failed, so I fetched the page and anchored on the "Weekly Team Wins (Thursday)" heading instead.
