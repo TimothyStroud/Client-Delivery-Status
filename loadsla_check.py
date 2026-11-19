@@ -106,8 +106,11 @@ def load_jobruns():
     last_err = None
     for attempt in range(5):
         out = subprocess.run(
-            ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Job/List'],
-            capture_output=True, text=True)
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+             "[Console]::OutputEncoding=New-Object Text.UTF8Encoding $false; "
+             "[Console]::Out.Write((Invoke-WebRequest -Uri 'http://ramp/api/Ramp/Job/List' "
+             "-UseDefaultCredentials -UseBasicParsing -TimeoutSec 170).Content)"],  # curl --negotiate 401s from RAMP since 2026-11-16
+            capture_output=True, text=True, encoding='utf-8')
         try:
             data = json.loads(out.stdout)
             break

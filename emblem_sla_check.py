@@ -91,8 +91,11 @@ def load_run_starts_sql():
 def load_run_starts_rest():
     """Fallback: load start datetimes from the RAMP REST queue, newest first."""
     out = subprocess.run(
-        ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/Queue/List'],
-        capture_output=True, text=True)
+        ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+         "[Console]::OutputEncoding=New-Object Text.UTF8Encoding $false; "
+         "[Console]::Out.Write((Invoke-WebRequest -Uri 'http://ramp/api/Ramp/Queue/List' "
+         "-UseDefaultCredentials -UseBasicParsing -TimeoutSec 170).Content)"],  # curl --negotiate 401s from RAMP since 2026-11-16
+        capture_output=True, text=True, encoding='utf-8')
     data = json.loads(out.stdout)
     d = data['Data']
     items = d[0] if (isinstance(d, list) and d and isinstance(d[0], list)) else d
