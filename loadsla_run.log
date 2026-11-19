@@ -1202,3 +1202,12 @@ Traceback (most recent call last):
   File "C:\Users\tls2\.claude\projects\H--\loadsla_check.py", line 118, in load_jobruns
     raise RuntimeError('RAMP Job/List returned no valid JSON after retries: %s' % last_err)
 RuntimeError: RAMP Job/List returned no valid JSON after retries: Expecting value: line 1 column 1 (char 0)
+Traceback (most recent call last):
+  File "C:\Users\tls2\.claude\projects\H--\loadsla_check.py", line 493, in <module>
+    main()
+  File "C:\Users\tls2\.claude\projects\H--\loadsla_check.py", line 392, in main
+    runs = load_jobruns()
+           ^^^^^^^^^^^^^^
+  File "C:\Users\tls2\.claude\projects\H--\loadsla_check.py", line 118, in load_jobruns
+    raise RuntimeError('RAMP Job/List returned no valid JSON after retries: %s' % last_err)
+RuntimeError: RAMP Job/List returned no valid JSON after retries: Expecting value: line 1 column 1 (char 0)
