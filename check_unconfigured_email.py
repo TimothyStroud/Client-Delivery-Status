@@ -10,12 +10,17 @@ FROM_ADDRESS = 'DataOperations@machinify.com'
 # transient blip doesn't cause a silent no-op run.
 data = None
 for attempt in range(5):
+    # curl --negotiate started getting 401s from RAMP on 2026-11-16; Windows
+    # default-credential auth (Invoke-WebRequest) still works, so use that.
     result = subprocess.run(
-        ['curl', '-s', '--negotiate', '-u', ':', 'http://ramp/api/Ramp/ConfiguredFiles'],
-        capture_output=True, text=True
+        ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+         "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+         "(Invoke-WebRequest -Uri 'http://ramp/api/Ramp/ConfiguredFiles' "
+         "-UseDefaultCredentials -UseBasicParsing -TimeoutSec 120).Content"],
+        capture_output=True, text=True, encoding='utf-8'
     )
     try:
-        data = json.loads(result.stdout)
+        data = json.loads(result.stdout.lstrip('﻿'))
         break
     except json.JSONDecodeError:
         time.sleep(5)
