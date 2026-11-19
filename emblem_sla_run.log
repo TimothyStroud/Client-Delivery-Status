@@ -682,3 +682,13 @@ Response files found: 5/5
 Now:                 2026-11-19 08:00:05.535229  (before deadline)
 Send result: Sent.
 Cycle marked as sent.
+Load start (anchor): 2026-11-16 15:29:39.733000
+SLA deadline:        2026-11-19 15:29:39.733000
+Response files found: 5/5
+  [OK ] RESP_RWGS_CEE_FF_*  2026-11-18 23:41
+  [OK ] RESP_EH_RAWLINGS_GPPO_MEMELIG_FA_FM01_PROD_*  2026-11-18 22:15
+  [OK ] RESP_CCI_RAWLINGS_MULTI_MEMELIG_FA_FM01_PROD_*  2026-11-18 17:53
+  [OK ] RESP_CCI_RAWLINGS_CCOMM_EMPGRP_FA_FM01_PROD_*  2026-11-16 15:54
+  [OK ] RESP_EH_RAWLINGS_GPPO_GRP_FA_FM01_PROD_*  2026-11-16 16:00
+Now:                 2026-11-19 13:00:03.347893  (before deadline)
+Completion report already sent for this cycle. Use --force to resend.
