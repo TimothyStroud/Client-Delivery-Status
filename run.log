@@ -1,0 +1,46 @@
+﻿[info] Today: 2026-11-20  Month: 2026-11
+[info] Querying DHT cert table…
+[info]   10218 cert rows / 101 distinct DatabaseNames
+[info] Fetching ADO tickets…
+[info]   323 delivery tickets in window
+[info] Fetching RAMP jobs…
+[info]   1685 total (1194 enabled)
+[info] Fetching RAMP queue + snap history…
+[info]   queue=154230, snaps=5443
+[info] Fetching tape loads…
+[info]   TRGETL3.OptumPBMRx: 5 rows
+[info]   TRGETL3.ESIPBMRx: 21 rows
+[info]   TRGETL3.MedImpactPBMRx: 102 rows
+[info] Fetching multi-week client tape loads…
+[info] snap index dates: 204
+[info] Querying SQLUtilAudit for Aetna NMSP NonMSP loads…
+[info]   7 Aetna NonMSP entries
+[info] Checking EverNorthRx claims (ESI_PAID_CLAIMS_*) staged-not-loaded…
+[info]   EverNorthRx claims pending load: False
+[info] Fetching OptumPBMRx per-RAW instances (TRGETL3 tape, all statuses)…
+[info]   OptumPBMRx RAW instances: 5
+[info] Fetching CVSPBMRx Ad Hoc (oversized/backfill) tape files…
+[info]   CVSPBMRx Ad Hoc instances: 0
+[info] Fetching CVSPBMRx weekly eligibility files (data-date cells)…
+[info]   CVSPBMRx weekly files: 45 (loaded=45)
+[info] Fetching stage-file data-date loads (TuftsRx/Oscar/Tufts_PublicPlan/MedicalMutualMHS)…
+[info]   stage-file loads: TuftsRx=33, Oscar=39, Tufts_PublicPlan=4, MedicalMutualMHS=3
+[info] Fetching HealthNetCA backfill claims ranges (TRGETL1 tblTape)…
+[info]   HealthNetCA stage cells: 6/15=2026-10-08, 6/22=2026-10-08, 6/29=2026-10-08, 7/6=2026-10-13, 7/13=2026-10-13, 7/20=2026-10-13, 7/27=2026-10-13, 8/3=2026-10-19, 8/10=2026-10-19, 8/17=2026-10-19, 8/24=2026-10-19, 8/31=2026-10-19, 9/7=2026-10-19, 9/14=2026-10-19, 9/21=2026-10-19, 9/28=2026-10-19, 10/5=2026-10-19, 10/12=2026-10-21, 10/19=2026-10-21, 10/26=2026-10-26, 11/2=2026-11-01, 11/9=2026-11-09, 11/16=2026-11-16
+[info]   HealthNetCA backfill: 7/27 cell (5/8-5/15), 8/10 cell (3/20-3/27), 8/17 cell (3/27-4/3), 8/24 cell (4/10-4/24), 8/31 cell (4/24-6/5)
+[info] Fetching JHHC Passfile loads (TRGETL4 TableID=5000)…
+[info]   JHHC Passfile tape rows: 40 (loaded=40)
+[info] latest tickets indexed for 85 clients
+[info] sticky cert cache: 2985 remembered cells
+[info]   January: loaded from 202601_ExpectedClientDates_JAN.xlsx
+[info]   February: loaded from 202602_ExpectedClientDates_FEB.xlsx
+[info]   March: loaded from 202603_ExpectedClientDates_MAR.xlsx
+[info]   April: loaded from 202604_ExpectedClientDates_APR.xlsx
+[info] sticky cert cache saved: 2988 cells
+[done] Wrote \\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule\Daily Status Reports\ClientDeliveryStatus_2026-11-20.xlsx
+[done] Local copy: C:\Users\tls2\.claude\projects\H--\ClientDeliveryStatus_2026-11-20.xlsx
+[done] OneDrive copy: C:\Users\tls2\OneDrive - Machinify\Documents\Reports\ClientDeliveryStatus.xlsx
+[info] S3 job runs since 2026-09-01: 1548
+[done] HTML dashboard: \\trgfile1\Shared\DIG\Data Business Delivery Team\Delivery Schedule\Daily Status Reports\ClientDeliveryStatus.html
+[done] HTML dashboard: C:\Users\tls2\.claude\projects\H--\ClientDeliveryStatus.html
+[done] HTML dashboard: C:\Users\tls2\OneDrive - Machinify\Documents\Reports\ClientDeliveryStatus.html

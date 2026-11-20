@@ -1266,8 +1266,14 @@ MANUAL_OVERRIDES = {
     # the file we are trying to load covers two weeks -
     # RX_OUTPUT_20261027_THRU_20261109.txt". Hard pins so the auto "Inactive"
     # doesn't win; swap both to the cert date once it lands.
-    ("MMOHRx",        date(2026, 11, 3)):  "L",
-    ("MMOHRx",        date(2026, 11, 10)): "L",
+    # 2026-11-20 per user: both covered by the 11/19 cert; current week Loading.
+    ("MMOHRx",        date(2026, 11, 3)):  date(2026, 11, 19),
+    ("MMOHRx",        date(2026, 11, 10)): date(2026, 11, 19),
+    ("MMOHRx",        date(2026, 11, 17)): "L",
+    # 2026-11-20 per user: EmblemRx 11/11 matches the 11/18 cert date.
+    ("EmblemRx",      date(2026, 11, 11)): date(2026, 11, 18),
+    # 2026-11-20 per user: N/A for EmblemPrimeRx today.
+    ("EmblemPrimeRx", date(2026, 11, 20)): "N/A",
     # JHHC 11/17 cert belongs to 11/10 (CERT_CELL_REMAP); the week-window
     # still painted it on Tue 11/17 too, so blank 11/17 until this week loads.
     ("JohnsHopkins",  date(2026, 11, 17)): "",
@@ -1639,7 +1645,8 @@ MONTHLY_MONTH_MARKER_OVERRIDES = {
     # Eligibility_202611.csv had a column shift; awaiting a corrected elig file.
     # Mark BSCA_Facets and BSCA_Medicare with a pink "Elig". Remove once the
     # corrected elig reloads (a November cert auto-wins anyway).
-    ("BSCA_Facets", 2026, 11): "Elig",
+    ("BSCA_Facets", 2026, 11): "L",  # 2026-11-20 per user: now Loading
+    ("EDW_C_NAS", 2026, 11): "Empty",  # 2026-11-20 per user: file was empty
     ("BSCA_Medicare", 2026, 11): "Elig",
     # 2026-10-28 per user: "BCBSFL Elig is still loading, not done" — the row
     # was showing a premature ✓. Remove once the Elig load + snap complete.
