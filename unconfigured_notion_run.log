@@ -187,3 +187,6 @@ The cheap anchor failed because the page text uses `<toggle>` tags, not `<detail
 
 The cheap anchor failed, so I fetched the page and anchored on the "Weekly Team Wins (Thursday)" heading instead.
 ==== Fri 11/20/2026  7:00:02.68 ==== 
+11/20/26 - 184 Records Unconfigured. I pruned the 11/12 toggle, so the seven days from 11/13 through 11/20 remain. I didn't re-fetch the page to confirm that.
+
+The cheap anchor failed because the page stores toggles as `<toggle>` rather than `</details>`. I inserted after the 11/19 toggle instead.
