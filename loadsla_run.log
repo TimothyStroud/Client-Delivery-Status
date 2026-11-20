@@ -1211,3 +1211,12 @@ Traceback (most recent call last):
   File "C:\Users\tls2\.claude\projects\H--\loadsla_check.py", line 118, in load_jobruns
     raise RuntimeError('RAMP Job/List returned no valid JSON after retries: %s' % last_err)
 RuntimeError: RAMP Job/List returned no valid JSON after retries: Expecting value: line 1 column 1 (char 0)
+[caresource] (weekly) QueueId=1497196 Status=Successful End=2026-11-17T18:13:35.017 period=2026-W47
+   already reported this period -- dormant until restart
+[wellmark] (weekly) QueueId=1497309 Status=Successful End=2026-11-16T16:48:11.21 period=2026-W47
+   send -> Sent. | SLA Update - Wellmark 0210 Claims Load - SUCCESS
+[healthspring_fwa] (monthly) QueueId=1491094 Status=Successful End=2026-11-09T20:47:24.06 period=2026-11
+   already reported this period -- dormant until restart
+[optum_pbm] LoadQ=1489869 LoadEnd=2026-11-08T17:31:55.79 SnapEnd=2026-11-08T17:56:43.56 tag=11062026 RAW={'RAW1': True, 'RAW2': True, 'RAW3': True}
+   cycle 11062026 already reported -- dormant until next cycle
+State saved.
