@@ -1,19 +1,19 @@
 {
-  "healthspring_fwa": {
-    "last_qid": 1491094,
-    "last_period": "2026-11"
-  },
-  "wellmark": {
-    "last_qid": 1497309,
-    "last_period": "2026-W47"
-  },
-  "optum_pbm": {
-    "last_qid": 1489869,
-    "last_period": "2026-11",
-    "last_cycle": "11062026"
-  },
-  "caresource": {
-    "last_qid": 1497196,
-    "last_period": "2026-W48"
-  }
+    "healthspring_fwa":  {
+                             "last_qid":  1491094,
+                             "last_period":  "2026-11"
+                         },
+    "wellmark":  {
+                     "last_qid":  1497309,
+                     "last_period":  "2026-W47"
+                 },
+    "optum_pbm":  {
+                      "last_qid":  1489869,
+                      "last_period":  "2026-11",
+                      "last_cycle":  "11062026"
+                  },
+    "caresource":  {
+                       "last_qid":  1497196,
+                       "last_period":  "2026-W47"
+                   }
 }

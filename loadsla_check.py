@@ -392,6 +392,7 @@ Monthly client (first Friday) &middot; Success = each RAW loaded + snapped withi
 def main():
     status_only = '--status' in sys.argv
     force = '--force' in sys.argv
+    print(f"=== run {datetime.now():%Y-%m-%d %H:%M:%S} ===")
     runs = load_jobruns()
     state = load_state()
     sent_any = False
@@ -402,18 +403,22 @@ def main():
         if not run:
             print(f"[{job['key']}] no run data"); continue
         qid = run.get('QueueId'); status = run.get('Status'); end = run.get('EndDate')
-        pk = period_key(job['cadence'])
+        # Period is keyed on the COMPLETION date (EndDate), not the run date
+        # (fixed 2026-11-23). Keying on the run date made a Tuesday-completing
+        # load (Caresource) get reported the following Monday, burn that week's
+        # slot, and silence that week's own completion -> a permanent 1-week lag.
+        pk = period_key(job['cadence'], datetime.fromisoformat(end[:19])) if end else None
         cell = state.get(job['key'], {})
         print(f"[{job['key']}] ({job['cadence']}) QueueId={qid} Status={status} End={end} period={pk}")
         if status_only:
             continue
-        if not force:
-            if cell.get('last_period') == pk:
-                print("   already reported this period -- dormant until restart"); continue
-            if cell.get('last_qid') == qid:
-                print("   this completion already reported -- skip"); continue
         if not end:
             print("   still running / not complete -- skip"); continue
+        if not force:
+            if cell.get('last_qid') == qid:
+                print("   this completion already reported -- skip"); continue
+            if cell.get('last_period') == pk:
+                print("   a completion in this period was already reported -- skip"); continue
         subj, body, ok = weekly_email(job, run)
         res = send(to=TO_ADDR, subject=subj, body=body, from_address=FROM_ADDR)
         print(f"   send -> {res} | {subj}")
