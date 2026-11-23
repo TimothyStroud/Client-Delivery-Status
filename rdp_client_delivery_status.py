@@ -736,6 +736,9 @@ SOFT_OVERRIDES = {
     # 2026-11-17 per user: "Aetna NMSP is queued to load, but waiting on the
     # MSP file to start." Applied in the NMSP block (key "AetnaMMSEA").
     ("AetnaMMSEA",   date(2026, 11, 16)): "Queued - waiting on MSP file",
+    # 2026-11-23 per user: JHHC loaded today for the 11/17 delivery — hold "✓"
+    # until the cert lands (CERT_CELL_REMAP pulls it onto 11/17).
+    ("JohnsHopkins", date(2026, 11, 17)): "✓",
     ("AetnaRCE",     date(2026, 8, 13)): "Delayed",
     ("NCStateAetna", date(2026, 8, 13)): "Delayed",
     # 2026-08-19 per user: CenteneFidelis Medical's Wednesday cell is not
@@ -1274,9 +1277,8 @@ MANUAL_OVERRIDES = {
     ("EmblemRx",      date(2026, 11, 11)): date(2026, 11, 18),
     # 2026-11-20 per user: N/A for EmblemPrimeRx today.
     ("EmblemPrimeRx", date(2026, 11, 20)): "N/A",
-    # JHHC 11/17 cert belongs to 11/10 (CERT_CELL_REMAP); the week-window
-    # still painted it on Tue 11/17 too, so blank 11/17 until this week loads.
-    ("JohnsHopkins",  date(2026, 11, 17)): "",
+    # (JHHC 11/17 "" pin removed 2026-11-23 — 11/23's load is the 11/17
+    # delivery; CELL_ACTIVITY_AFTER now masks the 11/16-17 run on that cell.)
     # EmblemRx (weekly Wed): per user 2026-11-17, check 'EmblemRx Claims 0100
     # Stage' each week to tell a Claims week from an Elig-only week. Wk of
     # 11/18: Claims Stage succeeded 11/16 14:28, Claims Load Ready = Claims week.
@@ -1318,6 +1320,9 @@ CERT_CELL_REMAP = {
     # Medical 0100 Stage' + '0110 Load' ran 11/16; the 11/17 cert covers the
     # Tue 11/10 delivery, not this week's (20261117 set not received yet).
     ("JohnsHopkins", date(2026, 11, 17)): date(2026, 11, 10),
+    # 2026-11-23 per user: "JHHC that loaded today is for last weeks delivery."
+    # The 11/23 load (cert 1345293-94, ticket 993244) covers Tue 11/17.
+    ("JohnsHopkins", date(2026, 11, 23)): date(2026, 11, 17),
 }
 
 # --- Per-cell "ignore earlier activity" gate --------------------------------
@@ -1348,6 +1353,10 @@ CELL_ACTIVITY_AFTER = {
     # StatTimestamps fall in the 9/28 week, so cert_in_week would stamp 9/28 on
     # the 10/2 cell. Gate it — the cell stays blank until real 10/2 activity.
     ("WellCareRx", date(2026, 10, 2)): date(2026, 9, 28),
+    # 2026-11-23 per user: JHHC 11/23 load = 11/17 delivery. 11/17 ignores the
+    # 11/16-17 run (11/10 delivery); 11/24 ignores today's 11/23 run.
+    ("JohnsHopkins", date(2026, 11, 17)): date(2026, 11, 17),
+    ("JohnsHopkins", date(2026, 11, 24)): date(2026, 11, 23),
 }
 
 # --- Monthly cert-to-month reattribution ------------------------------------
