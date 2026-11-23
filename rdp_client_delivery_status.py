@@ -2267,6 +2267,10 @@ MONTHLY_PLACEMENT_DAY_OVERRIDES = {
     # out-of-month clamp in step 4).
     ("BCBSFLEligibilityLoad", 2026, 9): date(2026, 9, 30),
     ("BCBSSCRx",    2026, 9): date(2026, 9, 25),
+    # 2026-11-23 per user: "Please move BCBSSCRx and CareFirstRx to 11/24/26."
+    # Markers stay live (cert-only monthly; cert date still wins the marker).
+    ("BCBSSCRx",    2026, 11): date(2026, 11, 24),
+    ("CareFirstRx", 2026, 11): date(2026, 11, 24),
     ("Kaiser_AmbCO", 2026, 8): date(2026, 8, 20),
     ("Kaiser_AmbGA", 2026, 8): date(2026, 8, 20),
     ("Kaiser_AmbHI", 2026, 8): date(2026, 8, 20),
