@@ -191,3 +191,8 @@ The cheap anchor failed, so I fetched the page and anchored on the "Weekly Team 
 
 The cheap anchor failed because the page stores toggles as `<toggle>` rather than `</details>`. I inserted after the 11/19 toggle instead.
 ==== Sat 11/21/2026  7:00:03.23 ==== 
+The page now has only two daily toggles (11/20 and 11/21), so there was nothing to prune.
+
+11/21/26 – 109 Records Unconfigured (Cigna 103, JHHC 4, Caresource 1, Excellus 1). The cheap-path anchor didn't match, so I fetched the page and anchored on the existing toggle's closing tag. No daily toggle was pruned.
+
+Notion auto-converted the `<details>` tags to `<toggle>`, with warnings only and no errors. I didn't re-fetch the page to check how the converted toggles render.
