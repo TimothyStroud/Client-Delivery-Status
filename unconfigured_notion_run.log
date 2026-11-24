@@ -197,3 +197,6 @@ The page now has only two daily toggles (11/20 and 11/21), so there was nothing 
 
 Notion auto-converted the `<details>` tags to `<toggle>`, with warnings only and no errors. I didn't re-fetch the page to check how the converted toggles render.
 ==== Tue 11/24/2026  7:00:02.59 ==== 
+11/24/26 - 119 Records Unconfigured. I inserted that toggle, and I pruned nothing because only three daily toggles exist (11/20, 11/21 and 11/24).
+
+The cheap-path anchor didn't match, so I anchored on the closing tags of the last existing toggle instead. Notion auto-converted the `<details>` markup to `<toggle>` and returned only that conversion warning. I didn't fetch the page again to check how the new toggle renders.
