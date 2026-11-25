@@ -1272,7 +1272,8 @@ MANUAL_OVERRIDES = {
     # 2026-11-20 per user: both covered by the 11/19 cert; current week Loading.
     ("MMOHRx",        date(2026, 11, 3)):  date(2026, 11, 19),
     ("MMOHRx",        date(2026, 11, 10)): date(2026, 11, 19),
-    ("MMOHRx",        date(2026, 11, 17)): "L",
+    # 2026-11-25 per user: 11/17 week covered by the 11/24 cert (1345312).
+    ("MMOHRx",        date(2026, 11, 17)): date(2026, 11, 24),
     # 2026-11-20 per user: EmblemRx 11/11 matches the 11/18 cert date.
     ("EmblemRx",      date(2026, 11, 11)): date(2026, 11, 18),
     # 2026-11-20 per user: N/A for EmblemPrimeRx today.
