@@ -205,3 +205,7 @@ The cheap-path anchor didn't match, so I anchored on the closing tags of the las
 
 Notion auto-converted the `<details>` block to its `<toggle>` format, and I haven't re-fetched the page to check how it renders.
 ==== Thu 11/26/2026  7:00:02.89 ==== 
+11/26/26 - 129 Records Unconfigured — inserted after the 11/25 toggle. Nothing was pruned, because the page had only four earlier daily toggles, so it now has five.
+
+The cheap-path anchor didn't match, so I inserted the block before the "Weekly Team Wins (Thursday)" heading instead. Notion auto-converted the `<details>` tags to `<toggle>` and returned only that formatting warning. I didn't re-fetch the page to confirm the nested client toggles rendered correctly.
+==== Fri 11/27/2026  7:00:03.97 ==== 
