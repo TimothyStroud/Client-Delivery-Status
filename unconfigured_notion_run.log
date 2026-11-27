@@ -209,3 +209,6 @@ Notion auto-converted the `<details>` block to its `<toggle>` format, and I have
 
 The cheap-path anchor didn't match, so I inserted the block before the "Weekly Team Wins (Thursday)" heading instead. Notion auto-converted the `<details>` tags to `<toggle>` and returned only that formatting warning. I didn't re-fetch the page to confirm the nested client toggles rendered correctly.
 ==== Fri 11/27/2026  7:00:03.97 ==== 
+11/27/26 - 133 Records Unconfigured. I inserted today's toggle after the 11/26 one. The page now has six daily toggles, so I pruned nothing.
+
+Notion auto-converted the `<details>` tags to `<toggle>` and returned only warnings about that. I didn't fetch the page again to confirm the final layout.
